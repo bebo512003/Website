@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, LayoutDashboard, Settings, ShieldCheck, Users, Zap } from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/auth-context'
 
@@ -15,6 +15,7 @@ export function Sidebar() {
   const navItems = [
     { title: 'Dashboard', href: '/', icon: LayoutDashboard },
     { title: 'Projects', href: '/projects', icon: FolderKanban },
+    { title: 'Forms', href: '/forms', icon: ClipboardList },
     { title: 'Tasks', href: '/tasks', icon: CheckSquare },
     { title: 'Clients', href: '/clients', icon: Users },
     { title: 'Files', href: '/files', icon: FileText },
@@ -24,7 +25,7 @@ export function Sidebar() {
     { title: 'Settings', href: '/settings', icon: Settings },
   ]
   const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
-  const mobileItems = navItems.filter((item) => ['/', '/projects', '/tasks', '/notifications', isAdmin ? '/admin' : '/settings'].includes(item.href))
+  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/notifications', isAdmin ? '/admin' : '/settings'].includes(item.href))
 
   return (
     <>

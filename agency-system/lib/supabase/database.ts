@@ -237,3 +237,32 @@ export async function deleteNotification(id: string): Promise<Result<boolean>> {
   const { error } = await supabase.from('notifications').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
+
+export async function createIntakeForm(form: import('./types').IntakeFormInsert): Promise<Result<import('./types').IntakeForm | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('intake_forms').insert(form).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateIntakeForm(id: string, form: import('./types').IntakeFormUpdate): Promise<Result<import('./types').IntakeForm | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('intake_forms').update(form).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function submitIntakeForm(id: string): Promise<Result<import('./types').IntakeForm | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('submit_intake_form', { target_intake_id: id })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function uploadIntakeAttachment(intakeId: string, userId: string, file: File): Promise<Result<import('./types').IntakeAttachment | null>> {
+  if (!supabase) return fail(null)
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const storagePath = `${userId}/${intakeId}/${crypto.randomUUID()}-${safeName}`
+  const upload = await supabase.storage.from('intake-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  if (upload.error) return fail(null, upload.error.message)
+  const { data, error } = await supabase.from('intake_attachments').insert({ intake_id: intakeId, name: file.name, size: file.size, mime_type: file.type || null, storage_path: storagePath, uploaded_by: userId }).select().single()
+  if (error) { await supabase.storage.from('intake-files').remove([storagePath]); return fail(null, error.message) }
+  return ok(data)
+}
