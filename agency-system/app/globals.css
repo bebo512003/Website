@@ -1,0 +1,176 @@
+@import 'tailwindcss';
+
+/* ============================================
+   AGENCY OS — BLUEPRINT DESIGN SYSTEM
+   Inspired by: Technical / Engineering / Blueprint
+   ============================================ */
+
+:root {
+  /* Dark Mode Colors (Default) */
+  --color-bg: 0 0% 2%;
+  --color-fg: 0 0% 98%;
+  --color-muted: 0 0% 35%;
+  --color-line: 0 0% 18%;
+  --color-line-light: 0 0% 28%;
+  
+  /* Primary — Black */
+  --primary: 0 0% 8%;
+  --primary-foreground: 0 0% 98%;
+  
+  /* Accent — #B9282D (Deep Red) — Default */
+  --accent: 358 65% 44%;
+  --accent-foreground: 0 0% 98%;
+  --accent-glow: 358 75% 50%;
+  
+  /* Surface */
+  --surface: 0 0% 4%;
+  --surface-raised: 0 0% 6%;
+  --surface-overlay: 0 0% 10%;
+  
+  /* Border & Lines */
+  --border: 0 0% 12%;
+  --border-subtle: 0 0% 8%;
+  
+  /* Text hierarchy */
+  --text-primary: 0 0% 98%;
+  --text-secondary: 0 0% 65%;
+  --text-tertiary: 0 0% 40%;
+  
+  --radius: 0.375rem;
+}
+
+/* Light Mode */
+html:not(.dark) {
+  --color-bg: 0 0% 98%;
+  --color-fg: 0 0% 3.9%;
+  --color-muted: 0 0% 45%;
+  --color-line: 0 0% 90%;
+  --color-line-light: 0 0% 85%;
+  
+  --surface: 0 0% 96%;
+  --surface-raised: 0 0% 94%;
+  --surface-overlay: 0 0% 92%;
+  
+  --border: 0 0% 90%;
+  --border-subtle: 0 0% 92%;
+  
+  --text-primary: 0 0% 3.9%;
+  --text-secondary: 0 0% 45%;
+  --text-tertiary: 0 0% 60%;
+}
+
+@theme inline {
+  --color-bg: hsl(var(--color-bg));
+  --color-fg: hsl(var(--color-fg));
+  --color-muted: hsl(var(--color-muted));
+  --color-line: hsl(var(--color-line));
+  --color-line-light: hsl(var(--color-line-light));
+  --color-surface: hsl(var(--surface));
+  --color-surface-raised: hsl(var(--surface-raised));
+  --color-surface-overlay: hsl(var(--surface-overlay));
+  --color-accent-glow: hsl(var(--accent-glow));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-border: hsl(var(--border));
+  --color-border-subtle: hsl(var(--border-subtle));
+  --color-text-primary: hsl(var(--text-primary));
+  --color-text-secondary: hsl(var(--text-secondary));
+  --color-text-tertiary: hsl(var(--text-tertiary));
+}
+
+@utility font-cairo {
+  font-family: 'Cairo', 'Tajawal', sans-serif;
+}
+
+@utility font-display {
+  font-family: 'Bebas Neue', 'Space Grotesk', 'Cairo', sans-serif;
+}
+
+@utility font-mono-tech {
+  font-family: 'Space Grotesk', monospace;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  
+  body {
+    background-color: hsl(var(--color-bg));
+    color: hsl(var(--color-fg));
+    font-family: 'Cairo', 'Tajawal', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+}
+
+/* ============================================
+   BLUEPRINT GRID BACKGROUND
+   ============================================ */
+
+.blueprint-bg {
+  position: relative;
+  background-color: hsl(var(--color-bg));
+}
+
+/* ============================================
+   TYPOGRAPHY — BIG & BOLD
+   ============================================ */
+
+/* ============================================
+   RED ACCENT LINE
+   ============================================ */
+
+.accent-line-v {
+  position: relative;
+}
+
+.accent-line-v::before {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: linear-gradient(
+    to bottom,
+    hsl(var(--accent)),
+    hsl(var(--accent-glow)),
+    hsl(var(--accent))
+  );
+}
+
+/* ============================================
+   SCROLLBAR — MINIMAL
+   ============================================ */
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: hsl(var(--color-bg));
+}
+
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--color-line));
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--accent));
+}
+
+/* ============================================
+   SELECTION
+   ============================================ */
+
+::selection {
+  background: hsl(var(--accent));
+  color: hsl(var(--color-fg));
+}
