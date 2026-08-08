@@ -554,6 +554,7 @@ begin;
 create table if not exists public.intake_forms (
   id uuid primary key default gen_random_uuid(),
   service_type text check (service_type in ('logo_design', 'visual_identity', 'company_profile')),
+  service_types text[] not null default '{}',
   status text not null default 'draft' check (status in ('draft', 'submitted', 'archived')),
   contact_name text,
   contact_email text,
@@ -566,6 +567,15 @@ create table if not exists public.intake_forms (
   submitted_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
+);
+
+create table if not exists public.intake_projects (
+  id uuid primary key default gen_random_uuid(),
+  intake_id uuid not null references public.intake_forms(id) on delete cascade,
+  project_id uuid not null references public.projects(id) on delete cascade,
+  service_type text not null check (service_type in ('logo_design', 'visual_identity', 'company_profile')),
+  created_at timestamptz not null default now(),
+  unique (intake_id, project_id)
 );
 
 create table if not exists public.intake_attachments (
@@ -582,6 +592,8 @@ create table if not exists public.intake_attachments (
 create index if not exists idx_intake_forms_status on public.intake_forms(status, updated_at desc);
 create index if not exists idx_intake_forms_contact_email on public.intake_forms(contact_email);
 create index if not exists idx_intake_forms_client on public.intake_forms(client_id);
+create index if not exists idx_intake_projects_intake on public.intake_projects(intake_id);
+create index if not exists idx_intake_projects_project on public.intake_projects(project_id);
 create index if not exists idx_intake_attachments_intake on public.intake_attachments(intake_id);
 
 drop trigger if exists update_intake_forms_updated_at on public.intake_forms;
@@ -589,24 +601,30 @@ create trigger update_intake_forms_updated_at before update on public.intake_for
 for each row execute function public.set_updated_at();
 
 alter table public.intake_forms enable row level security;
+alter table public.intake_projects enable row level security;
 alter table public.intake_attachments enable row level security;
 
-create policy intake_forms_select on public.intake_forms for select to authenticated
-using (created_by = auth.uid() or public.is_manager_or_admin());
-create policy intake_forms_insert on public.intake_forms for insert to authenticated
-with check (created_by = auth.uid());
-create policy intake_forms_update on public.intake_forms for update to authenticated
-using (created_by = auth.uid() or public.is_manager_or_admin())
-with check (created_by = auth.uid() or public.is_manager_or_admin());
-create policy intake_attachments_select on public.intake_attachments for select to authenticated
-using (exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
-create policy intake_attachments_insert on public.intake_attachments for insert to authenticated
-with check (uploaded_by = auth.uid() and exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
-create policy intake_attachments_delete on public.intake_attachments for delete to authenticated
-using (uploaded_by = auth.uid() or public.is_manager_or_admin());
+create policy intake_forms_select on public.intake_forms for select
+  using (created_by = auth.uid() or public.is_manager_or_admin());
+create policy intake_forms_insert on public.intake_forms for insert
+  with check (created_by = auth.uid());
+create policy intake_forms_update on public.intake_forms for update
+  using (created_by = auth.uid() or public.is_manager_or_admin())
+  with check (created_by = auth.uid() or public.is_manager_or_admin());
 
--- One atomic action links a submitted intake to an existing client (matched by e-mail)
--- or creates the client, then creates the appropriate project exactly once.
+create policy intake_projects_select on public.intake_projects for select
+  using (exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
+create policy intake_projects_insert on public.intake_projects for insert
+  with check (exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
+
+create policy intake_attachments_select on public.intake_attachments for select
+  using (exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
+create policy intake_attachments_insert on public.intake_attachments for insert
+  with check (uploaded_by = auth.uid() and exists (select 1 from public.intake_forms f where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())));
+create policy intake_attachments_delete on public.intake_attachments for delete
+  using (uploaded_by = auth.uid() or public.is_manager_or_admin());
+
+-- Multi-service branching submit: supports Logo, Logo+VI, VI, Profile, or any combination.
 create or replace function public.submit_intake_form(target_intake_id uuid)
 returns public.intake_forms
 language plpgsql security definer set search_path = public
@@ -616,19 +634,31 @@ declare
   linked_client_id uuid;
   linked_project_id uuid;
   project_title text;
+  project_type text;
+  services text[];
 begin
   select * into form_record from public.intake_forms where id = target_intake_id for update;
   if not found then raise exception 'Intake form not found'; end if;
   if form_record.created_by is distinct from auth.uid() and not public.is_manager_or_admin() then
     raise exception 'Not authorized to submit this intake';
   end if;
-  if form_record.service_type is null then raise exception 'Choose a service before submitting'; end if;
+
+  services := form_record.service_types;
+  if services is null or array_length(services, 1) is null or services = '{}' then
+    if form_record.service_type is not null then
+      services := array[form_record.service_type::text];
+    else
+      raise exception 'Choose at least one service before submitting';
+    end if;
+  end if;
+
   if coalesce(trim(form_record.contact_name), '') = '' or coalesce(trim(form_record.company_name), '') = '' then
     raise exception 'Contact name and company name are required';
   end if;
 
-  if form_record.project_id is not null then
-    update public.intake_forms set status = 'submitted', submitted_at = coalesce(submitted_at, now()) where id = target_intake_id returning * into form_record;
+  if exists (select 1 from public.intake_projects where intake_id = target_intake_id) then
+    update public.intake_forms set status = 'submitted', submitted_at = coalesce(submitted_at, now())
+    where id = target_intake_id returning * into form_record;
     return form_record;
   end if;
 
@@ -643,29 +673,68 @@ begin
     returning id into linked_client_id;
   end if;
 
-  project_title := form_record.company_name || ' — ' || case form_record.service_type
-    when 'logo_design' then 'Logo Design'
-    when 'visual_identity' then 'Visual Identity'
-    else 'Company Profile' end;
-  insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
-  values (project_title, 'Created automatically from intake #' || left(target_intake_id::text, 8), linked_client_id,
-    case form_record.service_type when 'logo_design' then 'Logo Design' when 'visual_identity' then 'Visual Identity' else 'Company Profile' end,
-    'active', 1, 'Discovery', 0, auth.uid()) returning id into linked_project_id;
+  -- Logo + Visual Identity (combined or with Profile)
+  if array['logo_design', 'visual_identity']::text[] <@ services then
+    project_type := 'Logo + Visual Identity';
+    project_title := form_record.company_name || ' — ' || project_type;
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (project_title, 'Created automatically from intake #' || left(target_intake_id::text, 8), linked_client_id, project_type, 'active', 1, 'Discovery', 0, auth.uid())
+    returning id into linked_project_id;
+    insert into public.intake_projects (intake_id, project_id, service_type)
+    values (target_intake_id, linked_project_id, 'logo_design'), (target_intake_id, linked_project_id, 'visual_identity');
+  end if;
 
-  update public.intake_forms set status = 'submitted', client_id = linked_client_id, project_id = linked_project_id, submitted_at = now()
+  -- Logo only
+  if 'logo_design' = any(services) and not ('visual_identity' = any(services)) then
+    project_type := 'Logo Design';
+    project_title := form_record.company_name || ' — ' || project_type;
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (project_title, 'Created automatically from intake #' || left(target_intake_id::text, 8), linked_client_id, project_type, 'active', 1, 'Discovery', 0, auth.uid())
+    returning id into linked_project_id;
+    insert into public.intake_projects (intake_id, project_id, service_type)
+    values (target_intake_id, linked_project_id, 'logo_design');
+  end if;
+
+  -- Visual Identity only
+  if 'visual_identity' = any(services) and not ('logo_design' = any(services)) then
+    project_type := 'Visual Identity';
+    project_title := form_record.company_name || ' — ' || project_type;
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (project_title, 'Created automatically from intake #' || left(target_intake_id::text, 8), linked_client_id, project_type, 'active', 1, 'Discovery', 0, auth.uid())
+    returning id into linked_project_id;
+    insert into public.intake_projects (intake_id, project_id, service_type)
+    values (target_intake_id, linked_project_id, 'visual_identity');
+  end if;
+
+  -- Company Profile (always a separate project)
+  if 'company_profile' = any(services) then
+    project_type := 'Company Profile';
+    project_title := form_record.company_name || ' — ' || project_type;
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (project_title, 'Created automatically from intake #' || left(target_intake_id::text, 8), linked_client_id, project_type, 'active', 1, 'Discovery', 0, auth.uid())
+    returning id into linked_project_id;
+    insert into public.intake_projects (intake_id, project_id, service_type)
+    values (target_intake_id, linked_project_id, 'company_profile');
+  end if;
+
+  select project_id into linked_project_id from public.intake_projects
+  where intake_id = target_intake_id order by created_at asc limit 1;
+
+  update public.intake_forms
+  set status = 'submitted', client_id = linked_client_id, project_id = linked_project_id, submitted_at = now()
   where id = target_intake_id returning * into form_record;
   return form_record;
 end;
 $$;
 revoke all on function public.submit_intake_form(uuid) from public, anon;
-grant execute on function public.submit_intake_form(uuid) to authenticated;
+grant execute on function public.submit_intake_form(uuid) to authenticated, anon;
 
 insert into storage.buckets (id, name, public) values ('intake-files', 'intake-files', false)
 on conflict (id) do update set public = false;
 drop policy if exists intake_files_select on storage.objects;
 drop policy if exists intake_files_insert on storage.objects;
 drop policy if exists intake_files_delete on storage.objects;
-create policy intake_files_select on storage.objects for select to authenticated using (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
-create policy intake_files_insert on storage.objects for insert to authenticated with check (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
-create policy intake_files_delete on storage.objects for delete to authenticated using (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
+create policy intake_files_select on storage.objects for select to authenticated, anon using (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
+create policy intake_files_insert on storage.objects for insert to authenticated, anon with check (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
+create policy intake_files_delete on storage.objects for delete to authenticated, anon using (bucket_id = 'intake-files' and owner_id = auth.uid()::text);
 commit;

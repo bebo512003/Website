@@ -58,6 +58,15 @@ npm run build
 npm run lint
 ```
 
+## Public Intake Forms
+
+The `/intake` page lets new clients submit service requests without creating an account. It uses **Supabase Anonymous Sign-in**. To enable this feature:
+
+1. Go to **Supabase Dashboard → Authentication → Providers**
+2. Scroll to **Anonymous** and toggle **Enable Anonymous Sign-ins** to ON
+
+Without this toggle, anonymous authentication will fail and the intake form will not load for unauthenticated visitors.
+
 ## Security notes
 
 - Never expose a Supabase `service_role` key to this application.

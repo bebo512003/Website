@@ -127,6 +127,7 @@ export type CommentRow = {
 export type IntakeFormRow = {
   id: string
   service_type: 'logo_design' | 'visual_identity' | 'company_profile' | null
+  service_types: string[]
   status: 'draft' | 'submitted' | 'archived'
   contact_name: string | null
   contact_email: string | null
@@ -139,6 +140,14 @@ export type IntakeFormRow = {
   submitted_at: string | null
   created_at: string
   updated_at: string
+}
+
+export type IntakeProjectRow = {
+  id: string
+  intake_id: string
+  project_id: string
+  service_type: 'logo_design' | 'visual_identity' | 'company_profile'
+  created_at: string
 }
 
 export type IntakeAttachmentRow = {
@@ -214,8 +223,11 @@ export interface Database {
         id?: string; content: string; entity_type: CommentRow['entity_type']; entity_id: string; author_id?: string | null; created_at?: string; updated_at?: string
       }, Partial<CommentRow>, [{ foreignKeyName: 'comments_author_id_fkey'; columns: ['author_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
       intake_forms: TableDefinition<IntakeFormRow, {
-        id?: string; service_type?: IntakeFormRow['service_type']; status?: IntakeFormRow['status']; contact_name?: string | null; contact_email?: string | null; company_name?: string | null; phone?: string | null; data?: Json; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string | null; created_at?: string; updated_at?: string
+        id?: string; service_type?: IntakeFormRow['service_type']; service_types?: string[]; status?: IntakeFormRow['status']; contact_name?: string | null; contact_email?: string | null; company_name?: string | null; phone?: string | null; data?: Json; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string | null; created_at?: string; updated_at?: string
       }, Partial<IntakeFormRow>>
+      intake_projects: TableDefinition<IntakeProjectRow, {
+        id?: string; intake_id: string; project_id: string; service_type: IntakeProjectRow['service_type']; created_at?: string
+      }, Partial<IntakeProjectRow>>
       intake_attachments: TableDefinition<IntakeAttachmentRow, {
         id?: string; intake_id: string; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
       }, Partial<IntakeAttachmentRow>>
@@ -263,6 +275,7 @@ export type CommentInsert = Database['public']['Tables']['comments']['Insert']
 export type IntakeForm = IntakeFormRow
 export type IntakeFormInsert = Database['public']['Tables']['intake_forms']['Insert']
 export type IntakeFormUpdate = Database['public']['Tables']['intake_forms']['Update']
+export type IntakeProject = IntakeProjectRow
 export type IntakeAttachment = IntakeAttachmentRow
 export type Notification = NotificationRow
 
