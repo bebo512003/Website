@@ -176,6 +176,20 @@ create table if not exists public.notifications (
   created_at timestamptz not null default now()
 );
 
+-- Upgrade defaults and foreign-key behavior from early schema revisions.
+alter table public.clients alter column created_by set default auth.uid();
+alter table public.projects alter column created_by set default auth.uid();
+alter table public.tasks alter column created_by set default auth.uid();
+alter table public.files alter column uploaded_by set default auth.uid();
+alter table public.interactions alter column created_by set default auth.uid();
+alter table public.comments alter column author_id set default auth.uid();
+alter table public.projects drop constraint if exists projects_client_id_fkey;
+alter table public.projects add constraint projects_client_id_fkey foreign key (client_id) references public.clients(id) on delete restrict;
+
+-- Legacy views were created without security_invoker and could bypass table RLS.
+drop view if exists public.project_overview;
+drop view if exists public.client_stats;
+
 create index if not exists idx_projects_client on public.projects(client_id);
 create index if not exists idx_projects_status on public.projects(status);
 create index if not exists idx_project_members_user on public.project_members(user_id);
@@ -363,12 +377,19 @@ returns trigger language plpgsql set search_path = public as $$
 begin new.updated_at = now(); return new; end;
 $$;
 
+drop trigger if exists update_profiles_updated_at on public.profiles;
+drop trigger if exists update_clients_updated_at on public.clients;
+drop trigger if exists update_projects_updated_at on public.projects;
+drop trigger if exists update_tasks_updated_at on public.tasks;
+drop trigger if exists update_files_updated_at on public.files;
+drop trigger if exists update_comments_updated_at on public.comments;
+
 do $$
 declare table_name text;
 begin
   foreach table_name in array array['profiles', 'clients', 'projects', 'tasks', 'files', 'comments'] loop
-    execute format('drop trigger if exists set_%I_updated_at on public.%I', table_name, table_name);
-    execute format('create trigger set_%I_updated_at before update on public.%I for each row execute function public.set_updated_at()', table_name, table_name);
+    execute format('drop trigger if exists %I on public.%I', 'set_' || table_name || '_updated_at', table_name);
+    execute format('create trigger %I before update on public.%I for each row execute function public.set_updated_at()', 'set_' || table_name || '_updated_at', table_name);
   end loop;
 end $$;
 
@@ -412,6 +433,35 @@ drop trigger if exists notify_project_update on public.projects;
 create trigger notify_project_update after update on public.projects
 for each row execute function public.notify_project_update();
 
+create or replace function public.notify_task_assignment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare project_name text;
+begin
+  if new.assignee_id is not null
+    and new.assignee_id is distinct from auth.uid()
+    and (tg_op = 'INSERT' or new.assignee_id is distinct from old.assignee_id)
+    and exists (
+      select 1 from public.profiles p
+      where p.id = new.assignee_id
+        and (p.role in ('admin'::public.app_role, 'manager'::public.app_role)
+          or exists (select 1 from public.project_members pm where pm.project_id = new.project_id and pm.user_id = new.assignee_id))
+    ) then
+    select name into project_name from public.projects where id = new.project_id;
+    insert into public.notifications (recipient_id, actor_id, project_id, type, title, message, action_url)
+    values (new.assignee_id, auth.uid(), new.project_id, 'task_update', 'New task assignment', 'You were assigned “' || new.title || '” in ' || coalesce(project_name, 'a project') || '.', '/projects/' || new.project_id::text);
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_task_assignment on public.tasks;
+create trigger notify_task_assignment after insert or update of assignee_id on public.tasks
+for each row execute function public.notify_task_assignment();
+
 -- Remove every permissive development policy before installing production policies.
 do $$
 declare row record;
@@ -448,8 +498,8 @@ create policy project_members_insert_management on public.project_members for in
 create policy project_members_delete_management on public.project_members for delete to authenticated using (public.is_manager_or_admin());
 
 create policy tasks_select_authorized on public.tasks for select to authenticated using (public.can_access_project(project_id));
-create policy tasks_insert_authorized on public.tasks for insert to authenticated with check (public.can_access_project(project_id) and created_by = auth.uid());
-create policy tasks_update_authorized on public.tasks for update to authenticated using (public.is_manager_or_admin() or assignee_id = auth.uid() or created_by = auth.uid()) with check (public.can_access_project(project_id));
+create policy tasks_insert_authorized on public.tasks for insert to authenticated with check (public.can_access_project(project_id) and created_by = auth.uid() and (public.is_manager_or_admin() or assignee_id is null or assignee_id = auth.uid()));
+create policy tasks_update_authorized on public.tasks for update to authenticated using (public.is_manager_or_admin() or assignee_id = auth.uid() or created_by = auth.uid()) with check (public.can_access_project(project_id) and (public.is_manager_or_admin() or assignee_id is null or assignee_id = auth.uid()));
 create policy tasks_delete_authorized on public.tasks for delete to authenticated using (public.is_manager_or_admin() or created_by = auth.uid());
 
 create policy files_select_authorized on public.files for select to authenticated using (uploaded_by = auth.uid() or (project_id is not null and public.can_access_project(project_id)));
@@ -473,8 +523,12 @@ create policy notifications_delete_own on public.notifications for delete to aut
 
 revoke all on public.profiles from anon, authenticated;
 grant select on public.profiles to authenticated;
+revoke execute on function public.set_user_role(uuid, public.app_role) from public, anon;
+revoke execute on function public.update_own_profile(text, text, text, text, text, text) from public, anon;
 grant execute on function public.set_user_role(uuid, public.app_role) to authenticated;
 grant execute on function public.update_own_profile(text, text, text, text, text, text) to authenticated;
+revoke update on public.notifications from anon, authenticated;
+grant update (read_at) on public.notifications to authenticated;
 
 insert into storage.buckets (id, name, public)
 values ('project-files', 'project-files', false)
