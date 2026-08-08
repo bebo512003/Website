@@ -1,89 +1,90 @@
 import { supabase } from './client'
 import type { Profile } from './types'
 
-// ============================================
-// AUTH FUNCTIONS
-// ============================================
+export type AuthResult = { error: Error | null }
 
-export async function signUp(email: string, password: string, fullName: string) {
-  if (!supabase) return { error: { message: 'Database not connected' } }
+function unavailableError() {
+  return new Error('Supabase is not configured. Add the required environment variables before signing in.')
+}
 
-  const { data, error } = await supabase.auth.signUp({
-    email,
+export async function signUp(email: string, password: string, fullName: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
+
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin
+  const { error } = await supabase.auth.signUp({
+    email: email.trim(),
     password,
     options: {
-      data: { full_name: fullName },
+      data: { full_name: fullName.trim() },
+      emailRedirectTo: `${siteUrl}/auth`,
     },
   })
 
-  if (error) return { data: null, error }
-
-  // Create profile
-  if (data.user) {
-    await supabase.from('profiles').upsert({
-      id: data.user.id,
-      email,
-      full_name: fullName,
-    })
-  }
-
-  return { data, error: null }
+  return { error: error ? new Error(error.message) : null }
 }
 
-export async function signIn(email: string, password: string) {
-  if (!supabase) return { error: { message: 'Database not connected' } }
+export async function signIn(email: string, password: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
 
-  const { data, error } = await supabase.auth.signInWithPassword({
-    email,
+  const { error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
     password,
   })
 
-  return { data, error }
+  return { error: error ? new Error(error.message) : null }
 }
 
-export async function signOut() {
-  if (!supabase) return { error: { message: 'Database not connected' } }
-
+export async function signOut(): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
   const { error } = await supabase.auth.signOut()
-  return { error }
-}
-
-export async function getCurrentUser() {
-  if (!supabase) return null
-
-  const { data: { user } } = await supabase.auth.getUser()
-  return user
+  return { error: error ? new Error(error.message) : null }
 }
 
 export async function getProfile(userId: string): Promise<Profile | null> {
   if (!supabase) return null
 
-  const { data, error } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', userId)
-    .single()
-
-  if (error) return null
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
+  if (error) {
+    console.error('Unable to load the signed-in profile:', error.message)
+    return null
+  }
   return data
 }
 
 export async function updateProfile(userId: string, updates: Partial<Profile>) {
-  if (!supabase) return { error: { message: 'Database not connected' } }
+  if (!supabase) return { data: null, error: unavailableError() }
+
+  const allowedUpdates = {
+    full_name: updates.full_name,
+    avatar_url: updates.avatar_url,
+    agency_name: updates.agency_name,
+    agency_website: updates.agency_website,
+    phone: updates.phone,
+    bio: updates.bio,
+  }
 
   const { data, error } = await supabase
     .from('profiles')
-    .update(updates)
+    .update(allowedUpdates)
     .eq('id', userId)
     .select()
     .single()
 
-  return { data, error }
+  return { data, error: error ? new Error(error.message) : null }
 }
 
-export async function resetPassword(email: string) {
-  if (!supabase) return { error: { message: 'Database not connected' } }
+export async function requestPasswordReset(email: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
 
-  const { error } = await supabase.auth.resetPasswordForEmail(email)
-  return { error }
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin
+  const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+    redirectTo: `${siteUrl}/auth?mode=update-password`,
+  })
+  return { error: error ? new Error(error.message) : null }
+}
+
+export async function updatePassword(password: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
+  const { error } = await supabase.auth.updateUser({ password })
+  return { error: error ? new Error(error.message) : null }
 }

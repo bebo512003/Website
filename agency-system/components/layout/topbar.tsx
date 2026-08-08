@@ -1,109 +1,42 @@
 'use client'
 
-import {
-  Search,
-  Bell,
-  Moon,
-  Sun,
-  Globe,
-  User,
-  Command,
-  LogOut,
-  LogIn,
-} from 'lucide-react'
-import { useTheme } from '@/contexts/theme-context'
-import { useLanguage } from '@/contexts/language-context'
-import { useAuth } from '@/contexts/auth-context'
+import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { Bell, LogOut, Menu, Moon, Search, Sun } from 'lucide-react'
+import { useTheme } from '@/contexts/theme-context'
+import { useAuth } from '@/contexts/auth-context'
 
 export function TopBar() {
-  const { theme, toggleTheme } = useTheme()
-  const { language, toggleLanguage, t } = useLanguage()
-  const { user, profile, signOut } = useAuth()
   const router = useRouter()
+  const { theme, toggleTheme } = useTheme()
+  const { profile, signOut } = useAuth()
+  const [query, setQuery] = useState('')
+
+  const submitSearch = (event: React.FormEvent) => {
+    event.preventDefault()
+    const value = query.trim()
+    router.push(value ? `/projects?q=${encodeURIComponent(value)}` : '/projects')
+  }
 
   const handleSignOut = async () => {
-    await signOut()
-    router.push('/auth')
+    const { error } = await signOut()
+    if (!error) router.replace('/auth')
   }
 
   return (
-    <header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-surface/80 backdrop-blur-md px-6 relative">
-      {/* Top accent line */}
-      <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/60 via-accent/20 to-transparent" />
+    <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-border bg-surface/90 px-4 backdrop-blur-md sm:px-6">
+      <button type="button" className="text-text-secondary md:hidden" onClick={() => router.push('/projects')} aria-label="Open navigation"><Menu className="h-5 w-5" /></button>
+      <form onSubmit={submitSearch} className="relative w-full max-w-md">
+        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects…" aria-label="Search projects" className="w-full rounded-md border border-border bg-surface-raised py-2 pl-9 pr-3 text-sm text-fg outline-none placeholder:text-text-tertiary focus:border-accent" />
+      </form>
 
-      {/* Search */}
-      <div className="flex flex-1 items-center gap-4">
-        <button className="flex items-center gap-3 rounded-[4px] border border-border bg-surface-raised px-4 py-2 w-full max-w-md text-sm text-text-tertiary hover:border-line-light transition-colors">
-          <Search className="h-4 w-4" strokeWidth={1.5} />
-          <span>{t('search.placeholder')}</span>
-          <span className="mr-auto flex items-center gap-1 border border-border px-1.5 py-0.5 rounded text-[10px] font-mono-tech">
-            <Command className="h-3 w-3" />
-            <span>K</span>
-          </span>
-        </button>
-      </div>
-
-      {/* Actions */}
-      <div className="flex items-center gap-1">
-        {/* Language Toggle */}
-        <button
-          onClick={toggleLanguage}
-          className="flex items-center gap-2 rounded-[4px] border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg transition-colors bg-surface"
-        >
-          <Globe className="h-3.5 w-3.5" strokeWidth={1.5} />
-          <span className="font-bold">{language.toUpperCase()}</span>
-        </button>
-
-        {/* Theme Toggle */}
-        <button
-          onClick={toggleTheme}
-          className="rounded-[4px] border border-border p-2 text-text-secondary hover:border-line-light hover:text-fg transition-colors bg-surface"
-        >
-          {theme === 'dark' ? (
-            <Sun className="h-4 w-4" strokeWidth={1.5} />
-          ) : (
-            <Moon className="h-4 w-4" strokeWidth={1.5} />
-          )}
-        </button>
-
-        {/* Notifications */}
-        <button className="relative rounded-[4px] border border-border p-2 text-text-secondary hover:border-line-light hover:text-fg transition-colors bg-surface">
-          <Bell className="h-4 w-4" strokeWidth={1.5} />
-          <span className="absolute -top-1 -left-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-accent text-[8px] font-bold text-accent-foreground border border-accent-glow">
-            3
-          </span>
-        </button>
-
-        {/* Separator */}
-        <div className="mx-2 h-8 w-[1px] bg-border" />
-
-        {/* User Menu */}
-        {user ? (
-          <div className="flex items-center gap-3 pr-1">
-            <div className="flex flex-col items-end">
-              <span className="text-sm font-semibold">
-                {profile?.full_name || user.email}
-              </span>
-              <span className="font-mono-tech">{profile?.role || t('user.role')}</span>
-            </div>
-            <button
-              onClick={handleSignOut}
-              className="flex h-9 w-9 items-center justify-center rounded-[4px] border border-border bg-surface-raised text-text-secondary hover:text-red-500 hover:border-red-500/30 transition-colors"
-              title="تسجيل الخروج"
-            >
-              <LogOut className="h-4 w-4" />
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => router.push('/auth')}
-            className="flex items-center gap-2 rounded-[4px] border border-accent bg-accent/10 px-4 py-2 text-xs font-medium text-accent hover:bg-accent hover:text-accent-foreground transition-colors"
-          >
-            <LogIn className="h-4 w-4" />
-            <span>تسجيل الدخول</span>
-          </button>
-        )}
+      <div className="flex shrink-0 items-center gap-1.5">
+        <button type="button" onClick={() => router.push('/notifications')} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:text-fg" aria-label="Open notifications"><Bell className="h-4 w-4" /></button>
+        <button type="button" onClick={toggleTheme} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:text-fg" aria-label="Toggle color theme">{theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
+        <div className="mx-1 hidden h-7 w-px bg-border sm:block" />
+        <div className="hidden text-right sm:block"><div className="max-w-40 truncate text-xs font-semibold text-fg">{profile?.full_name || profile?.email}</div><div className="mt-0.5 font-mono-tech text-[8px] text-text-tertiary">{profile?.role || 'employee'}</div></div>
+        <button type="button" onClick={handleSignOut} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:border-red-500/30 hover:text-red-400" aria-label="Sign out"><LogOut className="h-4 w-4" /></button>
       </div>
     </header>
   )
