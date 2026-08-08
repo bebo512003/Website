@@ -586,7 +586,7 @@ create index if not exists idx_intake_attachments_intake on public.intake_attach
 
 drop trigger if exists update_intake_forms_updated_at on public.intake_forms;
 create trigger update_intake_forms_updated_at before update on public.intake_forms
-for each row execute function public.update_updated_at_column();
+for each row execute function public.set_updated_at();
 
 alter table public.intake_forms enable row level security;
 alter table public.intake_attachments enable row level security;
