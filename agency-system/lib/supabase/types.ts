@@ -54,6 +54,7 @@ export interface Database {
           created_at?: string
           updated_at?: string
         }
+        Relationships: []
       }
       clients: {
         Row: {
@@ -103,6 +104,15 @@ export interface Database {
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['clients']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'clients_created_by_fkey'
+            columns: ['created_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       projects: {
         Row: {
@@ -144,6 +154,22 @@ export interface Database {
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['projects']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'projects_client_id_fkey'
+            columns: ['client_id']
+            isOneToOne: false
+            referencedRelation: 'clients'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'projects_created_by_fkey'
+            columns: ['created_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       tasks: {
         Row: {
@@ -181,6 +207,29 @@ export interface Database {
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['tasks']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'tasks_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'tasks_assignee_id_fkey'
+            columns: ['assignee_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'tasks_created_by_fkey'
+            columns: ['created_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       files: {
         Row: {
@@ -212,6 +261,29 @@ export interface Database {
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['files']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'files_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'files_client_id_fkey'
+            columns: ['client_id']
+            isOneToOne: false
+            referencedRelation: 'clients'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'files_uploaded_by_fkey'
+            columns: ['uploaded_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       interactions: {
         Row: {
@@ -237,6 +309,29 @@ export interface Database {
           created_at?: string
         }
         Update: Partial<Database['public']['Tables']['interactions']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'interactions_client_id_fkey'
+            columns: ['client_id']
+            isOneToOne: false
+            referencedRelation: 'clients'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'interactions_project_id_fkey'
+            columns: ['project_id']
+            isOneToOne: false
+            referencedRelation: 'projects'
+            referencedColumns: ['id']
+          },
+          {
+            foreignKeyName: 'interactions_created_by_fkey'
+            columns: ['created_by']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
       comments: {
         Row: {
@@ -258,6 +353,15 @@ export interface Database {
           updated_at?: string
         }
         Update: Partial<Database['public']['Tables']['comments']['Insert']>
+        Relationships: [
+          {
+            foreignKeyName: 'comments_author_id_fkey'
+            columns: ['author_id']
+            isOneToOne: false
+            referencedRelation: 'profiles'
+            referencedColumns: ['id']
+          },
+        ]
       }
     }
     Views: {
@@ -275,6 +379,7 @@ export interface Database {
           task_count: number
           completed_tasks: number
         }
+        Relationships: []
       }
       client_stats: {
         Row: {
@@ -284,12 +389,16 @@ export interface Database {
           total_revenue: number
           active_projects: number
         }
+        Relationships: []
       }
     }
     Functions: {
       [_ in never]: never
     }
     Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
       [_ in never]: never
     }
   }

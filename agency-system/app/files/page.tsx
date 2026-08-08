@@ -81,9 +81,12 @@ function CornerMarker() {
   )
 }
 
-function TechCard({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+function TechCard({ children, className = '', ...props }: React.ComponentPropsWithoutRef<'div'>) {
   return (
-    <div className={`relative bg-surface border border-border overflow-hidden ${className}`}>
+    <div
+      className={`relative bg-surface border border-border overflow-hidden ${className}`}
+      {...props}
+    >
       <CornerMarker />
       <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/40 via-accent/10 to-transparent" />
       {children}
