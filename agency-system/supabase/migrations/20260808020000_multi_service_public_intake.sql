@@ -55,7 +55,7 @@ create policy intake_attachments_select on public.intake_attachments for select
     where f.id = intake_id and (f.created_by = auth.uid() or public.is_manager_or_admin())
   ));
 
-create policy intake_attachments_insert on public.intake_attachments for insert
+create policy intake_attachments_insert on public.intake_attachments for insert  to authenticated, anon
   with check (
     uploaded_by = auth.uid()
     and exists (
