@@ -1,538 +1,196 @@
 'use client'
 
-import { useState } from 'react'
-import {
-  FolderKanban,
-  Plus,
-  Search,
-  Filter,
-  LayoutGrid,
-  List,
-  MoreVertical,
-  ArrowUpRight,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { Calendar, FolderKanban, LoaderCircle, Pencil, Plus, Search, Trash2, Users } from 'lucide-react'
+import { useAuth } from '@/contexts/auth-context'
+import { createProject, deleteProject, getClients, getProjects, updateProject } from '@/lib/supabase/database'
+import type { Client, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
+import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-/* ============================================
-   BLUEPRINT BACKGROUND
-   ============================================ */
+const blankForm = {
+  name: '', description: '', client_id: '', type: 'General', status: 'active' as ProjectStatus,
+  progress: '0', phase: '1', phase_name: '', start_date: '', due_date: '', budget: '', currency: 'USD',
+}
+type ProjectForm = typeof blankForm
 
-function BlueprintDecorations() {
-  return (
-    <>
-      <div
-        className="fixed inset-0 pointer-events-none z-0"
-        style={{
-          backgroundImage:
-            'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-          opacity: 0.3,
-        }}
-      />
-      <div
-        className="fixed top-0 right-0 w-[600px] h-[600px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at top right, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.06,
-        }}
-      />
-      <div
-        className="fixed bottom-0 left-0 w-[500px] h-[500px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at bottom left, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.04,
-        }}
-      />
-    </>
-  )
+const statusLabels: Record<ProjectStatus, string> = {
+  active: 'Active', review: 'In review', completed: 'Completed', 'on-hold': 'On hold', cancelled: 'Cancelled',
 }
 
-function DotGrid({ className = '' }: { className?: string }) {
-  return (
-    <div className={`inline-grid grid-cols-3 gap-[3px] ${className}`}>
-      {Array.from({ length: 9 }).map((_, i) => (
-        <span key={i} className="w-1 h-1 rounded-full bg-line-light" />
-      ))}
-    </div>
-  )
+function projectToForm(project: ProjectWithClient): ProjectForm {
+  return {
+    name: project.name,
+    description: project.description || '',
+    client_id: project.client_id,
+    type: project.type,
+    status: project.status,
+    progress: String(project.progress),
+    phase: String(project.phase),
+    phase_name: project.phase_name || '',
+    start_date: project.start_date || '',
+    due_date: project.due_date || '',
+    budget: project.budget == null ? '' : String(project.budget),
+    currency: project.currency,
+  }
 }
-
-function CornerMarker() {
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      <div className="absolute top-0 right-0 w-4 h-4 border-t border-l border-line-light" />
-      <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-r border-line-light" />
-    </div>
-  )
-}
-
-function TechCard({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`relative bg-surface border border-border overflow-hidden ${className}`}>
-      <CornerMarker />
-      <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/40 via-accent/10 to-transparent" />
-      {children}
-    </div>
-  )
-}
-
-/* ============================================
-   DATA
-   ============================================ */
-
-const projects = [
-  {
-    id: '001',
-    name: 'العز العالمية — بروفايل FM',
-    client: 'شركة العز العالمية',
-    type: 'بروفايل مؤسسي',
-    phase: 'استراتيجية المحتوى',
-    phaseNumber: 3,
-    progress: 45,
-    dueDate: '15 · 12 · 2024',
-    status: 'جاري',
-    budget: '42,000 جنيه',
-    team: 4,
-  },
-  {
-    id: '002',
-    name: 'ABC — إعادة تصميم الموقع',
-    client: 'شركة ABC للتجارة',
-    type: 'موقع إلكتروني',
-    phase: 'اتجاه التصميم',
-    phaseNumber: 5,
-    progress: 75,
-    dueDate: '20 · 12 · 2024',
-    status: 'مراجعة',
-    budget: '85,000 جنيه',
-    team: 6,
-  },
-  {
-    id: '003',
-    name: 'XYZ — هوية بصرية كاملة',
-    client: 'مجموعة XYZ',
-    type: 'هوية بصرية',
-    phase: 'مراقبة الجودة',
-    phaseNumber: 8,
-    progress: 90,
-    dueDate: '10 · 12 · 2024',
-    status: 'مراجعة',
-    budget: '120,000 جنيه',
-    team: 8,
-  },
-  {
-    id: '004',
-    name: 'DEF — حملة تسويقية',
-    client: 'شركة DEF',
-    type: 'حملة إعلانية',
-    phase: 'البحث',
-    phaseNumber: 2,
-    progress: 25,
-    dueDate: '25 · 12 · 2024',
-    status: 'جاري',
-    budget: '65,000 جنيه',
-    team: 5,
-  },
-  {
-    id: '005',
-    name: 'GHI — كتالوج منتجات',
-    client: 'شركة GHI الصناعية',
-    type: 'مطبوعات',
-    phase: 'تطوير المحتوى',
-    phaseNumber: 4,
-    progress: 60,
-    dueDate: '30 · 12 · 2024',
-    status: 'جاري',
-    budget: '38,000 جنيه',
-    team: 3,
-  },
-  {
-    id: '006',
-    name: 'JKL — بروشور تعريفي',
-    client: 'مجموعة JKL',
-    type: 'مطبوعات',
-    phase: 'التسليم',
-    phaseNumber: 9,
-    progress: 100,
-    dueDate: '05 · 12 · 2024',
-    status: 'مكتمل',
-    budget: '25,000 جنيه',
-    team: 2,
-  },
-]
-
-const filters = [
-  { label: 'الكل', value: 'all', count: 6 },
-  { label: 'جاري', value: 'active', count: 3 },
-  { label: 'مراجعة', value: 'review', count: 2 },
-  { label: 'مكتمل', value: 'completed', count: 1 },
-]
-
-const projectTypes = [
-  'بروفايل مؤسسي',
-  'موقع إلكتروني',
-  'هوية بصرية',
-  'حملة إعلانية',
-  'مطبوعات',
-]
-
-/* ============================================
-   PAGE
-   ============================================ */
 
 export default function ProjectsPage() {
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
-  const [activeFilter, setActiveFilter] = useState('all')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [selectedType, setSelectedType] = useState<string | null>(null)
+  const { isManager } = useAuth()
+  const [projects, setProjects] = useState<ProjectWithClient[]>([])
+  const [clients, setClients] = useState<Client[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [query, setQuery] = useState('')
+  const [status, setStatus] = useState<'all' | ProjectStatus>('all')
+  const [modalOpen, setModalOpen] = useState(false)
+  const [editing, setEditing] = useState<ProjectWithClient | null>(null)
+  const [form, setForm] = useState<ProjectForm>(blankForm)
 
-  const filteredProjects = projects.filter((project) => {
-    const matchesFilter =
-      activeFilter === 'all' ||
-      (activeFilter === 'active' && project.status === 'جاري') ||
-      (activeFilter === 'review' && project.status === 'مراجعة') ||
-      (activeFilter === 'completed' && project.status === 'مكتمل')
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [projectsResult, clientsResult] = await Promise.all([getProjects(), getClients()])
+    setProjects(projectsResult.data)
+    setClients(clientsResult.data)
+    setError(projectsResult.error || clientsResult.error || '')
+    setLoading(false)
+  }, [])
 
-    const matchesSearch =
-      project.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      project.client.toLowerCase().includes(searchQuery.toLowerCase())
+  useEffect(() => {
+    setQuery(new URLSearchParams(window.location.search).get('q') || '')
+    void load()
+  }, [load])
 
-    const matchesType = !selectedType || project.type === selectedType
+  const filtered = useMemo(() => projects.filter((project) => {
+    const matchesStatus = status === 'all' || project.status === status
+    const search = query.trim().toLowerCase()
+    return matchesStatus && (!search || project.name.toLowerCase().includes(search) || project.clients?.name.toLowerCase().includes(search) || project.type.toLowerCase().includes(search))
+  }), [projects, query, status])
 
-    return matchesFilter && matchesSearch && matchesType
-  })
+  const openCreate = () => {
+    setEditing(null)
+    setForm({ ...blankForm, client_id: clients[0]?.id || '' })
+    setModalOpen(true)
+  }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'جاري':
-        return 'bg-green-500'
-      case 'مراجعة':
-        return 'bg-accent'
-      case 'مكتمل':
-        return 'bg-blue-500'
-      default:
-        return 'bg-text-tertiary'
+  const openEdit = (project: ProjectWithClient) => {
+    setEditing(project)
+    setForm(projectToForm(project))
+    setModalOpen(true)
+  }
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSaving(true)
+    setError('')
+    setMessage('')
+    const payload = {
+      name: form.name.trim(),
+      description: form.description.trim() || null,
+      client_id: form.client_id,
+      type: form.type.trim() || 'General',
+      status: form.status,
+      progress: Number(form.progress),
+      phase: Number(form.phase),
+      phase_name: form.phase_name.trim() || null,
+      start_date: form.start_date || null,
+      due_date: form.due_date || null,
+      budget: form.budget ? Number(form.budget) : null,
+      currency: form.currency.trim().toUpperCase() || 'USD',
+    }
+    const result = editing ? await updateProject(editing.id, payload) : await createProject(payload)
+    setSaving(false)
+    if (result.error) return setError(result.error)
+    setModalOpen(false)
+    setMessage(editing ? 'Project updated.' : 'Project created.')
+    await load()
+  }
+
+  const remove = async (project: ProjectWithClient) => {
+    if (!window.confirm(`Delete “${project.name}”? This action cannot be undone.`)) return
+    const result = await deleteProject(project.id)
+    if (result.error) setError(result.error)
+    else {
+      setMessage('Project deleted.')
+      await load()
     }
   }
 
+  const counts = useMemo(() => ({
+    all: projects.length,
+    active: projects.filter((item) => item.status === 'active').length,
+    review: projects.filter((item) => item.status === 'review').length,
+    completed: projects.filter((item) => item.status === 'completed').length,
+  }), [projects])
+
   return (
-    <div className="relative min-h-screen blueprint-bg">
-      <BlueprintDecorations />
+    <Page>
+      <PageHeader
+        eyebrow="PROJECTS / PORTFOLIO"
+        title="Projects"
+        description="Employees see assigned projects only. Managers and admins can manage the complete portfolio."
+        action={isManager ? <button className={primaryButtonClassName} onClick={openCreate} disabled={!clients.length}><Plus className="h-4 w-4" /> New project</button> : undefined}
+      />
 
-      <div className="relative z-10 p-8 space-y-8">
-        {/* HEADER */}
-        <header className="relative">
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="h-[1px] w-8 bg-accent" />
-                <span className="font-mono-tech tracking-widest text-[10px]">
-                  PROJECTS / 002
-                </span>
-              </div>
+      {!clients.length && isManager && !loading && <InlineAlert tone="info">Create a client before adding a project.</InlineAlert>}
+      {error && <InlineAlert>{error}</InlineAlert>}
+      {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
-              <h1 className="font-display text-[64px] md:text-[80px] text-fg leading-none tracking-tight">
-                PROJECTS<span className="text-text-tertiary">.</span>
-              </h1>
-              <p className="mt-2 text-text-secondary text-sm max-w-lg">
-                كل مشاريعك في مكان واحد — تابع التقدم، الإدارة، والتسليم.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <DotGrid />
-              <button className="border border-border px-4 py-2 text-xs font-medium text-fg hover:border-accent hover:text-accent transition-colors rounded-[4px] bg-surface flex items-center gap-2">
-                <Plus className="h-4 w-4" />
-                <span>مشروع جديد</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-8 h-[1px] w-full bg-gradient-to-l from-accent/30 via-line to-transparent" />
-        </header>
-
-        {/* STATS */}
-        <section className="grid gap-4 md:grid-cols-4">
-          {[
-            { label: 'إجمالي المشاريع', value: '6', icon: FolderKanban },
-            { label: 'جاري الآن', value: '3', icon: Clock },
-            { label: 'في المراجعة', value: '2', icon: AlertCircle },
-            { label: 'مكتمل', value: '1', icon: CheckCircle2 },
-          ].map((stat, index) => {
-            const Icon = stat.icon
-            return (
-              <TechCard key={index} className="p-5">
-                <div className="relative">
-                  <div className="flex items-start justify-between mb-4">
-                    <Icon className="h-5 w-5 text-text-tertiary" strokeWidth={1.5} />
-                    <span className="font-mono-tech text-[10px]">0{index + 1}</span>
-                  </div>
-
-                  <div className="font-display text-[48px] text-fg leading-none mb-1">
-                    {stat.value}
-                  </div>
-
-                  <div className="font-mono-tech text-[10px] text-text-secondary">
-                    {stat.label}
-                  </div>
-                </div>
-              </TechCard>
-            )
-          })}
-        </section>
-
-        {/* FILTERS & SEARCH */}
-        <section>
-          <div className="flex items-center justify-between gap-4 mb-6">
-            {/* Filters */}
-            <div className="flex items-center gap-2">
-              {filters.map((filter) => (
-                <button
-                  key={filter.value}
-                  onClick={() => setActiveFilter(filter.value)}
-                  className={`border px-3 py-1.5 text-xs font-medium transition-colors rounded-[4px] flex items-center gap-2 ${
-                    activeFilter === filter.value
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-text-secondary hover:border-line-light hover:text-fg bg-surface'
-                  }`}
-                >
-                  <span>{filter.label}</span>
-                  <span className="font-mono-tech text-[10px]">{filter.count}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Search & View Mode */}
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                <input
-                  type="text"
-                  placeholder="ابحث في المشاريع..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="border border-border bg-surface rounded-[4px] px-3 py-2 pr-9 text-xs text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent w-64"
-                />
-              </div>
-
-              <div className="flex border border-border rounded-[4px] overflow-hidden">
-                <button
-                  onClick={() => setViewMode('grid')}
-                  className={`p-2 ${
-                    viewMode === 'grid'
-                      ? 'bg-accent/10 text-accent'
-                      : 'bg-surface text-text-secondary hover:text-fg'
-                  }`}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`p-2 border-l border-border ${
-                    viewMode === 'list'
-                      ? 'bg-accent/10 text-accent'
-                      : 'bg-surface text-text-secondary hover:text-fg'
-                  }`}
-                >
-                  <List className="h-4 w-4" />
-                </button>
-              </div>
-
-              <button className="border border-border bg-surface p-2 rounded-[4px] text-text-secondary hover:text-fg transition-colors">
-                <Filter className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Type Filters */}
-          <div className="flex items-center gap-2 mb-6">
-            <span className="font-mono-tech text-[10px] text-text-tertiary mr-2">النوع:</span>
-            {projectTypes.map((type) => (
-              <button
-                key={type}
-                onClick={() => setSelectedType(selectedType === type ? null : type)}
-                className={`border px-2 py-1 text-[10px] font-medium transition-colors rounded-[2px] ${
-                  selectedType === type
-                    ? 'border-accent text-accent bg-accent/10'
-                    : 'border-border text-text-tertiary hover:border-line-light hover:text-fg bg-surface'
-                }`}
-              >
-                {type}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* PROJECTS GRID */}
-        {viewMode === 'grid' ? (
-          <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-            {filteredProjects.map((project) => (
-              <a
-                key={project.id}
-                href={`/projects/${project.id}`}
-                className="block"
-              >
-                <TechCard className="cursor-pointer group">
-                <div className="p-5">
-                  {/* Project Header */}
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono-tech text-[10px] text-accent">
-                        #{project.id}
-                      </span>
-                      <div className={`h-2 w-2 rounded-full ${getStatusColor(project.status)}`} />
-                    </div>
-                    <button className="text-text-tertiary hover:text-fg transition-colors">
-                      <MoreVertical className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {/* Project Name */}
-                  <h3 className="text-base font-bold text-fg mb-2 group-hover:text-accent transition-colors line-clamp-1">
-                    {project.name}
-                  </h3>
-
-                  {/* Client & Type */}
-                  <div className="flex items-center gap-2 mb-4">
-                    <span className="border border-border px-2 py-0.5 text-[10px] font-mono-tech text-text-tertiary rounded-[2px]">
-                      {project.client}
-                    </span>
-                    <span className="text-[10px] text-text-tertiary">·</span>
-                    <span className="text-[10px] text-text-tertiary">{project.type}</span>
-                  </div>
-
-                  {/* Progress */}
-                  <div className="mb-4">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="font-mono-tech text-[10px] text-text-secondary">
-                        Phase {String(project.phaseNumber).padStart(2, '0')} · {project.phase}
-                      </span>
-                      <span className="font-display text-lg text-fg">
-                        {project.progress}
-                        <span className="text-[10px] text-text-tertiary">%</span>
-                      </span>
-                    </div>
-                    <div className="w-full h-1 bg-border rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-accent rounded-full transition-all"
-                        style={{ width: `${project.progress}%` }}
-                      />
-                    </div>
-                  </div>
-
-                  {/* Footer */}
-                  <div className="flex items-center justify-between pt-3 border-t border-border">
-                    <div className="flex items-center gap-2">
-                      <Clock className="h-3 w-3 text-text-tertiary" />
-                      <span className="font-mono-tech text-[10px] text-text-tertiary">
-                        {project.dueDate}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="font-mono-tech text-[10px] text-accent">
-                        {project.budget}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Bottom accent on hover */}
-                <div className="absolute bottom-0 right-0 w-full h-[1px] bg-accent opacity-0 group-hover:opacity-100 transition-opacity" />
-              </TechCard>
-              </a>
-            ))}
-          </section>
-        ) : (
-          /* LIST VIEW */
-          <section>
-          <TechCard className="divide-y divide-border">
-            {filteredProjects.map((project) => (
-              <a
-                key={project.id}
-                href={`/projects/${project.id}`}
-                className="block"
-              >
-                <div className="flex items-center justify-between p-5 hover:bg-surface-raised transition-colors cursor-pointer group">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-4 mb-2">
-                      <span className="font-mono-tech text-[10px] text-accent">
-                        #{project.id}
-                      </span>
-                      <h3 className="text-sm font-semibold text-fg group-hover:text-accent transition-colors">
-                        {project.name}
-                      </h3>
-                      <span className="border border-border px-2 py-0.5 text-[10px] font-mono-tech text-text-tertiary rounded-[2px]">
-                        {project.client}
-                      </span>
-                      <span className="text-[10px] text-text-tertiary">·</span>
-                      <span className="text-[10px] text-text-tertiary">{project.type}</span>
-                    </div>
-                    <div className="flex items-center gap-4 text-xs text-text-tertiary font-mono-tech">
-                      <span>
-                        Phase {String(project.phaseNumber).padStart(2, '0')} · {project.phase}
-                      </span>
-                      <span className="text-line-light">·</span>
-                      <span>DELIVERY {project.dueDate}</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-24 h-1 bg-border rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-accent rounded-full transition-all"
-                          style={{ width: `${project.progress}%` }}
-                        />
-                      </div>
-                      <span className="font-display text-lg text-fg w-10 text-left">
-                        {project.progress}
-                        <span className="text-[10px] text-text-tertiary">%</span>
-                      </span>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className={`h-1.5 w-1.5 rounded-full ${getStatusColor(project.status)}`} />
-                      <span className="text-xs font-medium text-text-secondary">
-                        {project.status}
-                      </span>
-                    </div>
-
-                    <span className="font-mono-tech text-[10px] text-accent">
-                      {project.budget}
-                    </span>
-
-                    <ArrowUpRight className="h-4 w-4 text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />
-                  </div>
-                </div>
-              </a>
-            ))}
-            </TechCard>
-          </section>
-        )}
-
-        {/* FOOTER */}
-        <footer className="relative pt-8">
-          <div className="h-[1px] w-full bg-gradient-to-l from-line-light via-line to-transparent mb-6" />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <DotGrid />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                {filteredProjects.length} PROJECTS · BUILT WITH PRECISION
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                SYSTEM ACTIVE · TRACKING ALL PROJECTS
-              </span>
-            </div>
-          </div>
-        </footer>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        {([
+          ['all', 'All projects', counts.all], ['active', 'Active', counts.active], ['review', 'In review', counts.review], ['completed', 'Completed', counts.completed],
+        ] as const).map(([value, label, count]) => (
+          <button key={value} onClick={() => setStatus(value)} className={`rounded-md border p-4 text-left transition ${status === value ? 'border-accent bg-accent/5' : 'border-border bg-surface hover:border-line-light'}`}>
+            <span className="font-display text-4xl text-fg">{count}</span><span className="mt-1 block text-xs text-text-tertiary">{label}</span>
+          </button>
+        ))}
       </div>
-    </div>
+
+      <Panel>
+        <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full max-w-md"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" /><input className={`${inputClassName} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, clients, or project types" /></div>
+          <p className="text-xs text-text-tertiary">{filtered.length} result{filtered.length === 1 ? '' : 's'}</p>
+        </div>
+
+        {loading ? <LoadingState label="Loading projects…" /> : filtered.length === 0 ? (
+          <EmptyState icon={FolderKanban} title={projects.length ? 'No projects match your filters' : 'No projects yet'} description={projects.length ? 'Change the search text or status filter.' : isManager ? 'Create the first project after adding a client.' : 'An administrator or manager must assign a project to your account.'} action={isManager && clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New project</button> : undefined} />
+        ) : (
+          <div className="grid gap-px bg-border md:grid-cols-2 xl:grid-cols-3">
+            {filtered.map((project) => (
+              <article key={project.id} className="flex min-h-64 flex-col bg-surface p-5 transition hover:bg-surface-raised">
+                <div className="flex items-start justify-between gap-4">
+                  <span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] text-text-tertiary">{statusLabels[project.status]}</span>
+                  {isManager && <div className="flex gap-1"><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-fg" onClick={() => openEdit(project)} aria-label={`Edit ${project.name}`}><Pencil className="h-3.5 w-3.5" /></button><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-red-400" onClick={() => void remove(project)} aria-label={`Delete ${project.name}`}><Trash2 className="h-3.5 w-3.5" /></button></div>}
+                </div>
+                <Link href={`/projects/${project.id}`} className="mt-5 block text-lg font-semibold text-fg hover:text-accent">{project.name}</Link>
+                <p className="mt-2 line-clamp-2 text-sm text-text-tertiary">{project.description || 'No description provided.'}</p>
+                <div className="mt-5 space-y-2 text-xs text-text-secondary"><div className="flex items-center gap-2"><Users className="h-3.5 w-3.5" />{project.clients?.name || 'Client unavailable'}</div><div className="flex items-center gap-2"><Calendar className="h-3.5 w-3.5" />{project.due_date ? new Date(`${project.due_date}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : 'No due date'}</div></div>
+                <div className="mt-auto pt-6"><div className="mb-2 flex justify-between text-xs"><span className="text-text-tertiary">Progress</span><span className="font-semibold text-fg">{project.progress}%</span></div><div className="h-1.5 overflow-hidden rounded-full bg-border"><div className="h-full rounded-full bg-accent" style={{ width: `${project.progress}%` }} /></div></div>
+              </article>
+            ))}
+          </div>
+        )}
+      </Panel>
+
+      <Modal open={modalOpen} onClose={() => setModalOpen(false)} title={editing ? 'Edit project' : 'Create project'} description="Project changes are saved directly to Supabase.">
+        <form className="grid gap-4 sm:grid-cols-2" onSubmit={submit}>
+          <label className="text-xs text-text-secondary sm:col-span-2">Project name<input required className={`${inputClassName} mt-2`} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Client<select required className={`${inputClassName} mt-2`} value={form.client_id} onChange={(event) => setForm({ ...form, client_id: event.target.value })}><option value="">Select client</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
+          <label className="text-xs text-text-secondary">Project type<input required className={`${inputClassName} mt-2`} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as ProjectStatus })}>{Object.entries(statusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+          <label className="text-xs text-text-secondary">Progress (%)<input type="number" min="0" max="100" required className={`${inputClassName} mt-2`} value={form.progress} onChange={(event) => setForm({ ...form, progress: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Phase (1–10)<input type="number" min="1" max="10" required className={`${inputClassName} mt-2`} value={form.phase} onChange={(event) => setForm({ ...form, phase: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Phase name<input className={`${inputClassName} mt-2`} value={form.phase_name} onChange={(event) => setForm({ ...form, phase_name: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Start date<input type="date" className={`${inputClassName} mt-2`} value={form.start_date} onChange={(event) => setForm({ ...form, start_date: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Due date<input type="date" className={`${inputClassName} mt-2`} value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Budget<input type="number" min="0" className={`${inputClassName} mt-2`} value={form.budget} onChange={(event) => setForm({ ...form, budget: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary">Currency<input className={`${inputClassName} mt-2`} value={form.currency} onChange={(event) => setForm({ ...form, currency: event.target.value })} /></label>
+          <label className="text-xs text-text-secondary sm:col-span-2">Description<textarea className={`${inputClassName} mt-2 min-h-24`} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label>
+          <div className="flex justify-end gap-2 sm:col-span-2"><button type="button" className={secondaryButtonClassName} onClick={() => setModalOpen(false)}>Cancel</button><button className={primaryButtonClassName} disabled={saving}>{saving && <LoaderCircle className="h-4 w-4 animate-spin" />}{editing ? 'Save changes' : 'Create project'}</button></div>
+        </form>
+      </Modal>
+    </Page>
   )
 }

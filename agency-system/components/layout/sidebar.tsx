@@ -3,136 +3,55 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import {
-  LayoutDashboard,
-  FolderKanban,
-  Users,
-  CheckSquare,
-  FileText,
-  BarChart3,
-  Settings,
-  ChevronLeft,
-  ChevronRight,
-  Zap,
-  Bot,
-  Sparkles,
-} from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, LayoutDashboard, Settings, ShieldCheck, Users, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useLanguage } from '@/contexts/language-context'
-
-interface NavItem {
-  title: string
-  href: string
-  icon: React.ElementType
-  badge?: string
-}
+import { useAuth } from '@/contexts/auth-context'
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const { t, language } = useLanguage()
+  const { profile, isAdmin } = useAuth()
 
-  const navItems: NavItem[] = [
-    { title: t('nav.dashboard'), href: '/', icon: LayoutDashboard },
-    { title: t('nav.projects'), href: '/projects', icon: FolderKanban, badge: '06' },
-    { title: t('nav.clients'), href: '/clients', icon: Users },
-    { title: t('nav.tasks'), href: '/tasks', icon: CheckSquare },
-    { title: t('nav.files'), href: '/files', icon: FileText },
-    { title: t('nav.ai'), href: '/ai-assistant', icon: Bot },
-    { title: t('nav.reports'), href: '/reports', icon: BarChart3 },
-    { title: t('nav.templates'), href: '/templates', icon: Sparkles },
-    { title: t('nav.settings'), href: '/settings', icon: Settings },
+  const navItems = [
+    { title: 'Dashboard', href: '/', icon: LayoutDashboard },
+    { title: 'Projects', href: '/projects', icon: FolderKanban },
+    { title: 'Tasks', href: '/tasks', icon: CheckSquare },
+    { title: 'Clients', href: '/clients', icon: Users },
+    { title: 'Files', href: '/files', icon: FileText },
+    { title: 'Notifications', href: '/notifications', icon: Bell },
+    { title: 'Reports', href: '/reports', icon: BarChart3 },
+    ...(isAdmin ? [{ title: 'Administration', href: '/admin', icon: ShieldCheck }] : []),
+    { title: 'Settings', href: '/settings', icon: Settings },
   ]
+  const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
+  const mobileItems = navItems.filter((item) => ['/', '/projects', '/tasks', '/notifications', isAdmin ? '/admin' : '/settings'].includes(item.href))
 
   return (
-    <aside
-      className={cn(
-        'sticky top-0 flex h-screen flex-col border-l border-border bg-surface transition-all duration-300',
-        collapsed ? 'w-16' : 'w-64'
-      )}
-      dir={language === 'ar' ? 'rtl' : 'ltr'}
-    >
-      {/* Logo Area */}
-      <div className="flex h-16 items-center border-b border-border px-4 relative">
-        <div className="absolute top-0 right-0 w-20 h-[2px] bg-gradient-to-l from-accent to-transparent" />
-
-        <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center border border-line-light bg-surface-raised relative">
-            <div className="absolute top-0 right-0 w-2 h-[1px] bg-accent" />
-            <div className="absolute bottom-0 left-0 w-2 h-[1px] bg-accent" />
-            <Zap className="h-4 w-4 text-accent" strokeWidth={1.5} />
+    <>
+      <aside className={cn('hidden h-screen shrink-0 flex-col border-r border-border bg-surface transition-all duration-300 md:flex', collapsed ? 'w-16' : 'w-64')}>
+        <div className="relative flex h-16 items-center border-b border-border px-4">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-line-light bg-surface-raised"><Zap className="h-4 w-4 text-accent" /></div>
+            {!collapsed && <div className="whitespace-nowrap"><div className="text-sm font-bold tracking-wider">AGENCY OS</div><div className="font-mono-tech text-[8px] text-text-tertiary">OPERATIONS PLATFORM</div></div>}
           </div>
-          {!collapsed && (
-            <div className="flex flex-col">
-              <span className="text-sm font-bold tracking-wider">AGENCY OS</span>
-              <span className="font-mono-tech">نظام الإدارة v1.0</span>
-            </div>
-          )}
         </div>
-      </div>
+        <nav className="flex-1 space-y-1 overflow-y-auto p-3">
+          {!collapsed && <p className="px-3 pb-2 pt-1 font-mono-tech text-[9px] text-text-tertiary">WORKSPACE</p>}
+          {navItems.map((item) => {
+            const active = isActive(item.href)
+            const Icon = item.icon
+            return <Link key={item.href} href={item.href} title={collapsed ? item.title : undefined} className={cn('relative flex items-center gap-3 rounded-md border px-3 py-2.5 text-sm font-medium transition-colors', active ? 'border-line-light bg-surface-raised text-fg' : 'border-transparent text-text-secondary hover:bg-surface-raised hover:text-fg', collapsed && 'justify-center px-2')}>{active && <span className="absolute bottom-2 left-0 top-2 w-0.5 bg-accent" />}<Icon className="h-[18px] w-[18px] shrink-0" strokeWidth={1.5} />{!collapsed && <span>{item.title}</span>}</Link>
+          })}
+        </nav>
+        <div className="border-t border-border p-3">
+          {!collapsed && <div className="mb-3 px-3"><div className="truncate text-xs font-medium text-fg">{profile?.full_name || profile?.email || 'Signed in'}</div><div className="mt-1 font-mono-tech text-[8px] text-text-tertiary">{profile?.role || 'EMPLOYEE'}</div></div>}
+          <button type="button" onClick={() => setCollapsed((value) => !value)} className="flex w-full items-center justify-center rounded-md border border-border bg-surface p-2 text-text-tertiary transition hover:text-fg" aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}>{collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}</button>
+        </div>
+      </aside>
 
-      {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-3 space-y-1">
-        {!collapsed && (
-          <div className="px-3 pt-2 pb-3">
-            <span className="font-mono-tech">القائمة الرئيسية</span>
-          </div>
-        )}
-
-        {navItems.map((item) => {
-          const isActive = pathname === item.href
-          const Icon = item.icon
-
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={cn(
-                'flex items-center gap-3 rounded-[4px] px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative',
-                isActive
-                  ? 'bg-surface-raised text-fg border border-line-light'
-                  : 'text-text-secondary hover:bg-surface-raised hover:text-fg border border-transparent',
-                collapsed && 'justify-center px-2'
-              )}
-            >
-              {isActive && (
-                <div className="absolute top-0 right-0 bottom-0 w-[2px] bg-accent rounded-r-[4px]" />
-              )}
-
-              <Icon className="h-[18px] w-[18px] flex-shrink-0" strokeWidth={1.5} />
-              {!collapsed && (
-                <>
-                  <span className="flex-1">{item.title}</span>
-                  {item.badge && (
-                    <span className="border border-accent/30 bg-accent/10 text-accent px-2 py-0.5 text-[10px] font-bold tracking-wider">
-                      {item.badge}
-                    </span>
-                  )}
-                </>
-              )}
-            </Link>
-          )
-        })}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 grid border-t border-border bg-surface/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" style={{ gridTemplateColumns: `repeat(${mobileItems.length}, minmax(0, 1fr))` }} aria-label="Mobile navigation">
+        {mobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.href); return <Link key={item.href} href={item.href} className={cn('flex flex-col items-center gap-1 py-2 text-[9px]', active ? 'text-accent' : 'text-text-tertiary')}><Icon className="h-4 w-4" /><span className="max-w-full truncate">{item.title === 'Administration' ? 'Admin' : item.title}</span></Link> })}
       </nav>
-
-      {/* Bottom Section */}
-      <div className="border-t border-border p-3 space-y-2">
-        {!collapsed && (
-          <div className="px-3 pb-2 pt-1">
-            <div className="flex items-center gap-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="font-mono-tech">النظام نشط</span>
-            </div>
-          </div>
-        )}
-
-        <button
-          onClick={() => setCollapsed(!collapsed)}
-          className="flex w-full items-center justify-center rounded-[4px] border border-border p-2 text-text-tertiary hover:border-line-light hover:text-fg transition-colors bg-surface"
-        >
-          {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
-        </button>
-      </div>
-    </aside>
+    </>
   )
 }

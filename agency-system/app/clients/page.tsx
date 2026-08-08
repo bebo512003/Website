@@ -1,636 +1,76 @@
 'use client'
 
-import { useState } from 'react'
-import {
-  Users,
-  Plus,
-  Search,
-  Filter,
-  LayoutGrid,
-  List,
-  MoreVertical,
-  Building2,
-  Phone,
-  Mail,
-  Globe,
-  MapPin,
-  Calendar,
-  DollarSign,
-  FolderKanban,
-  TrendingUp,
-  UserPlus,
-  ArrowUpRight,
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { Building2, Mail, MapPin, Pencil, Plus, Search, Trash2, Users } from 'lucide-react'
+import { useAuth } from '@/contexts/auth-context'
+import { createClient, deleteClient, getClients, updateClient } from '@/lib/supabase/database'
+import type { Client } from '@/lib/supabase/types'
+import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-/* ============================================
-   BLUEPRINT BACKGROUND
-   ============================================ */
+const blankForm = { name: '', type: 'smb' as Client['type'], status: 'active' as Client['status'], industry: '', contact_person: '', contact_position: '', email: '', phone: '', location: '', website: '', notes: '' }
+type Form = typeof blankForm
 
-function BlueprintDecorations() {
-  return (
-    <>
-      <div
-        className="fixed inset-0 pointer-events-none z-0"
-        style={{
-          backgroundImage:
-            'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-          opacity: 0.3,
-        }}
-      />
-      <div
-        className="fixed top-0 right-0 w-[600px] h-[600px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at top right, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.06,
-        }}
-      />
-      <div
-        className="fixed bottom-0 left-0 w-[500px] h-[500px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at bottom left, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.04,
-        }}
-      />
-    </>
-  )
+function clientToForm(client: Client): Form {
+  return { name: client.name, type: client.type, status: client.status, industry: client.industry || '', contact_person: client.contact_person || '', contact_position: client.contact_position || '', email: client.email || '', phone: client.phone || '', location: client.location || '', website: client.website || '', notes: client.notes || '' }
 }
-
-function DotGrid({ className = '' }: { className?: string }) {
-  return (
-    <div className={`inline-grid grid-cols-3 gap-[3px] ${className}`}>
-      {Array.from({ length: 9 }).map((_, i) => (
-        <span key={i} className="w-1 h-1 rounded-full bg-line-light" />
-      ))}
-    </div>
-  )
-}
-
-function CornerMarker() {
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      <div className="absolute top-0 right-0 w-4 h-4 border-t border-l border-line-light" />
-      <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-r border-line-light" />
-    </div>
-  )
-}
-
-function TechCard({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`relative bg-surface border border-border overflow-hidden ${className}`}>
-      <CornerMarker />
-      <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/40 via-accent/10 to-transparent" />
-      {children}
-    </div>
-  )
-}
-
-/* ============================================
-   DATA
-   ============================================ */
-
-const clients = [
-  {
-    id: '001',
-    name: 'شركة العز العالمية',
-    nameEn: 'Al Ezz International',
-    type: 'Enterprise',
-    industry: 'مقاولات',
-    status: 'active',
-    projects: 3,
-    totalValue: '167,000 جنيه',
-    contactPerson: 'أحمد محمد',
-    contactPosition: 'مدير المشاريع',
-    email: 'ahmed@alezz-international.com',
-    phone: '+966 55 863 8738',
-    location: 'الخبر، السعودية',
-    website: 'alezz-international.com',
-    firstProject: '01 · 11 · 2024',
-    lastInteraction: '15 · 12 · 2024',
-  },
-  {
-    id: '002',
-    name: 'شركة ABC للتجارة',
-    nameEn: 'ABC Trading Co.',
-    type: 'Enterprise',
-    industry: 'تجارة',
-    status: 'active',
-    projects: 2,
-    totalValue: '125,000 جنيه',
-    contactPerson: 'محمد علي',
-    contactPosition: 'مدير التسويق',
-    email: 'mohamed@abc.com',
-    phone: '+966 50 123 4567',
-    location: 'الرياض، السعودية',
-    website: 'abc.com',
-    firstProject: '15 · 09 · 2024',
-    lastInteraction: '10 · 12 · 2024',
-  },
-  {
-    id: '003',
-    name: 'مجموعة XYZ',
-    nameEn: 'XYZ Group',
-    type: 'Enterprise',
-    industry: 'استثمار',
-    status: 'review',
-    projects: 1,
-    totalValue: '120,000 جنيه',
-    contactPerson: 'سارة أحمد',
-    contactPosition: 'مدير العمليات',
-    email: 'sara@xyz.com',
-    phone: '+966 55 987 6543',
-    location: 'جدة، السعودية',
-    website: 'xyz.com',
-    firstProject: '20 · 10 · 2024',
-    lastInteraction: '05 · 12 · 2024',
-  },
-  {
-    id: '004',
-    name: 'شركة DEF',
-    nameEn: 'DEF Company',
-    type: 'SMB',
-    industry: 'تسويق',
-    status: 'active',
-    projects: 1,
-    totalValue: '65,000 جنيه',
-    contactPerson: 'خالد محمود',
-    contactPosition: 'المدير التنفيذي',
-    email: 'khaled@def.com',
-    phone: '+966 54 321 9876',
-    location: 'الدمام، السعودية',
-    website: 'def.com',
-    firstProject: '01 · 11 · 2024',
-    lastInteraction: '12 · 12 · 2024',
-  },
-  {
-    id: '005',
-    name: 'شركة GHI الصناعية',
-    nameEn: 'GHI Industrial',
-    type: 'SMB',
-    industry: 'صناعة',
-    status: 'active',
-    projects: 1,
-    totalValue: '38,000 جنيه',
-    contactPerson: 'عمر حسن',
-    contactPosition: 'مدير المشتريات',
-    email: 'omar@ghi.com',
-    phone: '+966 56 789 0123',
-    location: 'ينبع، السعودية',
-    website: 'ghi.com',
-    firstProject: '10 · 11 · 2024',
-    lastInteraction: '08 · 12 · 2024',
-  },
-  {
-    id: '006',
-    name: 'مجموعة JKL',
-    nameEn: 'JKL Group',
-    type: 'SMB',
-    industry: 'عقارات',
-    status: 'completed',
-    projects: 1,
-    totalValue: '25,000 جنيه',
-    contactPerson: 'فاطمة عبدالله',
-    contactPosition: 'مدير العلاقات',
-    email: 'fatma@jkl.com',
-    phone: '+966 53 456 7890',
-    location: 'مكة، السعودية',
-    website: 'jkl.com',
-    firstProject: '01 · 10 · 2024',
-    lastInteraction: '05 · 12 · 2024',
-  },
-  {
-    id: '007',
-    name: 'شركة MNO التقنية',
-    nameEn: 'MNO Tech',
-    type: 'SMB',
-    industry: 'تكنولوجيا',
-    status: 'potential',
-    projects: 0,
-    totalValue: '0 جنيه',
-    contactPerson: 'يوسف إبراهيم',
-    contactPosition: 'مؤسس',
-    email: 'youssef@mno.com',
-    phone: '+966 57 234 5678',
-    location: 'الخبر، السعودية',
-    website: 'mno.com',
-    firstProject: '-',
-    lastInteraction: '20 · 12 · 2024',
-  },
-  {
-    id: '008',
-    name: 'مؤسسة PQR',
-    nameEn: 'PQR Foundation',
-    type: 'Individual',
-    industry: 'تعليم',
-    status: 'potential',
-    projects: 0,
-    totalValue: '0 جنيه',
-    contactPerson: 'نورا سعيد',
-    contactPosition: 'مدير',
-    email: 'noura@pqr.com',
-    phone: '+966 58 876 5432',
-    location: 'الطائف، السعودية',
-    website: 'pqr.com',
-    firstProject: '-',
-    lastInteraction: '18 · 12 · 2024',
-  },
-]
-
-const clientTypes = [
-  { label: 'الكل', value: 'all', count: 8 },
-  { label: 'Enterprise', value: 'enterprise', count: 3 },
-  { label: 'SMB', value: 'smb', count: 3 },
-  { label: 'Individual', value: 'individual', count: 1 },
-  { label: 'محتمل', value: 'potential', count: 2 },
-]
-
-const industries = [
-  'مقاولات',
-  'تجارة',
-  'استثمار',
-  'تسويق',
-  'صناعة',
-  'عقارات',
-  'تكنولوجيا',
-  'تعليم',
-]
-
-/* ============================================
-   PAGE
-   ============================================ */
 
 export default function ClientsPage() {
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
-  const [activeFilter, setActiveFilter] = useState('all')
-  const [searchQuery, setSearchQuery] = useState('')
-  const [selectedIndustry, setSelectedIndustry] = useState<string | null>(null)
+  const { isManager } = useAuth()
+  const [clients, setClients] = useState<Client[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [query, setQuery] = useState('')
+  const [error, setError] = useState('')
+  const [message, setMessage] = useState('')
+  const [modal, setModal] = useState(false)
+  const [editing, setEditing] = useState<Client | null>(null)
+  const [form, setForm] = useState<Form>(blankForm)
 
-  const filteredClients = clients.filter((client) => {
-    const matchesFilter =
-      activeFilter === 'all' ||
-      (activeFilter === 'enterprise' && client.type === 'Enterprise') ||
-      (activeFilter === 'smb' && client.type === 'SMB') ||
-      (activeFilter === 'individual' && client.type === 'Individual') ||
-      (activeFilter === 'potential' && client.status === 'potential')
+  const load = useCallback(async () => {
+    setLoading(true)
+    const result = await getClients()
+    setClients(result.data)
+    setError(result.error || '')
+    setLoading(false)
+  }, [])
+  useEffect(() => { void load() }, [load])
 
-    const matchesSearch =
-      client.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      client.nameEn.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      client.contactPerson.toLowerCase().includes(searchQuery.toLowerCase())
+  const filtered = useMemo(() => {
+    const value = query.trim().toLowerCase()
+    return clients.filter((client) => !value || [client.name, client.industry, client.contact_person, client.email].some((field) => field?.toLowerCase().includes(value)))
+  }, [clients, query])
 
-    const matchesIndustry = !selectedIndustry || client.industry === selectedIndustry
+  const openCreate = () => { setEditing(null); setForm(blankForm); setModal(true) }
+  const openEdit = (client: Client) => { setEditing(client); setForm(clientToForm(client)); setModal(true) }
 
-    return matchesFilter && matchesSearch && matchesIndustry
-  })
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'bg-green-500'
-      case 'review':
-        return 'bg-accent'
-      case 'completed':
-        return 'bg-blue-500'
-      case 'potential':
-        return 'bg-yellow-500'
-      default:
-        return 'bg-text-tertiary'
-    }
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSaving(true); setError(''); setMessage('')
+    const payload = { ...form, name: form.name.trim(), industry: form.industry.trim() || null, contact_person: form.contact_person.trim() || null, contact_position: form.contact_position.trim() || null, email: form.email.trim() || null, phone: form.phone.trim() || null, location: form.location.trim() || null, website: form.website.trim() || null, notes: form.notes.trim() || null }
+    const result = editing ? await updateClient(editing.id, payload) : await createClient(payload)
+    setSaving(false)
+    if (result.error) setError(result.error)
+    else { setModal(false); setMessage(editing ? 'Client updated.' : 'Client created.'); await load() }
   }
 
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'نشط'
-      case 'review':
-        return 'مراجعة'
-      case 'completed':
-        return 'مكتمل'
-      case 'potential':
-        return 'محتمل'
-      default:
-        return status
-    }
+  const remove = async (client: Client) => {
+    if (!window.confirm(`Delete “${client.name}”? Clients with projects cannot be deleted.`)) return
+    const result = await deleteClient(client.id)
+    if (result.error) setError(result.error)
+    else { setMessage('Client deleted.'); await load() }
   }
 
   return (
-    <div className="relative min-h-screen blueprint-bg">
-      <BlueprintDecorations />
+    <Page>
+      <PageHeader eyebrow="CLIENTS / DIRECTORY" title="Clients" description="Client records are secured by the same project access rules as the rest of the workspace." action={isManager ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New client</button> : undefined} />
+      {error && <InlineAlert>{error}</InlineAlert>}{message && <InlineAlert tone="success">{message}</InlineAlert>}
+      <Panel>
+        <div className="flex items-center justify-between gap-4 border-b border-border p-4"><div className="relative w-full max-w-md"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" /><input className={`${inputClassName} pl-9`} placeholder="Search clients…" value={query} onChange={(event) => setQuery(event.target.value)} /></div><span className="text-xs text-text-tertiary">{filtered.length} clients</span></div>
+        {loading ? <LoadingState label="Loading clients…" /> : filtered.length === 0 ? <EmptyState icon={Users} title={clients.length ? 'No clients match your search' : 'No clients yet'} description={clients.length ? 'Try a different search.' : isManager ? 'Create the first real client record.' : 'Clients connected to your assigned projects will appear here.'} action={isManager && !clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New client</button> : undefined} /> : <div className="grid gap-px bg-border md:grid-cols-2 xl:grid-cols-3">{filtered.map((client) => <article key={client.id} className="bg-surface p-5 hover:bg-surface-raised"><div className="flex items-start justify-between gap-3"><div className="flex h-10 w-10 items-center justify-center rounded border border-border bg-surface-raised"><Building2 className="h-5 w-5 text-accent" /></div>{isManager && <div className="flex gap-1"><button onClick={() => openEdit(client)} className="rounded border border-border p-1.5 text-text-tertiary hover:text-fg" aria-label={`Edit ${client.name}`}><Pencil className="h-3.5 w-3.5" /></button><button onClick={() => void remove(client)} className="rounded border border-border p-1.5 text-text-tertiary hover:text-red-400" aria-label={`Delete ${client.name}`}><Trash2 className="h-3.5 w-3.5" /></button></div>}</div><Link href={`/clients/${client.id}`} className="mt-5 block text-lg font-semibold hover:text-accent">{client.name}</Link><p className="mt-1 text-xs capitalize text-text-tertiary">{client.type} · {client.status}{client.industry ? ` · ${client.industry}` : ''}</p><div className="mt-5 space-y-2 text-xs text-text-secondary">{client.email && <div className="flex items-center gap-2"><Mail className="h-3.5 w-3.5" />{client.email}</div>}{client.location && <div className="flex items-center gap-2"><MapPin className="h-3.5 w-3.5" />{client.location}</div>}</div></article>)}</div>}
+      </Panel>
 
-      <div className="relative z-10 p-8 space-y-8">
-        {/* HEADER */}
-        <header className="relative">
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="h-[1px] w-8 bg-accent" />
-                <span className="font-mono-tech tracking-widest text-[10px]">
-                  CLIENTS / 003
-                </span>
-              </div>
-
-              <h1 className="font-display text-[64px] md:text-[80px] text-fg leading-none tracking-tight">
-                CLIENTS<span className="text-text-tertiary">.</span>
-              </h1>
-              <p className="mt-2 text-text-secondary text-sm max-w-lg">
-                قاعدة بيانات عملائك — كل المعلومات، كل المشاريع، كل التفاعلات في مكان واحد.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <DotGrid />
-              <button className="border border-border px-4 py-2 text-xs font-medium text-fg hover:border-accent hover:text-accent transition-colors rounded-[4px] bg-surface flex items-center gap-2">
-                <UserPlus className="h-4 w-4" />
-                <span>عميل جديد</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-8 h-[1px] w-full bg-gradient-to-l from-accent/30 via-line to-transparent" />
-        </header>
-
-        {/* STATS */}
-        <section className="grid gap-4 md:grid-cols-4">
-          {[
-            { label: 'إجمالي العملاء', value: '8', icon: Users },
-            { label: 'عملاء نشطين', value: '5', icon: CheckCircle2 },
-            { label: 'عملاء محتملين', value: '2', icon: UserPlus },
-            { label: 'إجمالي القيمة', value: '540K', icon: DollarSign },
-          ].map((stat, index) => {
-            const Icon = stat.icon
-            return (
-              <TechCard key={index} className="p-5">
-                <div className="relative">
-                  <div className="flex items-start justify-between mb-4">
-                    <Icon className="h-5 w-5 text-text-tertiary" strokeWidth={1.5} />
-                    <span className="font-mono-tech text-[10px]">0{index + 1}</span>
-                  </div>
-
-                  <div className="font-display text-[48px] text-fg leading-none mb-1">
-                    {stat.value}
-                  </div>
-
-                  <div className="font-mono-tech text-[10px] text-text-secondary">
-                    {stat.label}
-                  </div>
-                </div>
-              </TechCard>
-            )
-          })}
-        </section>
-
-        {/* FILTERS & SEARCH */}
-        <section>
-          <div className="flex items-center justify-between gap-4 mb-6">
-            {/* Filters */}
-            <div className="flex items-center gap-2">
-              {clientTypes.map((filter) => (
-                <button
-                  key={filter.value}
-                  onClick={() => setActiveFilter(filter.value)}
-                  className={`border px-3 py-1.5 text-xs font-medium transition-colors rounded-[4px] flex items-center gap-2 ${
-                    activeFilter === filter.value
-                      ? 'border-accent text-accent bg-accent/10'
-                      : 'border-border text-text-secondary hover:border-line-light hover:text-fg bg-surface'
-                  }`}
-                >
-                  <span>{filter.label}</span>
-                  <span className="font-mono-tech text-[10px]">{filter.count}</span>
-                </button>
-              ))}
-            </div>
-
-            {/* Search & View Mode */}
-            <div className="flex items-center gap-2">
-              <div className="relative">
-                <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                <input
-                  type="text"
-                  placeholder="ابحث عن عميل..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="border border-border bg-surface rounded-[4px] px-3 py-2 pr-9 text-xs text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent w-64"
-                />
-              </div>
-
-              <div className="flex border border-border rounded-[4px] overflow-hidden">
-                <button
-                  onClick={() => setViewMode('grid')}
-                  className={`p-2 ${
-                    viewMode === 'grid'
-                      ? 'bg-accent/10 text-accent'
-                      : 'bg-surface text-text-secondary hover:text-fg'
-                  }`}
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => setViewMode('list')}
-                  className={`p-2 border-l border-border ${
-                    viewMode === 'list'
-                      ? 'bg-accent/10 text-accent'
-                      : 'bg-surface text-text-secondary hover:text-fg'
-                  }`}
-                >
-                  <List className="h-4 w-4" />
-                </button>
-              </div>
-
-              <button className="border border-border bg-surface p-2 rounded-[4px] text-text-secondary hover:text-fg transition-colors">
-                <Filter className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-
-          {/* Industry Filters */}
-          <div className="flex items-center gap-2 mb-6">
-            <span className="font-mono-tech text-[10px] text-text-tertiary mr-2">الصناعة:</span>
-            {industries.map((industry) => (
-              <button
-                key={industry}
-                onClick={() => setSelectedIndustry(selectedIndustry === industry ? null : industry)}
-                className={`border px-2 py-1 text-[10px] font-medium transition-colors rounded-[2px] ${
-                  selectedIndustry === industry
-                    ? 'border-accent text-accent bg-accent/10'
-                    : 'border-border text-text-tertiary hover:border-line-light hover:text-fg bg-surface'
-                }`}
-              >
-                {industry}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        {/* CLIENTS GRID */}
-        {viewMode === 'grid' ? (
-          <section className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            {filteredClients.map((client) => (
-              <a
-                key={client.id}
-                href={`/clients/${client.id}`}
-                className="block"
-              >
-                <TechCard className="cursor-pointer group">
-                  <div className="p-5">
-                    {/* Client Header */}
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <span className="font-mono-tech text-[10px] text-accent">
-                          #{client.id}
-                        </span>
-                        <div className={`h-2 w-2 rounded-full ${getStatusColor(client.status)}`} />
-                      </div>
-                      <button className="text-text-tertiary hover:text-fg transition-colors">
-                        <MoreVertical className="h-4 w-4" />
-                      </button>
-                    </div>
-
-                    {/* Client Name */}
-                    <h3 className="text-base font-bold text-fg mb-1 group-hover:text-accent transition-colors line-clamp-1">
-                      {client.name}
-                    </h3>
-                    <p className="font-mono-tech text-[10px] text-text-tertiary mb-4">
-                      {client.nameEn}
-                    </p>
-
-                    {/* Type & Industry */}
-                    <div className="flex items-center gap-2 mb-4">
-                      <span className="border border-border px-2 py-0.5 text-[10px] font-mono-tech text-text-tertiary rounded-[2px]">
-                        {client.type}
-                      </span>
-                      <span className="text-[10px] text-text-tertiary">·</span>
-                      <span className="text-[10px] text-text-tertiary">{client.industry}</span>
-                    </div>
-
-                    {/* Contact Info */}
-                    <div className="space-y-2 mb-4">
-                      <div className="flex items-center gap-2 text-xs text-text-secondary">
-                        <Users className="h-3 w-3" />
-                        <span className="truncate">{client.contactPerson}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-text-secondary">
-                        <MapPin className="h-3 w-3" />
-                        <span className="truncate">{client.location}</span>
-                      </div>
-                    </div>
-
-                    {/* Stats */}
-                    <div className="flex items-center justify-between pt-3 border-t border-border">
-                      <div className="flex items-center gap-2">
-                        <FolderKanban className="h-3 w-3 text-text-tertiary" />
-                        <span className="font-mono-tech text-[10px] text-text-tertiary">
-                          {client.projects} مشاريع
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <DollarSign className="h-3 w-3 text-text-tertiary" />
-                        <span className="font-mono-tech text-[10px] text-accent">
-                          {client.totalValue}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Bottom accent on hover */}
-                  <div className="absolute bottom-0 right-0 w-full h-[1px] bg-accent opacity-0 group-hover:opacity-100 transition-opacity" />
-                </TechCard>
-              </a>
-            ))}
-          </section>
-        ) : (
-          /* LIST VIEW */
-          <section>
-            <TechCard className="divide-y divide-border">
-              {filteredClients.map((client) => (
-                <a
-                  key={client.id}
-                  href={`/clients/${client.id}`}
-                  className="block"
-                >
-                  <div className="flex items-center justify-between p-5 hover:bg-surface-raised transition-colors cursor-pointer group">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-4 mb-2">
-                        <span className="font-mono-tech text-[10px] text-accent">
-                          #{client.id}
-                        </span>
-                        <h3 className="text-sm font-semibold text-fg group-hover:text-accent transition-colors">
-                          {client.name}
-                        </h3>
-                        <span className="border border-border px-2 py-0.5 text-[10px] font-mono-tech text-text-tertiary rounded-[2px]">
-                          {client.nameEn}
-                        </span>
-                        <div className={`h-2 w-2 rounded-full ${getStatusColor(client.status)}`} />
-                        <span className="text-[10px] text-text-secondary">
-                          {getStatusLabel(client.status)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-4 text-xs text-text-tertiary font-mono-tech">
-                        <span className="flex items-center gap-1">
-                          <Users className="h-3 w-3" />
-                          {client.contactPerson}
-                        </span>
-                        <span className="text-line-light">·</span>
-                        <span className="flex items-center gap-1">
-                          <MapPin className="h-3 w-3" />
-                          {client.location}
-                        </span>
-                        <span className="text-line-light">·</span>
-                        <span>{client.industry}</span>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-6">
-                      <div className="text-left">
-                        <div className="font-mono-tech text-[10px] text-text-secondary mb-1">
-                          المشاريع
-                        </div>
-                        <div className="font-display text-lg text-fg">
-                          {client.projects}
-                        </div>
-                      </div>
-
-                      <div className="text-left">
-                        <div className="font-mono-tech text-[10px] text-text-secondary mb-1">
-                          القيمة
-                        </div>
-                        <div className="font-mono-tech text-[10px] text-accent">
-                          {client.totalValue}
-                        </div>
-                      </div>
-
-                      <ArrowUpRight className="h-4 w-4 text-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </div>
-                  </div>
-                </a>
-              ))}
-            </TechCard>
-          </section>
-        )}
-
-        {/* FOOTER */}
-        <footer className="relative pt-8">
-          <div className="h-[1px] w-full bg-gradient-to-l from-line-light via-line to-transparent mb-6" />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <DotGrid />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                {filteredClients.length} CLIENTS · DATABASE ACTIVE
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                SYSTEM ACTIVE · TRACKING ALL CLIENTS
-              </span>
-            </div>
-          </div>
-        </footer>
-      </div>
-    </div>
+      <Modal open={modal} onClose={() => setModal(false)} title={editing ? 'Edit client' : 'Create client'} description="Client information is stored in Supabase."><form onSubmit={submit} className="grid gap-4 sm:grid-cols-2"><label className="text-xs text-text-secondary sm:col-span-2">Client name<input required className={`${inputClassName} mt-2`} value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} /></label><label className="text-xs text-text-secondary">Type<select className={`${inputClassName} mt-2`} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value as Client['type'] })}><option value="enterprise">Enterprise</option><option value="smb">Small or medium business</option><option value="individual">Individual</option><option value="potential">Potential</option></select></label><label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as Client['status'] })}><option value="active">Active</option><option value="inactive">Inactive</option><option value="potential">Potential</option></select></label><label className="text-xs text-text-secondary">Industry<input className={`${inputClassName} mt-2`} value={form.industry} onChange={(event) => setForm({ ...form, industry: event.target.value })} /></label><label className="text-xs text-text-secondary">Contact person<input className={`${inputClassName} mt-2`} value={form.contact_person} onChange={(event) => setForm({ ...form, contact_person: event.target.value })} /></label><label className="text-xs text-text-secondary">Contact role<input className={`${inputClassName} mt-2`} value={form.contact_position} onChange={(event) => setForm({ ...form, contact_position: event.target.value })} /></label><label className="text-xs text-text-secondary">Email<input type="email" className={`${inputClassName} mt-2`} value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label><label className="text-xs text-text-secondary">Phone<input className={`${inputClassName} mt-2`} value={form.phone} onChange={(event) => setForm({ ...form, phone: event.target.value })} /></label><label className="text-xs text-text-secondary">Location<input className={`${inputClassName} mt-2`} value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} /></label><label className="text-xs text-text-secondary sm:col-span-2">Website<input className={`${inputClassName} mt-2`} placeholder="https://example.com" value={form.website} onChange={(event) => setForm({ ...form, website: event.target.value })} /></label><label className="text-xs text-text-secondary sm:col-span-2">Notes<textarea className={`${inputClassName} mt-2 min-h-24`} value={form.notes} onChange={(event) => setForm({ ...form, notes: event.target.value })} /></label><div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setModal(false)} className={secondaryButtonClassName}>Cancel</button><button className={primaryButtonClassName} disabled={saving}>{saving ? 'Saving…' : editing ? 'Save changes' : 'Create client'}</button></div></form></Modal>
+    </Page>
   )
 }

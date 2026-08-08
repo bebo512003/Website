@@ -1,327 +1,239 @@
-import { supabase, isDatabaseConnected } from './client'
+import { isDatabaseConnected, supabase } from './client'
 import type {
+  AppRole,
   Client,
   ClientInsert,
+  ClientUpdate,
+  FileItem,
+  FileWithProject,
+  Notification,
+  Profile,
   Project,
   ProjectInsert,
+  ProjectMember,
+  ProjectUpdate,
+  ProjectWithClient,
   Task,
   TaskInsert,
   TaskUpdate,
-  FileItem,
-  FileInsert,
-  Interaction,
-  InteractionInsert,
+  TaskWithRelations,
 } from './types'
 
-// ============================================
-// CHECK CONNECTION
-// ============================================
+export interface Result<T> {
+  data: T
+  error: string | null
+}
 
-export function getDatabaseStatus(): { connected: boolean } {
+const notConfigured = 'Supabase is not configured.'
+const fail = <T>(data: T, message = notConfigured): Result<T> => ({ data, error: message })
+const ok = <T>(data: T): Result<T> => ({ data, error: null })
+
+export function getDatabaseStatus() {
   return { connected: isDatabaseConnected }
 }
 
-// ============================================
-// CLIENTS
-// ============================================
+export async function getProfiles(): Promise<Result<Profile[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('profiles').select('*').order('full_name')
+  return error ? fail([], error.message) : ok(data || [])
+}
 
-export async function getClients(): Promise<Client[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .order('created_at', { ascending: false })
+export async function setProfileRole(userId: string, role: AppRole): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: role })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function getClients(): Promise<Result<Client[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('clients').select('*').order('name')
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function getClientById(id: string): Promise<Result<Client | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('clients').select('*').eq('id', id).maybeSingle()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function createClient(client: ClientInsert): Promise<Result<Client | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('clients').insert(client).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateClient(id: string, updates: ClientUpdate): Promise<Result<Client | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('clients').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteClient(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('clients').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function getProjects(): Promise<Result<ProjectWithClient[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('projects').select('*, clients(id, name)').order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as ProjectWithClient[])
+}
+
+export async function getProjectById(id: string): Promise<Result<ProjectWithClient | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('projects').select('*, clients(id, name)').eq('id', id).maybeSingle()
+  return error ? fail(null, error.message) : ok(data as unknown as ProjectWithClient | null)
+}
+
+export async function getProjectsByClientId(clientId: string): Promise<Result<Project[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('projects').select('*').eq('client_id', clientId).order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function createProject(project: ProjectInsert): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('projects').insert(project).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateProject(id: string, updates: ProjectUpdate): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('projects').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteProject(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('projects').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function getProjectMembers(projectId: string): Promise<Result<(ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null })[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('project_members').select('*, profiles!project_members_user_id_fkey(id, full_name, email, role)').eq('project_id', projectId)
+  return error ? fail([], error.message) : ok((data || []) as unknown as (ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null })[])
+}
+
+export async function addProjectMember(projectId: string, userId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('project_members').insert({ project_id: projectId, user_id: userId })
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function removeProjectMember(projectId: string, userId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('project_members').delete().eq('project_id', projectId).eq('user_id', userId)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function getTasks(): Promise<Result<TaskWithRelations[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('tasks').select('*, projects(id, name), profiles!tasks_assignee_id_fkey(id, full_name, email)').order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as TaskWithRelations[])
+}
+
+export async function getTasksByProjectId(projectId: string): Promise<Result<TaskWithRelations[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('tasks').select('*, projects(id, name), profiles!tasks_assignee_id_fkey(id, full_name, email)').eq('project_id', projectId).order('created_at')
+  return error ? fail([], error.message) : ok((data || []) as unknown as TaskWithRelations[])
+}
+
+export async function createTask(task: TaskInsert): Promise<Result<Task | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('tasks').insert(task).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateTask(id: string, updates: TaskUpdate): Promise<Result<Task | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteTask(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('tasks').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function getFiles(): Promise<Result<FileWithProject[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('files').select('*, projects(id, name)').order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as FileWithProject[])
+}
+
+function getFileType(file: File): FileItem['type'] {
+  if (file.type.startsWith('image/')) return 'image'
+  if (file.type.startsWith('video/')) return 'video'
+  if (file.type === 'application/pdf') return 'pdf'
+  if (/spreadsheet|excel|csv/.test(file.type)) return 'spreadsheet'
+  if (/zip|compressed|archive/.test(file.type)) return 'archive'
+  if (/document|word|text/.test(file.type)) return 'document'
+  return 'other'
+}
+
+export async function uploadProjectFile(projectId: string, userId: string, file: File): Promise<Result<FileItem | null>> {
+  if (!supabase) return fail(null)
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const storagePath = `${projectId}/${crypto.randomUUID()}-${safeName}`
+  const upload = await supabase.storage.from('project-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  if (upload.error) return fail(null, upload.error.message)
+
+  const { data, error } = await supabase.from('files').insert({
+    name: file.name,
+    type: getFileType(file),
+    size: file.size,
+    mime_type: file.type || null,
+    storage_path: storagePath,
+    project_id: projectId,
+    uploaded_by: userId,
+  }).select().single()
 
   if (error) {
-    console.error('Error fetching clients:', error)
-    return []
+    await supabase.storage.from('project-files').remove([storagePath])
+    return fail(null, error.message)
   }
-  return data || []
+  return ok(data)
 }
 
-export async function getClientById(id: string): Promise<Client | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('clients')
-    .select('*')
-    .eq('id', id)
-    .single()
-
-  if (error) return null
-  return data
+export async function getFileDownloadUrl(storagePath: string): Promise<Result<string | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.storage.from('project-files').createSignedUrl(storagePath, 60)
+  return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
-export async function createClient(client: ClientInsert): Promise<Client | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('clients')
-    .insert(client)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating client:', error)
-    return null
+export async function deleteFile(file: Pick<FileItem, 'id' | 'storage_path'>): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  if (file.storage_path) {
+    const storageResult = await supabase.storage.from('project-files').remove([file.storage_path])
+    if (storageResult.error) return fail(false, storageResult.error.message)
   }
-  return data
+  const { error } = await supabase.from('files').delete().eq('id', file.id)
+  return error ? fail(false, error.message) : ok(true)
 }
 
-export async function updateClient(id: string, updates: Partial<ClientInsert>): Promise<Client | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('clients')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-
-  if (error) return null
-  return data
+export async function getNotifications(limit = 50): Promise<Result<Notification[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(limit)
+  return error ? fail([], error.message) : ok(data || [])
 }
 
-export async function deleteClient(id: string): Promise<boolean> {
-  if (!supabase) return false
-  
-  const { error } = await supabase
-    .from('clients')
-    .delete()
-    .eq('id', id)
-
-  return !error
+export async function markNotificationRead(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
 }
 
-// ============================================
-// PROJECTS
-// ============================================
-
-export async function getProjects(): Promise<Project[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*, clients(name)')
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    console.error('Error fetching projects:', error)
-    return []
-  }
-  return data || []
+export async function markAllNotificationsRead(): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('notifications').update({ read_at: new Date().toISOString() }).is('read_at', null)
+  return error ? fail(false, error.message) : ok(true)
 }
 
-export async function getProjectById(id: string): Promise<Project | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*, clients(*)')
-    .eq('id', id)
-    .single()
-
-  if (error) return null
-  return data
-}
-
-export async function getProjectsByClientId(clientId: string): Promise<Project[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('projects')
-    .select('*')
-    .eq('client_id', clientId)
-    .order('created_at', { ascending: false })
-
-  if (error) return []
-  return data || []
-}
-
-export async function createProject(project: ProjectInsert): Promise<Project | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('projects')
-    .insert(project)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating project:', error)
-    return null
-  }
-  return data
-}
-
-export async function updateProject(id: string, updates: Partial<ProjectInsert>): Promise<Project | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('projects')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-
-  if (error) return null
-  return data
-}
-
-// ============================================
-// TASKS
-// ============================================
-
-export async function getTasks(): Promise<Task[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('tasks')
-    .select('*, projects(name)')
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    console.error('Error fetching tasks:', error)
-    return []
-  }
-  return data || []
-}
-
-export async function getTasksByProjectId(projectId: string): Promise<Task[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('tasks')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('created_at', { ascending: true })
-
-  if (error) return []
-  return data || []
-}
-
-export async function createTask(task: TaskInsert): Promise<Task | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('tasks')
-    .insert(task)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating task:', error)
-    return null
-  }
-  return data
-}
-
-export async function updateTask(id: string, updates: Partial<TaskInsert>): Promise<Task | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('tasks')
-    .update(updates)
-    .eq('id', id)
-    .select()
-    .single()
-
-  if (error) return null
-  return data
-}
-
-export async function moveTask(taskId: string, newStatus: Task['status']): Promise<boolean> {
-  if (!supabase) return false
-  
-  const { error } = await supabase
-    .from('tasks')
-    .update({ status: newStatus })
-    .eq('id', taskId)
-
-  return !error
-}
-
-// ============================================
-// FILES
-// ============================================
-
-export async function getFiles(): Promise<FileItem[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('files')
-    .select('*')
-    .order('created_at', { ascending: false })
-
-  if (error) {
-    console.error('Error fetching files:', error)
-    return []
-  }
-  return data || []
-}
-
-export async function createFile(file: FileInsert): Promise<FileItem | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('files')
-    .insert(file)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating file:', error)
-    return null
-  }
-  return data
-}
-
-// ============================================
-// INTERACTIONS
-// ============================================
-
-export async function getInteractions(clientId: string): Promise<Interaction[]> {
-  if (!supabase) return []
-  
-  const { data, error } = await supabase
-    .from('interactions')
-    .select('*')
-    .eq('client_id', clientId)
-    .order('date', { ascending: false })
-
-  if (error) return []
-  return data || []
-}
-
-export async function createInteraction(interaction: InteractionInsert): Promise<Interaction | null> {
-  if (!supabase) return null
-  
-  const { data, error } = await supabase
-    .from('interactions')
-    .insert(interaction)
-    .select()
-    .single()
-
-  if (error) {
-    console.error('Error creating interaction:', error)
-    return null
-  }
-  return data
-}
-
-// ============================================
-// SEED DATA (For Development)
-// ============================================
-
-export async function seedDatabase(): Promise<void> {
-  if (!supabase) {
-    console.warn('Database not connected. Skipping seed.')
-    return
-  }
-
-  console.log('Seeding database...')
-
-  // Add your seed data here
-  // This is useful for development/testing
+export async function deleteNotification(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('notifications').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
 }

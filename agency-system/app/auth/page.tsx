@@ -1,209 +1,137 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Zap, Mail, Lock, User, Eye, EyeOff, ArrowLeft } from 'lucide-react'
+import { Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, User, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { InlineAlert, inputClassName, primaryButtonClassName } from '@/components/ui/page'
 
-export default function LoginPage() {
+type AuthMode = 'signin' | 'signup' | 'reset' | 'update-password'
+
+export default function AuthPage() {
   const router = useRouter()
-  const { signIn, signUp } = useAuth()
-  
-  const [isSignUp, setIsSignUp] = useState(false)
+  const { user, configured, loading: authLoading, signIn, signUp, resetPassword, updatePassword } = useAuth()
+  const [mode, setMode] = useState<AuthMode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [showPassword, setShowPassword] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [success, setSuccess] = useState('')
+  const [message, setMessage] = useState('')
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('mode') === 'update-password') {
+      setMode('update-password')
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!authLoading && user && mode !== 'update-password') router.replace('/')
+  }, [authLoading, mode, router, user])
+
+  const changeMode = (nextMode: AuthMode) => {
+    setMode(nextMode)
     setError('')
-    setSuccess('')
-    setLoading(true)
+    setMessage('')
+  }
 
-    try {
-      if (isSignUp) {
-        const { error } = await signUp(email, password, fullName)
-        if (error) {
-          setError(error.message)
-        } else {
-          setSuccess('تم إنشاء الحساب بنجاح! تم إرسال رابط التأكيد للإيميل.')
-        }
-      } else {
-        const { error } = await signIn(email, password)
-        if (error) {
-          setError(error.message)
-        } else {
-          router.push('/')
-        }
-      }
-    } catch (err: any) {
-      setError(err.message || 'حدث خطأ')
-    } finally {
-      setLoading(false)
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setSubmitting(true)
+    setError('')
+    setMessage('')
+
+    let result
+    if (mode === 'signup') result = await signUp(email, password, fullName)
+    else if (mode === 'reset') result = await resetPassword(email)
+    else if (mode === 'update-password') result = await updatePassword(password)
+    else result = await signIn(email, password)
+
+    setSubmitting(false)
+    if (result.error) {
+      setError(result.error.message)
+      return
+    }
+
+    if (mode === 'signin') router.replace('/')
+    if (mode === 'signup') setMessage('Account created. Check your inbox to confirm your email before signing in.')
+    if (mode === 'reset') setMessage('If an account exists for that address, a password reset link has been sent.')
+    if (mode === 'update-password') {
+      setMessage('Your password has been updated. Redirecting…')
+      setTimeout(() => router.replace('/'), 800)
     }
   }
 
+  const title = mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : mode === 'update-password' ? 'Choose a new password' : 'Welcome back'
+  const subtitle = mode === 'signup' ? 'New accounts start with Employee access.' : mode === 'reset' ? 'We will email you a secure reset link.' : mode === 'update-password' ? 'Use at least eight characters.' : 'Sign in with your Supabase account.'
+
   return (
-    <div className="min-h-screen bg-bg flex items-center justify-center p-4 relative overflow-hidden">
-      {/* Background decorations */}
-      <div
-        className="fixed inset-0 pointer-events-none"
-        style={{
-          backgroundImage:
-            'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-          opacity: 0.3,
-        }}
-      />
-      <div
-        className="fixed top-0 right-0 w-[600px] h-[600px] pointer-events-none"
-        style={{
-          background: 'radial-gradient(ellipse at top right, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.06,
-        }}
-      />
-
-      <div className="relative z-10 w-full max-w-md">
-        {/* Back button */}
-        <button
-          onClick={() => router.push('/')}
-          className="flex items-center gap-2 text-text-secondary hover:text-fg transition-colors mb-6"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          <span className="text-sm">العودة للرئيسية</span>
-        </button>
-
-        {/* Card */}
-        <div className="relative bg-surface border border-border overflow-hidden rounded-lg">
-          <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/40 via-accent/10 to-transparent" />
-          <div className="absolute top-0 right-0 w-4 h-4 border-t border-l border-line-light" />
-          <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-r border-line-light" />
-
-          <div className="p-8">
-            {/* Header */}
-            <div className="text-center mb-8">
-              <div className="inline-flex h-12 w-12 items-center justify-center rounded-lg border border-accent/30 bg-accent/10 mb-4">
-                <Zap className="h-6 w-6 text-accent" />
-              </div>
-              <h1 className="font-display text-3xl text-fg mb-2">
-                {isSignUp ? 'إنشاء حساب' : 'تسجيل الدخول'}
-              </h1>
-              <p className="text-sm text-text-secondary">
-                {isSignUp ? 'انضم إلى Agency OS' : 'مرحباً بعودتك'}
-              </p>
-            </div>
-
-            {/* Form */}
-            <form onSubmit={handleSubmit} className="space-y-4">
-              {isSignUp && (
-                <div>
-                  <label className="block text-xs font-mono-tech text-text-secondary mb-2">
-                    الاسم الكامل
-                  </label>
-                  <div className="relative">
-                    <User className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                    <input
-                      type="text"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      required={isSignUp}
-                      placeholder="أحمد محمد"
-                      className="w-full border border-border bg-surface-raised rounded px-3 py-2.5 pr-9 text-sm text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-                    />
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-mono-tech text-text-secondary mb-2">
-                  البريد الإلكتروني
-                </label>
-                <div className="relative">
-                  <Mail className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                    placeholder="ahmed@example.com"
-                    className="w-full border border-border bg-surface-raised rounded px-3 py-2.5 pr-9 text-sm text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-mono-tech text-text-secondary mb-2">
-                  كلمة المرور
-                </label>
-                <div className="relative">
-                  <Lock className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                  <input
-                    type={showPassword ? 'text' : 'password'}
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                    minLength={6}
-                    placeholder="••••••••"
-                    className="w-full border border-border bg-surface-raised rounded px-3 py-2.5 pr-9 pl-9 text-sm text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-fg"
-                  >
-                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
-              </div>
-
-              {error && (
-                <div className="border border-red-500/30 bg-red-500/5 rounded px-3 py-2 text-xs text-red-500">
-                  {error}
-                </div>
-              )}
-
-              {success && (
-                <div className="border border-green-500/30 bg-green-500/5 rounded px-3 py-2 text-xs text-green-500">
-                  {success}
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full border border-accent bg-accent text-accent-foreground rounded px-4 py-2.5 text-sm font-medium hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? 'جاري...' : isSignUp ? 'إنشاء الحساب' : 'تسجيل الدخول'}
-              </button>
-            </form>
-
-            {/* Toggle */}
-            <div className="mt-6 text-center">
-              <button
-                onClick={() => {
-                  setIsSignUp(!isSignUp)
-                  setError('')
-                  setSuccess('')
-                }}
-                className="text-xs text-text-secondary hover:text-accent transition-colors"
-              >
-                {isSignUp ? 'عندك حساب؟ سجل دخول' : 'مش عندك حساب؟ اعمل واحد'}
-              </button>
-            </div>
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
+      <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
+      <section className="relative z-10 w-full max-w-md rounded-md border border-border bg-surface p-7 shadow-2xl sm:p-9">
+        <div className="mb-7">
+          <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-md border border-accent/30 bg-accent/10">
+            <Zap className="h-5 w-5 text-accent" />
           </div>
+          <p className="mb-2 font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / SECURE ACCESS</p>
+          <h1 className="text-2xl font-semibold text-fg">{title}</h1>
+          <p className="mt-2 text-sm text-text-secondary">{subtitle}</p>
         </div>
 
-        {/* Footer */}
-        <div className="mt-6 text-center">
-          <p className="font-mono-tech text-[10px] text-text-tertiary">
-            AGENCY OS • SECURE AUTHENTICATION
-          </p>
+        {!configured && (
+          <div className="mb-5">
+            <InlineAlert>Supabase is not configured. Add the variables from <code>.env.local.example</code> to <code>.env.local</code>.</InlineAlert>
+          </div>
+        )}
+        {error && <div className="mb-5"><InlineAlert>{error}</InlineAlert></div>}
+        {message && <div className="mb-5"><InlineAlert tone="success">{message}</InlineAlert></div>}
+
+        <form className="space-y-4" onSubmit={handleSubmit}>
+          {mode === 'signup' && (
+            <label className="block text-xs font-medium text-text-secondary">
+              Full name
+              <span className="relative mt-2 block">
+                <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                <input className={`${inputClassName} pl-9`} value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" required placeholder="Your name" />
+              </span>
+            </label>
+          )}
+
+          {mode !== 'update-password' && (
+            <label className="block text-xs font-medium text-text-secondary">
+              Email address
+              <span className="relative mt-2 block">
+                <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                <input className={`${inputClassName} pl-9`} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required placeholder="you@agency.com" />
+              </span>
+            </label>
+          )}
+
+          {mode !== 'reset' && (
+            <label className="block text-xs font-medium text-text-secondary">
+              Password
+              <span className="relative mt-2 block">
+                <LockKeyhole className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+                <input className={`${inputClassName} px-9`} type={showPassword ? 'text' : 'password'} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={mode === 'signin' ? 'current-password' : 'new-password'} minLength={8} required placeholder="At least 8 characters" />
+                <button type="button" onClick={() => setShowPassword((value) => !value)} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-fg" aria-label={showPassword ? 'Hide password' : 'Show password'}>
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </span>
+            </label>
+          )}
+
+          <button className={`${primaryButtonClassName} w-full`} type="submit" disabled={!configured || submitting}>
+            {submitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
+            {mode === 'signup' ? 'Create account' : mode === 'reset' ? 'Send reset link' : mode === 'update-password' ? 'Update password' : 'Sign in'}
+          </button>
+        </form>
+
+        <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-text-secondary">
+          {mode === 'signin' && <><button onClick={() => changeMode('signup')} className="hover:text-accent">Create an account</button><button onClick={() => changeMode('reset')} className="hover:text-accent">Forgot password?</button></>}
+          {(mode === 'signup' || mode === 'reset') && <button onClick={() => changeMode('signin')} className="hover:text-accent">Return to sign in</button>}
         </div>
-      </div>
-    </div>
+      </section>
+    </main>
   )
 }

@@ -81,11 +81,11 @@ html:not(.dark) {
 }
 
 @utility font-cairo {
-  font-family: 'Cairo', 'Tajawal', sans-serif;
+  font-family: 'Space Grotesk', sans-serif;
 }
 
 @utility font-display {
-  font-family: 'Bebas Neue', 'Space Grotesk', 'Cairo', sans-serif;
+  font-family: 'Bebas Neue', 'Space Grotesk', sans-serif;
 }
 
 @utility font-mono-tech {
@@ -102,7 +102,7 @@ html:not(.dark) {
   body {
     background-color: hsl(var(--color-bg));
     color: hsl(var(--color-fg));
-    font-family: 'Cairo', 'Tajawal', sans-serif;
+    font-family: 'Space Grotesk', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

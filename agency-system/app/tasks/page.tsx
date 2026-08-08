@@ -1,552 +1,60 @@
 'use client'
 
-import { useState } from 'react'
-import {
-  CheckCircle2,
-  Clock,
-  AlertCircle,
-  Plus,
-  Search,
-  Filter,
-  MoreVertical,
-  Calendar,
-  Users,
-  Flag,
-  GripVertical,
-  Tag,
-  FolderKanban,
-  TrendingUp,
-  MessageSquare,
-  Paperclip,
-} from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { CheckSquare, LoaderCircle, Plus, Trash2 } from 'lucide-react'
+import { useAuth } from '@/contexts/auth-context'
+import { createTask, deleteTask, getProjects, getTasks, updateTask } from '@/lib/supabase/database'
+import type { Profile, ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-/* ============================================
-   BLUEPRINT COMPONENTS
-   ============================================ */
-
-function BlueprintDecorations() {
-  return (
-    <>
-      <div
-        className="fixed inset-0 pointer-events-none z-0"
-        style={{
-          backgroundImage:
-            'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)',
-          backgroundSize: '60px 60px',
-          opacity: 0.3,
-        }}
-      />
-      <div
-        className="fixed top-0 right-0 w-[600px] h-[600px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at top right, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.06,
-        }}
-      />
-      <div
-        className="fixed bottom-0 left-0 w-[500px] h-[500px] pointer-events-none z-0"
-        style={{
-          background:
-            'radial-gradient(ellipse at bottom left, hsl(358 75% 50%), transparent 70%)',
-          opacity: 0.04,
-        }}
-      />
-    </>
-  )
-}
-
-function DotGrid({ className = '' }: { className?: string }) {
-  return (
-    <div className={`inline-grid grid-cols-3 gap-[3px] ${className}`}>
-      {Array.from({ length: 9 }).map((_, i) => (
-        <span key={i} className="w-1 h-1 rounded-full bg-line-light" />
-      ))}
-    </div>
-  )
-}
-
-function CornerMarker() {
-  return (
-    <div className="absolute inset-0 pointer-events-none">
-      <div className="absolute top-0 right-0 w-4 h-4 border-t border-l border-line-light" />
-      <div className="absolute bottom-0 left-0 w-4 h-4 border-b border-r border-line-light" />
-    </div>
-  )
-}
-
-function TechCard({ children, className = '' }: { children: React.ReactNode; className?: string }) {
-  return (
-    <div className={`relative bg-surface border border-border overflow-hidden ${className}`}>
-      <CornerMarker />
-      <div className="absolute top-0 right-0 w-full h-[1px] bg-gradient-to-l from-accent/40 via-accent/10 to-transparent" />
-      {children}
-    </div>
-  )
-}
-
-/* ============================================
-   TYPES
-   ============================================ */
-
-interface Task {
-  id: string
-  title: string
-  project: string
-  projectId: string
-  assignee: string
-  priority: 'high' | 'medium' | 'low'
-  dueDate: string
-  tags: string[]
-  comments: number
-  attachments: number
-  description: string
-}
-
-/* ============================================
-   DATA
-   ============================================ */
-
-const initialTasks: Task[] = [
-  {
-    id: 'T001',
-    title: 'كتابة محتوى صفحة الرؤية والرسالة',
-    project: 'العز العالمية — بروفايل FM',
-    projectId: '001',
-    assignee: 'أحمد محمد',
-    priority: 'high',
-    dueDate: '18 · 12 · 2024',
-    tags: ['محتوى', 'عربي'],
-    comments: 3,
-    attachments: 1,
-    description: 'كتابة نص احترافي للرؤية والرسالة باللغة العربية',
-  },
-  {
-    id: 'T002',
-    title: 'ترجمة المحتوى للإنجليزية',
-    project: 'العز العالمية — بروفايل FM',
-    projectId: '001',
-    assignee: 'سارة أحمد',
-    priority: 'high',
-    dueDate: '20 · 12 · 2024',
-    tags: ['ترجمة', 'إنجليزي'],
-    comments: 1,
-    attachments: 0,
-    description: 'ترجمة كل المحتوى العربي للإنجليزية باحترافية',
-  },
-  {
-    id: 'T003',
-    title: 'تصميم هيكل البروفايل',
-    project: 'العز العالمية — بروفايل FM',
-    projectId: '001',
-    assignee: 'محمد علي',
-    priority: 'medium',
-    dueDate: '22 · 12 · 2024',
-    tags: ['تصميم', 'UI'],
-    comments: 5,
-    attachments: 2,
-    description: 'تصميم wireframes للصفحات الرئيسية',
-  },
-  {
-    id: 'T004',
-    title: 'جمع صور المشاريع',
-    project: 'العز العالمية — بروفايل FM',
-    projectId: '001',
-    assignee: 'فاطمة عبدالله',
-    priority: 'medium',
-    dueDate: '15 · 12 · 2024',
-    tags: ['محتوى', 'صور'],
-    comments: 2,
-    attachments: 8,
-    description: 'جمع وتنظيم صور المشاريع من العميل',
-  },
-  {
-    id: 'T005',
-    title: 'مراجعة SEO للموقع',
-    project: 'ABC — إعادة تصميم الموقع',
-    projectId: '002',
-    assignee: 'خالد محمود',
-    priority: 'low',
-    dueDate: '25 · 12 · 2024',
-    tags: ['SEO', 'تقني'],
-    comments: 0,
-    attachments: 0,
-    description: 'مراجعة وتحسين عناصر SEO',
-  },
-  {
-    id: 'T006',
-    title: 'اختبار Responsive Design',
-    project: 'ABC — إعادة تصميم الموقع',
-    projectId: '002',
-    assignee: 'محمد علي',
-    priority: 'high',
-    dueDate: '19 · 12 · 2024',
-    tags: ['تصميم', 'اختبار'],
-    comments: 4,
-    attachments: 1,
-    description: 'اختبار الموقع على جميع الأجهزة',
-  },
-  {
-    id: 'T007',
-    title: 'تصميم اللوجو',
-    project: 'XYZ — هوية بصرية كاملة',
-    projectId: '003',
-    assignee: 'أحمد محمد',
-    priority: 'high',
-    dueDate: '12 · 12 · 2024',
-    tags: ['تصميم', 'هوية'],
-    comments: 8,
-    attachments: 5,
-    description: 'تصميم 3 concepts للوجو',
-  },
-  {
-    id: 'T008',
-    title: 'كتابة استراتيجية السوشيال ميديا',
-    project: 'DEF — حملة تسويقية',
-    projectId: '004',
-    assignee: 'سارة أحمد',
-    priority: 'medium',
-    dueDate: '28 · 12 · 2024',
-    tags: ['استراتيجية', 'سوشيال'],
-    comments: 2,
-    attachments: 0,
-    description: 'وضع خطة محتوى للسوشيال ميديا',
-  },
-]
-
-const columns = [
-  { id: 'todo', title: 'To Do', titleAr: 'قيد الانتظار', color: 'bg-text-tertiary' },
-  { id: 'inprogress', title: 'IN PROGRESS', titleAr: 'جاري العمل', color: 'bg-blue-500' },
-  { id: 'review', title: 'REVIEW', titleAr: 'مراجعة', color: 'bg-accent' },
-  { id: 'done', title: 'DONE', titleAr: 'مكتمل', color: 'bg-green-500' },
-]
-
-/* ============================================
-   PAGE
-   ============================================ */
+const columns: { id: TaskStatus; label: string }[] = [{ id: 'todo', label: 'To do' }, { id: 'inprogress', label: 'In progress' }, { id: 'review', label: 'Review' }, { id: 'done', label: 'Done' }]
 
 export default function TasksPage() {
-  const [tasks, setTasks] = useState<Record<string, Task[]>>({
-    todo: [initialTasks[0], initialTasks[1], initialTasks[4], initialTasks[7]],
-    inprogress: [initialTasks[2], initialTasks[3], initialTasks[6]],
-    review: [initialTasks[5]],
-    done: [],
-  })
+  const { user, profile, isManager } = useAuth()
+  const [tasks, setTasks] = useState<TaskWithRelations[]>([])
+  const [projects, setProjects] = useState<ProjectWithClient[]>([])
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [modal, setModal] = useState(false)
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({ title: '', description: '', project_id: '', priority: 'medium' as TaskPriority, assignee_id: '', due_date: '' })
 
-  const [searchQuery, setSearchQuery] = useState('')
-  const [draggedTask, setDraggedTask] = useState<{ taskId: string; columnId: string } | null>(null)
-  const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
+  const load = useCallback(async () => {
+    setLoading(true)
+    const [taskResult, projectResult] = await Promise.all([getTasks(), getProjects()])
+    setTasks(taskResult.data); setProjects(projectResult.data); setProfiles(profile ? [profile] : []); setError(taskResult.error || projectResult.error || ''); setLoading(false)
+  }, [profile])
+  useEffect(() => { void load() }, [load])
 
-  const handleDragStart = (taskId: string, columnId: string) => {
-    setDraggedTask({ taskId, columnId })
+  const grouped = useMemo(() => Object.fromEntries(columns.map((column) => [column.id, tasks.filter((task) => task.status === column.id)])) as Record<TaskStatus, TaskWithRelations[]>, [tasks])
+
+  const openCreate = () => {
+    setForm({ title: '', description: '', project_id: projects[0]?.id || '', priority: 'medium', assignee_id: user?.id || '', due_date: '' })
+    setModal(true)
   }
 
-  const handleDragOver = (e: React.DragEvent, columnId: string) => {
-    e.preventDefault()
-    setDragOverColumn(columnId)
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault(); setSaving(true)
+    const result = await createTask({ title: form.title.trim(), description: form.description.trim() || null, project_id: form.project_id, priority: form.priority, assignee_id: form.assignee_id || null, due_date: form.due_date || null })
+    setSaving(false)
+    if (result.error) setError(result.error)
+    else { setModal(false); await load() }
   }
 
-  const handleDragLeave = () => {
-    setDragOverColumn(null)
+  const move = async (task: TaskWithRelations, status: TaskStatus) => {
+    const result = await updateTask(task.id, { status, completed_date: status === 'done' ? new Date().toISOString().slice(0, 10) : null })
+    if (result.error) setError(result.error); else await load()
   }
 
-  const handleDrop = (e: React.DragEvent, targetColumnId: string) => {
-    e.preventDefault()
-    if (!draggedTask) return
-
-    const task = tasks[draggedTask.columnId].find((t) => t.id === draggedTask.taskId)
-    if (!task) return
-
-    const newTasks = { ...tasks }
-    newTasks[draggedTask.columnId] = newTasks[draggedTask.columnId].filter(
-      (t) => t.id !== draggedTask.taskId
-    )
-    newTasks[targetColumnId] = [...newTasks[targetColumnId], task]
-
-    setTasks(newTasks)
-    setDraggedTask(null)
-    setDragOverColumn(null)
+  const remove = async (task: TaskWithRelations) => {
+    if (!window.confirm(`Delete “${task.title}”?`)) return
+    const result = await deleteTask(task.id)
+    if (result.error) setError(result.error); else await load()
   }
 
-  const getPriorityColor = (priority: string) => {
-    switch (priority) {
-      case 'high':
-        return 'text-accent border-accent/30 bg-accent/10'
-      case 'medium':
-        return 'text-yellow-500 border-yellow-500/30 bg-yellow-500/10'
-      case 'low':
-        return 'text-blue-500 border-blue-500/30 bg-blue-500/10'
-      default:
-        return 'text-text-tertiary border-border'
-    }
-  }
+  return <Page><PageHeader eyebrow="TASKS / BOARD" title="Tasks" description="This board contains tasks from projects your account is authorized to access." action={<button className={primaryButtonClassName} onClick={openCreate} disabled={!projects.length}><Plus className="h-4 w-4" />New task</button>} />{error && <InlineAlert>{error}</InlineAlert>}{loading ? <Panel><LoadingState label="Loading tasks…" /></Panel> : !projects.length ? <Panel><EmptyState icon={CheckSquare} title="No accessible projects" description={isManager ? 'Create a project before adding tasks.' : 'A manager must assign a project to your account.'} /></Panel> : tasks.length === 0 ? <Panel><EmptyState icon={CheckSquare} title="No tasks yet" description="Create the first task for an accessible project." action={<button className={primaryButtonClassName} onClick={openCreate}><Plus className="h-4 w-4" />New task</button>} /></Panel> : <div className="grid gap-4 xl:grid-cols-4">{columns.map((column) => <Panel key={column.id} title={`${column.label} · ${grouped[column.id].length}`}><div className="space-y-3 p-3">{grouped[column.id].length === 0 ? <p className="p-4 text-center text-xs text-text-tertiary">No tasks</p> : grouped[column.id].map((task) => <article key={task.id} className="rounded-md border border-border bg-surface-raised p-4"><div className="flex items-start justify-between gap-2"><Link href={`/projects/${task.project_id}`} className="text-sm font-semibold hover:text-accent">{task.title}</Link>{(isManager || task.created_by === user?.id) && <button onClick={() => void remove(task)} className="text-text-tertiary hover:text-red-400" aria-label={`Delete ${task.title}`}><Trash2 className="h-3.5 w-3.5" /></button>}</div><p className="mt-2 text-xs text-text-tertiary">{task.projects?.name || 'Project unavailable'}</p><p className="mt-1 text-xs text-text-tertiary">{task.profiles?.full_name || task.profiles?.email || 'Unassigned'} · {task.priority}</p><select className={`${inputClassName} mt-4 py-2 text-xs`} value={task.status} onChange={(event) => void move(task, event.target.value as TaskStatus)} aria-label={`Move ${task.title}`}>{columns.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}</select></article>)}</div></Panel>)}</div>}
 
-  const getPriorityLabel = (priority: string) => {
-    switch (priority) {
-      case 'high':
-        return 'عاجل'
-      case 'medium':
-        return 'متوسط'
-      case 'low':
-        return 'منخفض'
-      default:
-        return priority
-    }
-  }
-
-  const totalTasks = Object.values(tasks).flat().length
-  const completedTasks = tasks.done.length
-  const inProgressTasks = tasks.inprogress.length
-  const overdueTasks = 2
-
-  return (
-    <div className="relative min-h-screen blueprint-bg">
-      <BlueprintDecorations />
-
-      <div className="relative z-10 p-8 space-y-8">
-        {/* HEADER */}
-        <header className="relative">
-          <div className="flex items-end justify-between">
-            <div>
-              <div className="flex items-center gap-3 mb-4">
-                <div className="h-[1px] w-8 bg-accent" />
-                <span className="font-mono-tech tracking-widest text-[10px]">
-                  TASKS / 004
-                </span>
-              </div>
-
-              <h1 className="font-display text-[64px] md:text-[80px] text-fg leading-none tracking-tight">
-                TASKS<span className="text-text-tertiary">.</span>
-              </h1>
-              <p className="mt-2 text-text-secondary text-sm max-w-lg">
-                نظام إدارة المهام — Drag & Drop لتنظيم المهام بين المراحل.
-              </p>
-            </div>
-
-            <div className="flex items-center gap-3">
-              <DotGrid />
-              <button className="border border-border px-4 py-2 text-xs font-medium text-fg hover:border-accent hover:text-accent transition-colors rounded-[4px] bg-surface flex items-center gap-2">
-                <Plus className="h-4 w-4" />
-                <span>مهمة جديدة</span>
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-8 h-[1px] w-full bg-gradient-to-l from-accent/30 via-line to-transparent" />
-        </header>
-
-        {/* STATS */}
-        <section className="grid gap-4 md:grid-cols-4">
-          {[
-            { label: 'إجمالي المهام', value: totalTasks.toString(), icon: CheckCircle2 },
-            { label: 'جاري العمل', value: inProgressTasks.toString(), icon: Clock },
-            { label: 'مكتمل', value: completedTasks.toString(), icon: TrendingUp },
-            { label: 'متأخر', value: overdueTasks.toString(), icon: AlertCircle },
-          ].map((stat, index) => {
-            const Icon = stat.icon
-            return (
-              <TechCard key={index} className="p-5">
-                <div className="relative">
-                  <div className="flex items-start justify-between mb-4">
-                    <Icon className="h-5 w-5 text-text-tertiary" strokeWidth={1.5} />
-                    <span className="font-mono-tech text-[10px]">0{index + 1}</span>
-                  </div>
-
-                  <div className="font-display text-[48px] text-fg leading-none mb-1">
-                    {stat.value}
-                  </div>
-
-                  <div className="font-mono-tech text-[10px] text-text-secondary">
-                    {stat.label}
-                  </div>
-                </div>
-              </TechCard>
-            )
-          })}
-        </section>
-
-        {/* SEARCH */}
-        <section className="flex items-center gap-2">
-          <div className="relative flex-1 max-w-md">
-            <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-            <input
-              type="text"
-              placeholder="ابحث في المهام..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full border border-border bg-surface rounded-[4px] px-3 py-2 pr-9 text-xs text-fg placeholder:text-text-tertiary focus:outline-none focus:border-accent"
-            />
-          </div>
-          <button className="border border-border bg-surface p-2 rounded-[4px] text-text-secondary hover:text-fg transition-colors">
-            <Filter className="h-4 w-4" />
-          </button>
-        </section>
-
-        {/* KANBAN BOARD */}
-        <section className="grid gap-4 md:grid-cols-4">
-          {columns.map((column) => (
-            <div key={column.id}>
-              {/* Column Header */}
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className={`h-2 w-2 rounded-full ${column.color}`} />
-                  <div>
-                    <h3 className="font-display text-lg text-fg leading-none">
-                      {column.title}
-                    </h3>
-                    <p className="font-mono-tech text-[10px] text-text-tertiary mt-1">
-                      {column.titleAr}
-                    </p>
-                  </div>
-                </div>
-                <span className="font-display text-xl text-text-secondary">
-                  {tasks[column.id].length}
-                </span>
-              </div>
-
-              {/* Drop Zone */}
-              <div
-                className={`min-h-[400px] border border-border rounded-[4px] p-3 space-y-3 transition-colors ${
-                  dragOverColumn === column.id ? 'bg-accent/5 border-accent' : 'bg-surface/50'
-                }`}
-                onDragOver={(e) => handleDragOver(e, column.id)}
-                onDragLeave={handleDragLeave}
-                onDrop={(e) => handleDrop(e, column.id)}
-              >
-                {tasks[column.id]
-                  .filter(
-                    (task) =>
-                      task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                      task.project.toLowerCase().includes(searchQuery.toLowerCase())
-                  )
-                  .map((task) => (
-                    <div
-                      key={task.id}
-                      draggable
-                      onDragStart={() => handleDragStart(task.id, column.id)}
-                      className="cursor-grab active:cursor-grabbing"
-                    >
-                      <TechCard className="p-4 hover:border-line-light transition-colors">
-                        <div className="relative">
-                          {/* Drag Handle */}
-                          <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                              <GripVertical className="h-4 w-4 text-text-tertiary" />
-                              <span className="font-mono-tech text-[10px] text-accent">
-                                {task.id}
-                              </span>
-                            </div>
-                            <button className="text-text-tertiary hover:text-fg transition-colors">
-                              <MoreVertical className="h-4 w-4" />
-                            </button>
-                          </div>
-
-                          {/* Title */}
-                          <h4 className="text-sm font-semibold text-fg mb-2 line-clamp-2">
-                            {task.title}
-                          </h4>
-
-                          {/* Project */}
-                          <div className="flex items-center gap-2 mb-3">
-                            <FolderKanban className="h-3 w-3 text-text-tertiary" />
-                            <span className="text-[10px] text-text-secondary truncate">
-                              {task.project}
-                            </span>
-                          </div>
-
-                          {/* Priority */}
-                          <div className="flex items-center gap-2 mb-3">
-                            <span
-                              className={`border px-2 py-0.5 text-[9px] font-medium rounded-[2px] ${getPriorityColor(
-                                task.priority
-                              )}`}
-                            >
-                              <Flag className="h-2.5 w-2.5 inline ml-1" />
-                              {getPriorityLabel(task.priority)}
-                            </span>
-                          </div>
-
-                          {/* Tags */}
-                          <div className="flex flex-wrap gap-1 mb-3">
-                            {task.tags.map((tag, index) => (
-                              <span
-                                key={index}
-                                className="border border-border px-1.5 py-0.5 text-[8px] font-mono-tech text-text-tertiary rounded-[2px]"
-                              >
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
-
-                          {/* Footer */}
-                          <div className="flex items-center justify-between pt-3 border-t border-border">
-                            <div className="flex items-center gap-2">
-                              <Users className="h-3 w-3 text-text-tertiary" />
-                              <span className="text-[10px] text-text-secondary truncate max-w-[80px]">
-                                {task.assignee}
-                              </span>
-                            </div>
-
-                            <div className="flex items-center gap-3">
-                              {task.comments > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <MessageSquare className="h-3 w-3 text-text-tertiary" />
-                                  <span className="text-[10px] text-text-tertiary">
-                                    {task.comments}
-                                  </span>
-                                </div>
-                              )}
-                              {task.attachments > 0 && (
-                                <div className="flex items-center gap-1">
-                                  <Paperclip className="h-3 w-3 text-text-tertiary" />
-                                  <span className="text-[10px] text-text-tertiary">
-                                    {task.attachments}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Due Date */}
-                          <div className="flex items-center gap-2 mt-2 text-[10px] text-text-tertiary font-mono-tech">
-                            <Calendar className="h-3 w-3" />
-                            <span>{task.dueDate}</span>
-                          </div>
-                        </div>
-                      </TechCard>
-                    </div>
-                  ))}
-
-                {tasks[column.id].length === 0 && (
-                  <div className="flex flex-col items-center justify-center h-32 text-text-tertiary">
-                    <CheckCircle2 className="h-8 w-8 mb-2 opacity-30" />
-                    <span className="font-mono-tech text-[10px]">لا توجد مهام</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-        </section>
-
-        {/* FOOTER */}
-        <footer className="relative pt-8">
-          <div className="h-[1px] w-full bg-gradient-to-l from-line-light via-line to-transparent mb-6" />
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <DotGrid />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                {totalTasks} TASKS · DRAG & DROP ACTIVE
-              </span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="h-1.5 w-1.5 rounded-full bg-green-500 animate-pulse" />
-              <span className="font-mono-tech text-[10px] text-text-tertiary">
-                SYSTEM ACTIVE · TASK MANAGEMENT ONLINE
-              </span>
-            </div>
-          </div>
-        </footer>
-      </div>
-    </div>
-  )
+  <Modal open={modal} onClose={() => setModal(false)} title="Create task" description="The task will inherit the selected project's access controls."><form onSubmit={submit} className="grid gap-4 sm:grid-cols-2"><label className="text-xs text-text-secondary sm:col-span-2">Title<input required className={`${inputClassName} mt-2`} value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} /></label><label className="text-xs text-text-secondary">Project<select required className={`${inputClassName} mt-2`} value={form.project_id} onChange={(event) => setForm({ ...form, project_id: event.target.value })}>{projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label><label className="text-xs text-text-secondary">Assignee<select className={`${inputClassName} mt-2`} value={form.assignee_id} onChange={(event) => setForm({ ...form, assignee_id: event.target.value })}><option value="">Unassigned</option>{profiles.map((item) => <option key={item.id} value={item.id}>{item.full_name || item.email}</option>)}</select></label><label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as TaskPriority })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="text-xs text-text-secondary">Due date<input type="date" className={`${inputClassName} mt-2`} value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} /></label><label className="text-xs text-text-secondary sm:col-span-2">Description<textarea className={`${inputClassName} mt-2 min-h-24`} value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} /></label><div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setModal(false)} className={secondaryButtonClassName}>Cancel</button><button className={primaryButtonClassName} disabled={saving}>{saving && <LoaderCircle className="h-4 w-4 animate-spin" />}Create task</button></div></form></Modal></Page>
 }
