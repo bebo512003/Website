@@ -51,24 +51,17 @@ export async function getProfile(userId: string): Promise<Profile | null> {
   return data
 }
 
-export async function updateProfile(userId: string, updates: Partial<Profile>) {
+export async function updateProfile(_userId: string, updates: Partial<Profile>) {
   if (!supabase) return { data: null, error: unavailableError() }
 
-  const allowedUpdates = {
-    full_name: updates.full_name,
-    avatar_url: updates.avatar_url,
-    agency_name: updates.agency_name,
-    agency_website: updates.agency_website,
-    phone: updates.phone,
-    bio: updates.bio,
-  }
-
-  const { data, error } = await supabase
-    .from('profiles')
-    .update(allowedUpdates)
-    .eq('id', userId)
-    .select()
-    .single()
+  const { data, error } = await supabase.rpc('update_own_profile', {
+    new_full_name: updates.full_name || '',
+    new_avatar_url: updates.avatar_url || '',
+    new_agency_name: updates.agency_name || '',
+    new_agency_website: updates.agency_website || '',
+    new_phone: updates.phone || '',
+    new_bio: updates.bio || '',
+  })
 
   return { data, error: error ? new Error(error.message) : null }
 }
