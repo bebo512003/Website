@@ -124,6 +124,34 @@ export type CommentRow = {
   updated_at: string
 }
 
+export type IntakeFormRow = {
+  id: string
+  service_type: 'logo_design' | 'visual_identity' | 'company_profile' | null
+  status: 'draft' | 'submitted' | 'archived'
+  contact_name: string | null
+  contact_email: string | null
+  company_name: string | null
+  phone: string | null
+  data: Json
+  client_id: string | null
+  project_id: string | null
+  created_by: string | null
+  submitted_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type IntakeAttachmentRow = {
+  id: string
+  intake_id: string
+  name: string
+  size: number
+  mime_type: string | null
+  storage_path: string
+  uploaded_by: string | null
+  created_at: string
+}
+
 export type NotificationRow = {
   id: string
   recipient_id: string
@@ -185,6 +213,12 @@ export interface Database {
       comments: TableDefinition<CommentRow, {
         id?: string; content: string; entity_type: CommentRow['entity_type']; entity_id: string; author_id?: string | null; created_at?: string; updated_at?: string
       }, Partial<CommentRow>, [{ foreignKeyName: 'comments_author_id_fkey'; columns: ['author_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
+      intake_forms: TableDefinition<IntakeFormRow, {
+        id?: string; service_type?: IntakeFormRow['service_type']; status?: IntakeFormRow['status']; contact_name?: string | null; contact_email?: string | null; company_name?: string | null; phone?: string | null; data?: Json; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string | null; created_at?: string; updated_at?: string
+      }, Partial<IntakeFormRow>>
+      intake_attachments: TableDefinition<IntakeAttachmentRow, {
+        id?: string; intake_id: string; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
+      }, Partial<IntakeAttachmentRow>>
       notifications: TableDefinition<NotificationRow, {
         id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; type?: NotificationRow['type']; title: string; message: string; action_url?: string | null; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
@@ -201,6 +235,7 @@ export interface Database {
       can_access_client: { Args: { target_client_id: string }; Returns: boolean }
       set_user_role: { Args: { target_user_id: string; new_role: AppRole }; Returns: ProfileRow }
       update_own_profile: { Args: { new_full_name: string; new_avatar_url: string; new_agency_name: string; new_agency_website: string; new_phone: string; new_bio: string }; Returns: ProfileRow }
+      submit_intake_form: { Args: { target_intake_id: string }; Returns: IntakeFormRow }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -225,6 +260,10 @@ export type Interaction = InteractionRow
 export type InteractionInsert = Database['public']['Tables']['interactions']['Insert']
 export type Comment = CommentRow
 export type CommentInsert = Database['public']['Tables']['comments']['Insert']
+export type IntakeForm = IntakeFormRow
+export type IntakeFormInsert = Database['public']['Tables']['intake_forms']['Insert']
+export type IntakeFormUpdate = Database['public']['Tables']['intake_forms']['Update']
+export type IntakeAttachment = IntakeAttachmentRow
 export type Notification = NotificationRow
 
 export type ProjectWithClient = Project & { clients: Pick<Client, 'id' | 'name'> | null }
