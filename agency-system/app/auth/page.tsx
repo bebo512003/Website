@@ -2,15 +2,17 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, User, Zap } from 'lucide-react'
+import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, User, UserPlus, Users, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { InlineAlert, inputClassName, primaryButtonClassName } from '@/components/ui/page'
 
 type AuthMode = 'signin' | 'signup' | 'reset' | 'update-password'
+type GateStep = 'gate' | 'auth'
 
 export default function AuthPage() {
   const router = useRouter()
   const { user, configured, loading: authLoading, signIn, signUp, resetPassword, updatePassword } = useAuth()
+  const [step, setStep] = useState<GateStep>('gate')
   const [mode, setMode] = useState<AuthMode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -23,6 +25,7 @@ export default function AuthPage() {
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('mode') === 'update-password') {
       setMode('update-password')
+      setStep('auth')
     }
   }, [])
 
@@ -66,6 +69,62 @@ export default function AuthPage() {
   const title = mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : mode === 'update-password' ? 'Choose a new password' : 'Welcome back'
   const subtitle = mode === 'signup' ? 'New accounts start with Employee access.' : mode === 'reset' ? 'We will email you a secure reset link.' : mode === 'update-password' ? 'Use at least eight characters.' : 'Sign in with your Supabase account.'
 
+  // ── Gate: choose path ──────────────────────────────────────────
+  if (step === 'gate') {
+    return (
+      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
+        <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
+        <section className="relative z-10 w-full max-w-md rounded-md border border-border bg-surface p-7 shadow-2xl sm:p-9">
+          <div className="mb-7">
+            <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-md border border-accent/30 bg-accent/10">
+              <Zap className="h-5 w-5 text-accent" />
+            </div>
+            <p className="mb-2 font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / SECURE ACCESS</p>
+            <h1 className="text-2xl font-semibold text-fg">Welcome to Agency OS</h1>
+            <p className="mt-2 text-sm text-text-secondary">Choose how you would like to continue.</p>
+          </div>
+
+          <div className="space-y-4">
+            <button
+              onClick={() => setStep('auth')}
+              className="group flex w-full items-center gap-4 rounded-md border border-border bg-surface-raised p-5 text-left transition hover:border-accent hover:bg-surface"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-border text-accent">
+                <Users className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-fg">I&apos;m a team member</span>
+                <span className="mt-1 block text-xs text-text-tertiary">Sign in to your workspace with your existing account.</span>
+              </span>
+              <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition group-hover:text-accent" />
+            </button>
+
+            <button
+              onClick={() => router.push('/intake')}
+              className="group flex w-full items-center gap-4 rounded-md border border-border bg-surface-raised p-5 text-left transition hover:border-accent hover:bg-surface"
+            >
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-border text-accent">
+                <UserPlus className="h-5 w-5" />
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-semibold text-fg">I&apos;m a new client</span>
+                <span className="mt-1 block text-xs text-text-tertiary">Request a service without creating an account. No password needed.</span>
+              </span>
+              <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition group-hover:text-accent" />
+            </button>
+          </div>
+
+          <div className="mt-6 flex justify-center">
+            <button onClick={() => setStep('auth')} className="text-xs text-text-secondary hover:text-accent">
+              Sign in to an existing account
+            </button>
+          </div>
+        </section>
+      </main>
+    )
+  }
+
+  // ── Auth: sign-in / sign-up / reset ────────────────────────────
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
       <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
@@ -130,6 +189,12 @@ export default function AuthPage() {
         <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-text-secondary">
           {mode === 'signin' && <><button onClick={() => changeMode('signup')} className="hover:text-accent">Create an account</button><button onClick={() => changeMode('reset')} className="hover:text-accent">Forgot password?</button></>}
           {(mode === 'signup' || mode === 'reset') && <button onClick={() => changeMode('signin')} className="hover:text-accent">Return to sign in</button>}
+        </div>
+
+        <div className="mt-4 flex justify-center">
+          <button onClick={() => { setStep('gate'); setMode('signin') }} className="text-xs text-text-secondary hover:text-accent">
+            ← Back to welcome
+          </button>
         </div>
       </section>
     </main>

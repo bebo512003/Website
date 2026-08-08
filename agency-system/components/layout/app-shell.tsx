@@ -14,10 +14,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { accent } = useAccent()
   const { user, loading } = useAuth()
   const isAuthPage = pathname === '/auth'
+  const isIntakePage = pathname === '/intake'
 
   useEffect(() => {
-    if (!loading && !user && !isAuthPage) router.replace('/auth')
-  }, [isAuthPage, loading, router, user])
+    if (!loading && !user && !isAuthPage && !isIntakePage) router.replace('/auth')
+  }, [isAuthPage, isIntakePage, loading, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -25,6 +26,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   if (isAuthPage) return <div style={style}>{children}</div>
+
+  // /intake is a public page — render it without the workspace shell.
+  if (isIntakePage) return <div style={style}>{children}</div>
 
   if (loading || !user) {
     return (

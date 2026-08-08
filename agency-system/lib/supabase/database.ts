@@ -240,13 +240,23 @@ export async function deleteNotification(id: string): Promise<Result<boolean>> {
 
 export async function createIntakeForm(form: import('./types').IntakeFormInsert): Promise<Result<import('./types').IntakeForm | null>> {
   if (!supabase) return fail(null)
-  const { data, error } = await supabase.from('intake_forms').insert(form).select().single()
+  // Ensure service_types is populated from service_type if not provided.
+  const payload = { ...form }
+  if (!payload.service_types || payload.service_types.length === 0) {
+    if (payload.service_type) payload.service_types = [payload.service_type]
+  }
+  const { data, error } = await supabase.from('intake_forms').insert(payload).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
 
 export async function updateIntakeForm(id: string, form: import('./types').IntakeFormUpdate): Promise<Result<import('./types').IntakeForm | null>> {
   if (!supabase) return fail(null)
-  const { data, error } = await supabase.from('intake_forms').update(form).eq('id', id).select().single()
+  // Ensure service_types is populated from service_type if needed.
+  const payload = { ...form }
+  if (payload.service_type && (!payload.service_types || payload.service_types.length === 0)) {
+    payload.service_types = [payload.service_type]
+  }
+  const { data, error } = await supabase.from('intake_forms').update(payload).eq('id', id).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
 

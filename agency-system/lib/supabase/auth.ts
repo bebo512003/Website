@@ -34,6 +34,14 @@ export async function signIn(email: string, password: string): Promise<AuthResul
   return { error: error ? new Error(error.message) : null }
 }
 
+export async function signInAnonymously(): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
+
+  const { error } = await supabase.auth.signInAnonymously()
+
+  return { error: error ? new Error(error.message) : null }
+}
+
 export async function signOut(): Promise<AuthResult> {
   if (!supabase) return { error: unavailableError() }
   const { error } = await supabase.auth.signOut()

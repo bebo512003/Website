@@ -7,6 +7,7 @@ import {
   getProfile,
   requestPasswordReset,
   signIn,
+  signInAnonymously,
   signOut,
   signUp,
   updatePassword,
@@ -22,8 +23,10 @@ interface AuthContextType {
   configured: boolean
   isAdmin: boolean
   isManager: boolean
+  isAnonymous: boolean
   signIn: (email: string, password: string) => Promise<AuthResult>
   signUp: (email: string, password: string, fullName: string) => Promise<AuthResult>
+  signInAnonymously: () => Promise<AuthResult>
   signOut: () => Promise<AuthResult>
   resetPassword: (email: string) => Promise<AuthResult>
   updatePassword: (password: string) => Promise<AuthResult>
@@ -99,6 +102,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user) await loadProfile(user)
   }, [loadProfile, user])
 
+  const isAnonymous = !!(user && user.is_anonymous)
+
   const value = useMemo<AuthContextType>(() => ({
     user,
     profile,
@@ -106,14 +111,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     configured: isDatabaseConnected,
     isAdmin: profile?.role === 'admin',
     isManager: profile?.role === 'admin' || profile?.role === 'manager',
+    isAnonymous,
     signIn,
     signUp,
+    signInAnonymously,
     signOut: handleSignOut,
     resetPassword: requestPasswordReset,
     updatePassword,
     updateProfile: handleUpdateProfile,
     refreshProfile,
-  }), [user, profile, loading, handleSignOut, handleUpdateProfile, refreshProfile])
+  }), [user, profile, loading, isAnonymous, handleSignOut, handleUpdateProfile, refreshProfile])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
