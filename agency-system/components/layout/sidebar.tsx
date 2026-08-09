@@ -10,22 +10,22 @@ import { useAuth } from '@/contexts/auth-context'
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const { profile, isAdmin } = useAuth()
+  const { profile, can } = useAuth()
 
   const navItems = [
-    { title: 'Dashboard', href: '/', icon: LayoutDashboard },
-    { title: 'Projects', href: '/projects', icon: FolderKanban },
-    { title: 'Forms', href: '/forms', icon: ClipboardList },
-    { title: 'Tasks', href: '/tasks', icon: CheckSquare },
-    { title: 'Clients', href: '/clients', icon: Users },
-    { title: 'Files', href: '/files', icon: FileText },
-    { title: 'Notifications', href: '/notifications', icon: Bell },
-    { title: 'Reports', href: '/reports', icon: BarChart3 },
-    ...(isAdmin ? [{ title: 'Administration', href: '/admin', icon: ShieldCheck }] : []),
-    { title: 'Settings', href: '/settings', icon: Settings },
-  ]
+    { title: 'Dashboard', href: '/', icon: LayoutDashboard, permission: 'dashboard.view' },
+    { title: 'Projects', href: '/projects', icon: FolderKanban, permission: 'project.view' },
+    { title: 'Forms', href: '/forms', icon: ClipboardList, permission: 'submission.view' },
+    { title: 'Tasks', href: '/tasks', icon: CheckSquare, permission: 'task.view' },
+    { title: 'Clients', href: '/clients', icon: Users, permission: 'client.view' },
+    { title: 'Files', href: '/files', icon: FileText, permission: 'file.view' },
+    { title: 'Notifications', href: '/notifications', icon: Bell, permission: 'notification.view' },
+    { title: 'Reports', href: '/reports', icon: BarChart3, permission: 'report.view' },
+    { title: 'Administration', href: '/admin', icon: ShieldCheck, permission: 'admin.manage' },
+    { title: 'Settings', href: '/settings', icon: Settings, permission: 'settings.view' },
+  ].filter((item) => can(item.permission))
   const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
-  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/notifications', isAdmin ? '/admin' : '/settings'].includes(item.href))
+  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/notifications', '/admin', '/settings'].includes(item.href))
 
   return (
     <>

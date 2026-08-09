@@ -36,7 +36,9 @@ function projectToForm(project: ProjectWithClient): ProjectForm {
 }
 
 export default function ProjectsPage() {
-  const { isManager } = useAuth()
+  const { can } = useAuth()
+  const canCreate = can('project.create')
+  const canEdit = can('project.edit')
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
@@ -131,10 +133,10 @@ export default function ProjectsPage() {
         eyebrow="PROJECTS / PORTFOLIO"
         title="Projects"
         description="Employees see assigned projects only. Managers and admins can manage the complete portfolio."
-        action={isManager ? <button className={primaryButtonClassName} onClick={openCreate} disabled={!clients.length}><Plus className="h-4 w-4" /> New project</button> : undefined}
+        action={canCreate ? <button className={primaryButtonClassName} onClick={openCreate} disabled={!clients.length}><Plus className="h-4 w-4" /> New project</button> : undefined}
       />
 
-      {!clients.length && isManager && !loading && <InlineAlert tone="info">Create a client before adding a project.</InlineAlert>}
+      {!clients.length && canCreate && !loading && <InlineAlert tone="info">Create a client before adding a project.</InlineAlert>}
       {error && <InlineAlert>{error}</InlineAlert>}
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
@@ -155,14 +157,14 @@ export default function ProjectsPage() {
         </div>
 
         {loading ? <LoadingState label="Loading projects…" /> : filtered.length === 0 ? (
-          <EmptyState icon={FolderKanban} title={projects.length ? 'No projects match your filters' : 'No projects yet'} description={projects.length ? 'Change the search text or status filter.' : isManager ? 'Create the first project after adding a client.' : 'An administrator or manager must assign a project to your account.'} action={isManager && clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New project</button> : undefined} />
+          <EmptyState icon={FolderKanban} title={projects.length ? 'No projects match your filters' : 'No projects yet'} description={projects.length ? 'Change the search text or status filter.' : canCreate ? 'Create the first project after adding a client.' : 'An administrator or manager must assign a project to your account.'} action={canCreate && clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New project</button> : undefined} />
         ) : (
           <div className="grid gap-px bg-border md:grid-cols-2 xl:grid-cols-3">
             {filtered.map((project) => (
               <article key={project.id} className="flex min-h-64 flex-col bg-surface p-5 transition hover:bg-surface-raised">
                 <div className="flex items-start justify-between gap-4">
                   <span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] text-text-tertiary">{statusLabels[project.status]}</span>
-                  {isManager && <div className="flex gap-1"><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-fg" onClick={() => openEdit(project)} aria-label={`Edit ${project.name}`}><Pencil className="h-3.5 w-3.5" /></button><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-red-400" onClick={() => void remove(project)} aria-label={`Delete ${project.name}`}><Trash2 className="h-3.5 w-3.5" /></button></div>}
+                  {canEdit && <div className="flex gap-1"><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-fg" onClick={() => openEdit(project)} aria-label={`Edit ${project.name}`}><Pencil className="h-3.5 w-3.5" /></button>{can('project.delete') && <button className="rounded border border-border p-1.5 text-text-tertiary hover:text-red-400" onClick={() => void remove(project)} aria-label={`Delete ${project.name}`}><Trash2 className="h-3.5 w-3.5" /></button>}</div>}
                 </div>
                 <Link href={`/projects/${project.id}`} className="mt-5 block text-lg font-semibold text-fg hover:text-accent">{project.name}</Link>
                 <p className="mt-2 line-clamp-2 text-sm text-text-tertiary">{project.description || 'No description provided.'}</p>

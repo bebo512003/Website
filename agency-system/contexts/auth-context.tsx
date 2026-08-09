@@ -15,6 +15,7 @@ import {
   type AuthResult,
 } from '@/lib/supabase/auth'
 import type { Profile } from '@/lib/supabase/types'
+import { getCurrentUserPermissions } from '@/lib/supabase/database'
 
 interface AuthContextType {
   user: User | null
@@ -26,6 +27,10 @@ interface AuthContextType {
   isClient: boolean
   isDeactivated: boolean
   isAnonymous: boolean
+  permissions: string[]
+  permissionsLoaded: boolean
+  can: (permission: string) => boolean
+  hasAny: (...permissions: string[]) => boolean
   signIn: (email: string, password: string) => Promise<AuthResult>
   signUp: (email: string, password: string, fullName: string) => Promise<AuthResult>
   signInAnonymously: () => Promise<AuthResult>
@@ -34,6 +39,7 @@ interface AuthContextType {
   updatePassword: (password: string) => Promise<AuthResult>
   updateProfile: (updates: Partial<Profile>) => Promise<AuthResult>
   refreshProfile: () => Promise<void>
+  refreshPermissions: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -41,14 +47,25 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [permissions, setPermissions] = useState<string[]>([])
+  const [permissionsLoaded, setPermissionsLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
 
   const loadProfile = useCallback(async (activeUser: User) => {
     if (activeUser.is_anonymous) {
       setProfile(null)
+      setPermissions([])
+      setPermissionsLoaded(true)
       return
     }
     setProfile(await getProfile(activeUser.id))
+    const result = await getCurrentUserPermissions()
+    if (result.error) {
+      setPermissions([])
+    } else {
+      setPermissions(result.data)
+    }
+    setPermissionsLoaded(true)
   }, [])
 
   useEffect(() => {
@@ -63,7 +80,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!mounted) return
       const activeUser = data.session?.user ?? null
       setUser(activeUser)
-      if (activeUser && !activeUser.is_anonymous) await loadProfile(activeUser)
+      if (activeUser && !activeUser.is_anonymous) {
+        await loadProfile(activeUser)
+      } else {
+        setPermissions([])
+        setPermissionsLoaded(true)
+      }
       if (mounted) setLoading(false)
     })
 
@@ -72,6 +94,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(activeUser)
       if (!activeUser || activeUser.is_anonymous) {
         setProfile(null)
+        setPermissions([])
+        setPermissionsLoaded(true)
         setLoading(false)
         return
       }
@@ -108,18 +132,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user) await loadProfile(user)
   }, [loadProfile, user])
 
+  const refreshPermissions = useCallback(async () => {
+    if (!user || user.is_anonymous) return
+    const result = await getCurrentUserPermissions()
+    if (!result.error) setPermissions(result.data)
+    setPermissionsLoaded(true)
+  }, [user])
+
   const isAnonymous = !!(user && user.is_anonymous)
+
+  const can = useCallback((permission: string) => permissions.includes(permission), [permissions])
+  const hasAny = useCallback((...required: string[]) => required.some((permission) => permissions.includes(permission)), [permissions])
 
   const value = useMemo<AuthContextType>(() => ({
     user,
     profile,
     loading,
     configured: isDatabaseConnected,
-    isAdmin: profile?.role === 'admin',
-    isManager: profile?.role === 'admin' || profile?.role === 'manager',
+    isAdmin: permissions.includes('admin.manage'),
+    isManager: permissions.includes('admin.manage') || permissions.includes('project.view_all'),
     isClient: profile?.role === 'client',
     isDeactivated: !!profile && profile.status === 'inactive',
     isAnonymous,
+    permissions,
+    permissionsLoaded,
+    can,
+    hasAny,
     signIn,
     signUp,
     signInAnonymously,
@@ -128,7 +166,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updatePassword,
     updateProfile: handleUpdateProfile,
     refreshProfile,
-  }), [user, profile, loading, isAnonymous, handleSignOut, handleUpdateProfile, refreshProfile])
+    refreshPermissions,
+  }), [user, profile, loading, permissions, permissionsLoaded, isAnonymous, can, hasAny, handleSignOut, handleUpdateProfile, refreshProfile, refreshPermissions])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

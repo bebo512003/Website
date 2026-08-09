@@ -8,9 +8,9 @@ const supabaseDir = join(here, '..')
 
 const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;$/m, '-- pgcrypto stripped for PGlite test (gen_random_uuid is core in PG16)')
 
-// Upgrade path: every migration before the user-architecture one reproduces the
+// Upgrade path: every migration before the one under test reproduces the
 // previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260809000000'
+const MIGRATION_UNDER_TEST = '20260810000000'
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
 const priorMigrations = migrationFiles.filter((file) => !file.startsWith(MIGRATION_UNDER_TEST)).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
 const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))), 'utf8'))
@@ -93,8 +93,8 @@ async function execMigrationLikePsql(db, sql) {
 }
 
 async function applyAndSeed(db) {
-  for (const prior of priorMigrations) await db.exec(prior) // previous production state
-  await execMigrationLikePsql(db, migration)                // the new migration under test
+  for (const prior of priorMigrations) await execMigrationLikePsql(db, prior) // previous production state
+  await execMigrationLikePsql(db, migration)                                  // the new migration under test
 
   // Anonymous page visitors must never receive a profile.
   const anonVisitor = await addUser(db, null, { anon: true })
@@ -238,11 +238,99 @@ async function runSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runPermissionSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  // ── Default role → permission matrix (data-driven, not name-driven) ───────
+  await asUser(db, alice)
+  const adminPerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
+  ok(`${label}: admin has admin.manage`, adminPerms.includes('admin.manage'))
+  ok(`${label}: admin has project.delete & employee.delete`, adminPerms.includes('project.delete') && adminPerms.includes('employee.delete'))
+
+  await asUser(db, erin)
+  const managerPerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
+  ok(`${label}: manager has submission.edit & project.assign`, managerPerms.includes('submission.edit') && managerPerms.includes('project.assign'))
+  ok(`${label}: manager CANNOT delete employees`, !managerPerms.includes('employee.delete'))
+  ok(`${label}: manager CANNOT manage admins/permissions`, !managerPerms.includes('admin.manage') && !managerPerms.includes('permission.manage'))
+  ok(`${label}: manager CANNOT edit system settings`, !managerPerms.includes('settings.edit'))
+  ok(`${label}: manager CANNOT assign permissions to roles`, !managerPerms.includes('role.assign_permissions'))
+
+  await asUser(db, bob)
+  const employeePerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
+  ok(`${label}: employee has task.edit`, employeePerms.includes('task.edit'))
+  ok(`${label}: employee CANNOT delete projects or view all`, !employeePerms.includes('project.delete') && !employeePerms.includes('project.view_all'))
+
+  // has_permission() helper matches the permission array.
+  ok(`${label}: has_permission true for granted key`, (await scalar(db, `select public.has_permission('task.edit') v`)).v === true)
+  ok(`${label}: has_permission false for missing key`, (await scalar(db, `select public.has_permission('project.delete') v`)).v === false)
+
+  // ── URL-equivalence: RLS refuses actions the user lacks permission for ────
+  await asUser(db, alice)
+  await db.query(`insert into public.clients (name, email) values ('DeleteMe Corp', 'del@test.test')`)
+  const delClient = (await db.query(`select id from public.clients where email = 'del@test.test'`)).rows[0]
+
+  await asUser(db, erin) // manager: client.edit yes, client.delete no
+  const managerEdited = await db.query(`update public.clients set name = 'Edited' where id = $1`, [delClient.id]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: manager CAN edit a client (client.edit)`, managerEdited > 0)
+  const managerDeleted = await db.query(`delete from public.clients where id = $1`, [delClient.id]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: manager CANNOT delete a client (no client.delete)`, managerDeleted <= 0)
+
+  // Bob (employee, no project.create) cannot create a project even though he can
+  // view projects — the write is rejected by RLS, not just hidden in the UI.
+  await asUser(db, bob)
+  const clientRow = (await db.query(`select id from public.clients where email = 'carol@acme.test'`)).rows[0]
+  const employeeCreatesProjectFails = await expectError(db, () => db.query(`insert into public.projects (name, client_id) values ('Sneaky', $1)`, [clientRow.id]))
+  ok(`${label}: employee cannot create a project (no project.create)`, employeeCreatesProjectFails)
+
+  // Manager (no employee.manage) cannot deactivate a user.
+  await asUser(db, erin)
+  const managerDeactivateFails = await expectError(db, () => db.query(`select public.set_user_status($1, 'inactive')`, [bob]))
+  ok(`${label}: manager cannot manage employees (no employee.manage)`, managerDeactivateFails)
+
+  // ── Admin management of roles & permissions ────────────────────────────────
+  await asUser(db, alice)
+  const roleRows = await db.query(`select * from public.list_roles()`)
+  ok(`${label}: admin can list roles`, roleRows.rows.length >= 4)
+  const permRows = await db.query(`select * from public.list_permissions()`)
+  ok(`${label}: admin can list permissions`, permRows.rows.length >= 30)
+
+  const customRoleId = (await scalar(db, `select (public.create_app_role('Data Manager', 'Dangerous')).id v`)).v
+  ok(`${label}: admin can create a custom role`, !!customRoleId)
+  await scalar(db, `select public.set_role_permissions($1, array['workspace.access','project.view','project.view_all','project.delete'])`, [customRoleId])
+  const updatedRoles = (await db.query(`select * from public.list_roles()`)).rows
+  const customRow = updatedRoles.find((r) => r.id === customRoleId)
+  ok(`${label}: admin can assign permissions to a role`, customRow?.permission_keys?.includes('project.delete'))
+
+  // Assign the custom role to bob; his effective permissions change immediately.
+  await scalar(db, `select public.assign_user_role($1, $2)`, [bob, customRoleId])
+  await asUser(db, bob)
+  const bobPerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
+  ok(`${label}: bob gains project.delete after role assignment`, bobPerms.includes('project.delete'))
+  const bobDeletes = await db.query(`delete from public.projects where name = 'Second Project'`).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: bob CAN delete a project once granted the permission`, bobDeletes > 0)
+
+  // People without role-management powers are blocked by the RPC guards.
+  await asUser(db, erin)
+  const managerCreateRoleFails = await expectError(db, () => scalar(db, `select public.create_app_role('Nope', 'x')`))
+  ok(`${label}: manager cannot create roles (no role.create)`, managerCreateRoleFails)
+  await asUser(db, bob)
+  const bobGrantFails = await expectError(db, () => scalar(db, `select public.set_role_permissions($1, array['admin.manage'])`, [customRoleId]))
+  ok(`${label}: bob cannot assign permissions (no role.assign_permissions)`, bobGrantFails)
+  const employeeManageFails = await expectError(db, () => scalar(db, `select public.assign_user_role($1, $2)`, [erin, customRoleId]))
+  ok(`${label}: bob cannot assign users to roles (no employee.manage)`, employeeManageFails)
+
+  // Restore bob to the employee role so later state stays consistent.
+  await asUser(db, alice)
+  await scalar(db, `select public.set_user_role($1, 'employee'::public.app_role)`, [bob])
+  await superUser(db)
+}
+
 async function main() {
   console.log('=== Path A: prior migrations + user-architecture migration (upgrade path) ===')
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
+  await runPermissionSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')

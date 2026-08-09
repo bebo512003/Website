@@ -13,6 +13,7 @@ export type ProfileRow = {
   role: AppRole
   status: ProfileStatus
   employee_role_id: string | null
+  role_id: string | null
   client_id: string | null
   agency_name: string | null
   agency_website: string | null
@@ -32,6 +33,35 @@ export type EmployeeRoleRow = {
   created_at: string
   updated_at: string
 }
+
+export type PermissionRow = {
+  id: string
+  key: string
+  name: string
+  category: string
+  description: string | null
+  created_at: string
+}
+
+export type AppRoleRow = {
+  id: string
+  key: string
+  name: string
+  description: string | null
+  is_system: boolean
+  is_active: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type RolePermissionRow = {
+  role_id: string
+  permission_id: string
+  created_at: string
+}
+
+export type AppRoleWithPermissions = AppRoleRow & { permission_keys: string[] }
 
 export type ClientRow = {
   id: string
@@ -202,11 +232,20 @@ export interface Database {
   public: {
     Tables: {
       profiles: TableDefinition<ProfileRow, {
-        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; status?: ProfileStatus; employee_role_id?: string | null; client_id?: string | null; agency_name?: string | null; agency_website?: string | null; phone?: string | null; bio?: string | null; created_at?: string; updated_at?: string
+        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; status?: ProfileStatus; employee_role_id?: string | null; role_id?: string | null; client_id?: string | null; agency_name?: string | null; agency_website?: string | null; phone?: string | null; bio?: string | null; created_at?: string; updated_at?: string
       }>
       employee_roles: TableDefinition<EmployeeRoleRow, {
         id?: string; key: string; name: string; description?: string | null; is_active?: boolean; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<EmployeeRoleRow>, [{ foreignKeyName: 'employee_roles_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
+      permissions: TableDefinition<PermissionRow, {
+        id?: string; key: string; name: string; category?: string; description?: string | null; created_at?: string
+      }, Partial<PermissionRow>>
+      app_roles: TableDefinition<AppRoleRow, {
+        id?: string; key: string; name: string; description?: string | null; is_system?: boolean; is_active?: boolean; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<AppRoleRow>>
+      role_permissions: TableDefinition<RolePermissionRow, {
+        role_id: string; permission_id: string; created_at?: string
+      }, Partial<RolePermissionRow>>
       clients: TableDefinition<ClientRow, {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
@@ -269,6 +308,16 @@ export interface Database {
       set_user_client_link: { Args: { target_user_id: string; new_client_id: string | null }; Returns: ProfileRow }
       update_own_profile: { Args: { new_full_name: string; new_avatar_url: string; new_agency_name: string; new_agency_website: string; new_phone: string; new_bio: string }; Returns: ProfileRow }
       submit_intake_form: { Args: { target_intake_id: string }; Returns: IntakeFormRow }
+      get_user_permissions: { Args: Record<string, never>; Returns: string[] }
+      has_permission: { Args: { required_permission: string }; Returns: boolean }
+      list_permissions: { Args: Record<string, never>; Returns: PermissionRow[] }
+      list_roles: { Args: Record<string, never>; Returns: AppRoleWithPermissions[] }
+      create_app_role: { Args: { p_name: string; p_description: string }; Returns: AppRoleRow }
+      update_app_role: { Args: { p_role_id: string; p_name: string; p_description: string; p_is_active: boolean }; Returns: AppRoleRow }
+      delete_app_role: { Args: { p_role_id: string }; Returns: boolean }
+      set_role_permissions: { Args: { p_role_id: string; p_permission_keys: string[] }; Returns: AppRoleRow }
+      assign_user_role: { Args: { p_user_id: string; p_role_id: string }; Returns: ProfileRow }
+      add_permission: { Args: { p_key: string; p_name: string; p_category: string; p_description: string }; Returns: PermissionRow }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -302,6 +351,9 @@ export type IntakeFormUpdate = Database['public']['Tables']['intake_forms']['Upd
 export type IntakeProject = IntakeProjectRow
 export type IntakeAttachment = IntakeAttachmentRow
 export type Notification = NotificationRow
+export type Permission = PermissionRow
+export type AccessRole = AppRoleRow
+export type RolePermission = RolePermissionRow
 
 export type ProjectWithClient = Project & { clients: Pick<Client, 'id' | 'name'> | null }
 export type TaskWithRelations = Task & {

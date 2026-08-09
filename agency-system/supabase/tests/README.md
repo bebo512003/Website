@@ -21,7 +21,7 @@ What it does:
 3. **Fresh-install path** — applies the full `supabase/schema.sql` and re-checks the
    core guarantees.
 
-Covered guarantees (40 checks):
+Covered guarantees (64 checks):
 
 - First real account becomes bootstrap Admin; anonymous visitors never get profiles.
 - A form submitter who signs up with the same e-mail becomes a **client** linked to
@@ -36,6 +36,24 @@ Covered guarantees (40 checks):
   restores access. Only Admins change status.
 - Admin protections: the last Admin cannot demote or deactivate themself; Managers keep
   portfolio access but cannot change system roles or statuses.
+
+**Role & permission system** (migration `20260810000000_role_permission_system.sql`):
+
+- Roles and permissions are separate metadata-driven tables; a role grants nothing by
+  name. Every check goes through `has_permission(key)` in RLS and in the admin RPCs.
+- The default matrix is asserted: Admin has everything; Manager has `submission.edit` /
+  `project.assign` but **cannot** delete employees, manage admins/permissions, edit
+  system settings, or assign permissions to roles; Employee has `task.edit` but not
+  `project.delete` / `project.view_all`.
+- **URL-navigation equivalence** — the database layer proves that a user who lacks a
+  permission is blocked even when they try the action directly (the equivalent of typing
+  a URL): Manager can edit a client but cannot delete it; an Employee cannot create a
+  project; a Manager cannot deactivate a user.
+- Admin management: create a custom role, assign permissions to it, assign the role to
+  an employee, and watch the employee's effective permissions change immediately
+  (including gaining the ability to delete a project).
+- Guard rails: users without `role.create` / `role.assign_permissions` / `employee.manage`
+  are rejected by the RPCs.
 
 Every check runs under `SET ROLE authenticated` / `SET ROLE anon` with a simulated JWT
 uid, so RLS is genuinely enforced by PostgreSQL.
