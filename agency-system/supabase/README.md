@@ -13,6 +13,11 @@ Use either approach:
 
 The schema is safe for an existing early Agency OS database: it replaces permissive development policies, converts legacy role values, backfills profiles for real Auth users, and promotes the oldest real account only when no Admin exists.
 
+If you already applied an earlier version of the schema, apply the newer migrations in
+order. In particular `20260809000000_user_employee_architecture.sql` adds the `client`
+account type, and `20260810000000_role_permission_system.sql` installs the granular
+role/permission model described below.
+
 ## 3. Authentication settings
 
 In **Authentication → URL Configuration**:
@@ -29,6 +34,9 @@ RLS is enabled for:
 
 - `profiles`
 - `employee_roles`
+- `app_roles`
+- `permissions`
+- `role_permissions`
 - `clients`
 - `projects`
 - `project_members`
@@ -38,7 +46,32 @@ RLS is enabled for:
 - `comments`
 - `notifications`
 
-Admins and Managers can access the full project portfolio. Employees can read a project only when `(project_id, auth.uid())` exists in `project_members`. Related client, task, file, interaction, and comment policies reuse this access check.
+## Roles & permissions (granular RBAC)
+
+Roles and permissions are separate, metadata-driven catalog tables:
+
+- `permissions` — every grantable capability (e.g. `project.delete`, `employee.manage`,
+  `admin.manage`, `role.assign_permissions`). Add rows here to introduce new capabilities;
+  no code change is required to reuse them in RLS or route guards.
+- `app_roles` — the role catalog (Admin, Manager, Employee, Client plus any custom roles).
+- `role_permissions` — which permissions each role explicitly carries.
+
+A role name grants **nothing** by itself. All authorization — RLS policies, admin RPCs,
+storage policies, and the frontend route guard — flows through `has_permission(required_key)`,
+which resolves the signed-in user's effective permissions from `role_permissions`.
+
+The Admin dashboard → **Roles & permissions** tab lets an administrator view/create/edit/delete
+roles, grant or revoke permissions per role, add new permissions to the catalog, and assign
+roles to employees. Assigning a role updates the user's effective permissions immediately.
+
+The default matrix (seeded) is: Admin has every permission; Manager manages projects, clients,
+tasks, files, and submissions but **cannot** delete employees, manage admins/permissions, edit
+system settings, or assign permissions to roles; Employee works on assigned projects; Client is
+portal-only.
+
+Project/portfolio reads still follow membership: `can_access_project` requires
+`has_permission('project.view')` plus either `project.view_all` (Admin/Manager) or a
+`project_members` row (Employee).
 
 The `client` account type is denied by default: management helpers only resolve for active Admin/Manager profiles, project membership is restricted to active team members, and profile visibility is staff-or-self. Clients only read their own profile and the intake submissions linked to their CRM record.
 

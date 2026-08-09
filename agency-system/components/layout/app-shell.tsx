@@ -1,13 +1,15 @@
 'use client'
 
 import { useEffect } from 'react'
+import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LoaderCircle, ShieldOff, LogOut } from 'lucide-react'
+import { LoaderCircle, ShieldOff, ShieldAlert, LogOut, Home } from 'lucide-react'
 import { Sidebar } from './sidebar'
 import { TopBar } from './topbar'
 import { useAccent } from '@/contexts/accent-context'
 import { useAuth } from '@/contexts/auth-context'
-import { secondaryButtonClassName } from '@/components/ui/page'
+import { secondaryButtonClassName, primaryButtonClassName } from '@/components/ui/page'
+import { permissionRequiredForPath } from '@/lib/permissions'
 
 function LoadingScreen({ style, label = 'Loading your workspace…' }: { style: Record<string, string>; label?: string }) {
   return (
@@ -46,11 +48,31 @@ function DeactivatedScreen({ style }: { style: Record<string, string> }) {
   )
 }
 
+function RestrictedScreen({ style }: { style: Record<string, string> }) {
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+      <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
+          <ShieldAlert className="h-6 w-6 text-accent" />
+        </div>
+        <h1 className="text-xl font-semibold text-fg">Permission required</h1>
+        <p className="mt-3 text-sm text-text-secondary">
+          Your account does not have the permission needed to open this page. If you believe this is a
+          mistake, ask an administrator to grant you access.
+        </p>
+        <Link href="/" className={`${primaryButtonClassName} mt-6`}>
+          <Home className="h-4 w-4" /> Back to dashboard
+        </Link>
+      </section>
+    </main>
+  )
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const { accent } = useAccent()
-  const { user, profile, isClient, isDeactivated, isAnonymous, loading } = useAuth()
+  const { user, profile, isClient, isDeactivated, isAnonymous, loading, can, permissionsLoaded } = useAuth()
   const isAuthPage = pathname === '/auth'
   const isIntakePage = pathname === '/intake'
   const isPortalPage = pathname === '/portal'
@@ -97,6 +119,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Clients are never allowed into the staff shell; redirect is in flight.
   if (isClient) return <LoadingScreen style={style} />
+
+  // Route-level authorization: a user who lacks the permission for a page is blocked
+  // from viewing it even if they type the URL directly. RLS enforces the same rule
+  // in the database, so this is defence-in-depth, not the only guard.
+  const requiredPermission = permissionRequiredForPath(pathname)
+  const routeAllowed = !requiredPermission || can(requiredPermission)
+  if (permissionsLoaded && !routeAllowed) return <RestrictedScreen style={style} />
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-fg" style={style}>

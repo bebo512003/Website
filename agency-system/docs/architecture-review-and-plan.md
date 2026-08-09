@@ -13,6 +13,19 @@ Prepared 2026-08-09. Analysis only — no behavior changes.
 > `profiles`, which rejected every **anonymous** intake draft/submission (they now reference
 > `auth.users`). Remaining: dynamic forms (Phase D) and migration/cleanup (Phase E).
 
+> **2026-08-09 — granular RBAC done:** migration
+> `20260810000000_role_permission_system.sql` replaces hard-coded role-name checks with a
+> metadata-driven permission model. Roles and permissions are separate tables
+> (`app_roles`, `permissions`, `role_permissions`); permissions are **never implied by a
+> role name**. All authorization (RLS policies, admin RPCs, storage policies, route access)
+> flows through `has_permission(key)`. The Admin dashboard gained a **Roles & permissions**
+> tab to create/edit/delete roles, grant/revoke permissions per role, add new permissions
+> to the catalog, and assign roles to employees. A client-side route guard blocks direct
+> URL navigation without the required permission, backed by the same checks in RLS. The
+> PGlite regression suite (now 64 checks) proves a user cannot perform an action they lack
+> permission for at the database layer. The old `isAdmin`/`isManager` booleans are now
+> permission-derived. Remaining: Phase D dynamic forms and Phase E cleanup.
+
 ## 1. Current architecture
 
 **Stack:** Next.js 16 (App Router, all pages are client components), React 19, TypeScript,
