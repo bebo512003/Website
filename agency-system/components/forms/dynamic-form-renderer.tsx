@@ -4,7 +4,10 @@ import { CloudUpload, FileText, LoaderCircle, Star, X } from 'lucide-react'
 import type { FormQuestion } from '@/lib/supabase/types'
 import {
   isChoiceType,
+  isQuestionVisible,
+  questionSection,
   ratingMax,
+  isAnswerEmpty,
   QUESTION_TYPE_MAP,
   type AnswerMap,
   type AnswerValue,
@@ -77,6 +80,26 @@ export function DynamicFormRenderer({
   const questionOptions = (question: FormQuestion): string[] =>
     Array.isArray(question.options) ? question.options.filter((o): o is string => typeof o === 'string') : []
 
+  // ── Sections + conditional visibility ──────────────────────────────────────
+  // Only questions whose show-if rule is satisfied (or that have none) are
+  // rendered, then grouped into logical sections in definition order.
+  const visible = ordered.filter((question) => isQuestionVisible(question, values))
+  const sections: { name: string; questions: FormQuestion[] }[] = []
+  for (const question of visible) {
+    const name = questionSection(question.config)
+    const last = sections[sections.length - 1]
+    if (last && last.name === name) last.questions.push(question)
+    else sections.push({ name, questions: [question] })
+  }
+
+  // Progress reflects how many of the currently-visible required questions are
+  // answered, and which section the respondent is working through.
+  const visibleRequired = visible.filter((q) => q.required)
+  const answeredRequired = visibleRequired.filter((q) => !isAnswerEmpty(values[q.id])).length
+  const progress = visibleRequired.length === 0 ? 100 : Math.round((answeredRequired / visibleRequired.length) * 100)
+  const currentSectionIndex = sections.findIndex((section) => section.questions.some((q) => q.required && isAnswerEmpty(values[q.id])))
+  const currentSection = currentSectionIndex === -1 ? sections.length - 1 : currentSectionIndex
+
   const fieldShell = (question: FormQuestion, span: boolean, control: React.ReactNode) => (
     <div key={question.id} className={cn('text-sm text-text-secondary', span && 'sm:col-span-2')}>
       <span className="block font-medium text-fg">
@@ -97,8 +120,31 @@ export function DynamicFormRenderer({
     )
 
   return (
-    <div className="grid gap-5 sm:grid-cols-2">
-      {ordered.map((question) => {
+    <div className="grid gap-8 sm:grid-cols-2">
+      {/* Progress + current section */}
+      {sections.length > 0 && (
+        <div className="sm:col-span-2">
+          <div className="mb-1.5 flex items-center justify-between text-xs text-text-tertiary">
+            <span>
+              {lang === 'ar' ? 'القسم' : 'Section'} {currentSection + 1} / {sections.length} · {sections[currentSection]?.name || (lang === 'ar' ? 'استبيان' : 'Form')}
+            </span>
+            <span>{progress}%</span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
+            <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${progress}%` }} />
+          </div>
+        </div>
+      )}
+
+      {sections.map((section, sectionIndex) => (
+        <div key={sectionIndex} className="sm:col-span-2">
+          {section.name && (
+            <h3 className="mb-4 border-b border-border pb-2 text-xs font-semibold uppercase tracking-wide text-text-tertiary">
+              {sectionIndex + 1}. {section.name}
+            </h3>
+          )}
+          <div className="grid gap-5 sm:grid-cols-2">
+            {section.questions.map((question) => {
         const meta = QUESTION_TYPE_MAP[question.question_type]
         const error = errors[question.id]
 
@@ -291,7 +337,10 @@ export function DynamicFormRenderer({
             onChange={(event) => onAnswer(question.id, event.target.value)}
           />,
         )
-      })}
+              })}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

@@ -52,7 +52,7 @@ import type {
   FormTemplate,
   Json,
 } from '@/lib/supabase/types'
-import { QUESTION_TYPES, QUESTION_TYPE_MAP, formatAnswer, ratingMax } from '@/lib/forms/question-types'
+import { QUESTION_TYPES, QUESTION_TYPE_MAP, formatAnswer, questionSection, ratingMax, showIfRule } from '@/lib/forms/question-types'
 import { DynamicFormRenderer, type RendererLang } from '@/components/forms/dynamic-form-renderer'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -70,6 +70,9 @@ type QuestionEditForm = {
   map_to: string
   options: string[]
   rating_max: number
+  section: string
+  show_if_question_id: string
+  show_if_value: string
 }
 
 const statusStyles: Record<FormStatus, string> = {
@@ -89,6 +92,9 @@ const editFormFrom = (question: FormQuestion): QuestionEditForm => ({
   map_to: question.map_to || '',
   options: Array.isArray(question.options) ? question.options.filter((o): o is string => typeof o === 'string') : [],
   rating_max: ratingMax(question.config),
+  section: questionSection(question.config),
+  show_if_question_id: showIfRule(question.config)?.question_id || '',
+  show_if_value: showIfRule(question.config)?.value || '',
 })
 
 export default function FormBuilderPage({ params }: { params: Promise<{ id: string }> }) {
@@ -244,6 +250,13 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       setSavingQuestion(false)
       return setError('Choice questions need at least one option.')
     }
+    const config: Record<string, Json> = {}
+    if (question.question_type === 'rating') config.rating_max = editForm.rating_max
+    const section = editForm.section.trim()
+    if (section) config.section = section
+    if (editForm.show_if_question_id && editForm.show_if_value.trim()) {
+      config.show_if = { question_id: editForm.show_if_question_id, value: editForm.show_if_value.trim() }
+    }
     const result = await updateFormQuestion(editingId, {
       label: editForm.label.trim(),
       help_text: editForm.help_text.trim() || null,
@@ -251,7 +264,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       required: editForm.required,
       map_to: (editForm.map_to || null) as FormQuestion['map_to'],
       options: (meta.hasOptions ? optionValues : []) as Json,
-      config: (question.question_type === 'rating' ? { rating_max: editForm.rating_max } : {}) as Json,
+      config: config as Json,
     })
     setSavingQuestion(false)
     if (result.error) return setError(result.error)
@@ -409,6 +422,8 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="truncate text-sm font-medium text-fg">{question.label}</p>
                             {question.required && <span className="rounded border border-accent/30 bg-accent/5 px-1.5 py-0.5 text-[10px] text-accent">required</span>}
+                            {questionSection(question.config) && <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">{questionSection(question.config)}</span>}
+                            {showIfRule(question.config) && <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">conditional</span>}
                             {question.map_to && <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">maps to {mapToLabels[question.map_to]}</span>}
                           </div>
                           <p className="mt-0.5 text-xs text-text-tertiary">
@@ -456,6 +471,37 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                             <input type="checkbox" checked={editForm.required} onChange={(e) => setEditForm({ ...editForm, required: e.target.checked })} className="h-4 w-4 accent-[hsl(var(--accent))]" />
                             Required question
                           </label>
+
+                          <label className="text-xs text-text-secondary">
+                            Section (optional)
+                            <input className={`${inputClassName} mt-2`} value={editForm.section} onChange={(e) => setEditForm({ ...editForm, section: e.target.value })} placeholder="e.g. About You" />
+                          </label>
+
+                          <div className="text-xs text-text-secondary">
+                            <p>Show only when (conditional)</p>
+                            <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                              <select
+                                className={`${inputClassName} flex-1`}
+                                value={editForm.show_if_question_id}
+                                onChange={(e) => setEditForm({ ...editForm, show_if_question_id: e.target.value })}
+                              >
+                                <option value="">Always shown</option>
+                                {questions
+                                  .filter((other) => other.id !== question.id)
+                                  .map((other) => <option key={other.id} value={other.id}>{other.label}</option>)}
+                              </select>
+                              <input
+                                className={`${inputClassName} flex-1`}
+                                value={editForm.show_if_value}
+                                onChange={(e) => setEditForm({ ...editForm, show_if_value: e.target.value })}
+                                placeholder={editForm.show_if_question_id ? 'e.g. Yes or Other' : 'Shown when a choice matches'}
+                                disabled={!editForm.show_if_question_id}
+                              />
+                            </div>
+                            <p className="mt-1.5 text-[11px] leading-4 text-text-tertiary">
+                              This question appears only when the question above has the exact value on the right. For multiple-choice questions it appears when that option is selected (e.g. “Other”). Hidden questions are never required and are not stored.
+                            </p>
+                          </div>
 
                           {meta.hasOptions && (
                             <div className="sm:col-span-2">

@@ -11,6 +11,7 @@ import {
   Star,
   Type,
 } from 'lucide-react'
+import type { FormQuestion } from '@/lib/supabase/types'
 
 // ── Question type registry ───────────────────────────────────────────────────
 // This registry is the single frontend source of truth for question types.
@@ -23,6 +24,45 @@ import {
 //   2. Add one entry here.
 //   3. Add one render branch in components/forms/dynamic-form-renderer.tsx
 //      (and one snapshot format branch in formatAnswer if it is not string-based).
+
+/** Human-readable rendering of a stored answer snapshot (submission views). */
+
+export type ShowIfRule = { question_id: string; value: string }
+
+/** The section (step/group) heading a question belongs to, from its config. */
+export function questionSection(config: unknown): string {
+  const c = config && typeof config === 'object' ? (config as Record<string, unknown>) : {}
+  const section = c.section
+  return typeof section === 'string' ? section.trim() : ''
+}
+
+/** Conditional show-if rule, or null when the question is always shown. */
+export function showIfRule(config: unknown): ShowIfRule | null {
+  const c = config && typeof config === 'object' ? (config as Record<string, unknown>) : {}
+  const rule = c.show_if
+  if (rule && typeof rule === 'object' && !Array.isArray(rule)) {
+    const rec = rule as Record<string, unknown>
+    if (typeof rec.question_id === 'string' && rec.question_id && typeof rec.value === 'string') {
+      return { question_id: rec.question_id, value: rec.value }
+    }
+  }
+  return null
+}
+
+/** Does a stored answer satisfy a show-if expected value? Supports both the
+ *  single-value case (single_choice / dropdown / yes_no) and the multiple_choice
+ *  "contains" case (e.g. "Other" is among the selected options). */
+function answerMatches(value: AnswerValue | undefined, expected: string): boolean {
+  if (Array.isArray(value)) return value.some((item) => String(item) === expected)
+  return value === expected
+}
+
+/** Whether a question should currently be rendered given the answers so far. */
+export function isQuestionVisible(question: FormQuestion, values: AnswerMap): boolean {
+  const rule = showIfRule(question.config)
+  if (!rule) return true
+  return answerMatches(values[rule.question_id], rule.value)
+}
 
 export type FormQuestionType =
   | 'short_text'

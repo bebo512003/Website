@@ -2293,9 +2293,54 @@ $$;
 revoke all on function public.reorder_form_questions(uuid, uuid[]) from public, anon;
 grant execute on function public.reorder_form_questions(uuid, uuid[]) to authenticated;
 
+-- ── 4b. Section + conditional visibility helper ─────────────────────────────
+-- Sections are stored in config->>'section'; conditional show/hide is stored in
+-- config->'show_if' as {"question_id": "<uuid>", "value": "..."}. A question is
+-- visible when its trigger question's answer equals the value (single_choice /
+-- dropdown / yes_no) or, for multiple_choice, when the value is among the
+-- selected options. Forms without a show_if rule behave exactly as before.
+create or replace function public.is_form_question_visible(
+  p_q public.form_questions,
+  p_answers jsonb
+)
+returns boolean
+language plpgsql stable
+as $$
+declare
+  rule jsonb;
+  tid uuid;
+  tval text;
+  trigger_q public.form_questions;
+  trigger_ans jsonb;
+begin
+  rule := p_q.config -> 'show_if';
+  if rule is null or jsonb_typeof(rule) <> 'object' then
+    return true;
+  end if;
+  tid := (rule ->> 'question_id')::uuid;
+  tval := rule ->> 'value';
+  if tid is null or tval is null then
+    return true;
+  end if;
+  select * into trigger_q from public.form_questions where id = tid;
+  if not found then
+    return true;
+  end if;
+  trigger_ans := p_answers -> tid::text;
+  if trigger_q.question_type = 'multiple_choice' then
+    return exists (select 1 from jsonb_array_elements_text(trigger_ans) el where el = tval);
+  end if;
+  return trigger_ans is not null
+     and jsonb_typeof(trigger_ans) = 'string'
+     and (trigger_ans #>> '{}') = tval;
+end;
+$$;
+
 -- ── 5. Public submit RPC ─────────────────────────────────────────────────────
 -- Validates the answers against the live question set, snapshots each question,
 -- matches or creates the CRM client record, and (optionally) opens a project.
+-- Questions hidden by an unmet show_if rule are skipped: not required, not
+-- validated, and not snapshotted.
 -- p_answers shape: { "<question_id>": value } where value is a JSON string for
 -- text/date/number/choice/rating/yes_no, a JSON array of strings for
 -- multiple_choice, or a JSON array of {storage_path,name,size,mime_type} for
@@ -2327,6 +2372,10 @@ begin
   for q in
     select * from public.form_questions where form_id = p_form_id order by position, created_at
   loop
+    -- Hidden by an unmet show-if rule: skip entirely (not required, not stored).
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
     val := p_answers -> q.id::text;
     is_empty := val is null
       or val = 'null'::jsonb
@@ -2435,17 +2484,22 @@ begin
   )
   returning * into submission_rec;
 
-  -- Freeze each answer together with the question it answered.
+  -- Freeze each answer together with the question it answered. Hidden
+  -- questions are excluded so an unmet conditional never appears as answered.
   insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
   select submission_rec.id, fq.id, to_jsonb(fq), p_answers -> fq.id::text
   from public.form_questions fq
   where fq.form_id = p_form_id
+    and public.is_form_question_visible(fq, p_answers)
   order by fq.position, fq.created_at;
 
   -- Attach uploaded files. A path is only accepted when it lives inside the
   -- caller's own storage folder (or the caller is staff), so submissions can
   -- never point at someone else's files.
   for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
     val := p_answers -> q.id::text;
     if jsonb_typeof(val) = 'array' then
       for file_item in select * from jsonb_array_elements(val) loop
