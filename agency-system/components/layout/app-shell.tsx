@@ -60,7 +60,7 @@ function RestrictedScreen({ style }: { style: Record<string, string> }) {
           Your account does not have the permission needed to open this page. If you believe this is a
           mistake, ask an administrator to grant you access.
         </p>
-        <Link href="/" className={`${primaryButtonClassName} mt-6`}>
+        <Link href="/dashboard" className={`${primaryButtonClassName} mt-6`}>
           <Home className="h-4 w-4" /> Back to dashboard
         </Link>
       </section>
@@ -80,27 +80,42 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // The company portfolio is intentionally outside the authenticated staff shell.
   const isPortfolioPage = pathname === '/portfolio' || pathname.startsWith('/portfolio/')
   const isPortalPage = pathname === '/portal'
+  // The root is a public Client Landing Page. Staff users are routed to the
+  // dashboard so the landing stays client-focused for visitors.
+  const isLandingPage = pathname === '/'
+  const isStaffDashboard = pathname === '/dashboard'
+  // The client landing page, public portfolio, public forms, intake, and the
+  // auth screen are the only publicly reachable pages. Everything else sits
+  // behind the staff shell.
+  const isPublicPage = isLandingPage || isAuthPage || isIntakePage || isPublicFormPage || isPortfolioPage
 
   useEffect(() => {
     if (loading) return
 
     // Everything except the public pages requires a signed-in, non-anonymous user.
-    if ((!user || isAnonymous) && !isAuthPage && !isIntakePage && !isPublicFormPage && !isPortfolioPage) {
+    if ((!user || isAnonymous) && !isPublicPage) {
       router.replace('/auth')
       return
     }
 
     if (!user || isAnonymous || !profile) return
 
+    // Signed-in staff members are routed to the dashboard from the root so the
+    // landing page always reads as a client-facing entry point.
+    if (!isClient && isLandingPage && !isStaffDashboard) {
+      router.replace('/dashboard')
+      return
+    }
+
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isIntakePage && !isAuthPage && !isPublicFormPage && !isPortfolioPage) {
+    if (isClient && !isPortalPage && !isIntakePage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
-    if (!isClient && isPortalPage) router.replace('/')
-  }, [isAuthPage, isClient, isIntakePage, isAnonymous, isPortfolioPage, isPortalPage, isPublicFormPage, loading, profile, router, user])
+    if (!isClient && isPortalPage) router.replace('/dashboard')
+  }, [isAuthPage, isClient, isIntakePage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isStaffDashboard, loading, profile, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -109,7 +124,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Public pages render without the workspace shell.
   if (isAuthPage) return <div style={style}>{children}</div>
-  if (isIntakePage || isPublicFormPage || isPortfolioPage) return <div style={style}>{children}</div>
+  if (isIntakePage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}>{children}</div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 

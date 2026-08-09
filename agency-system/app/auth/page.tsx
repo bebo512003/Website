@@ -30,7 +30,7 @@ export default function AuthPage() {
   }, [])
 
   useEffect(() => {
-    if (!authLoading && user && !user.is_anonymous && mode !== 'update-password') router.replace('/')
+    if (!authLoading && user && !user.is_anonymous && mode !== 'update-password') router.replace('/dashboard')
   }, [authLoading, mode, router, user])
 
   const changeMode = (nextMode: AuthMode) => {
@@ -57,12 +57,12 @@ export default function AuthPage() {
       return
     }
 
-    if (mode === 'signin') router.replace('/')
+    if (mode === 'signin') router.replace('/dashboard')
     if (mode === 'signup') setMessage('Account created. Check your inbox to confirm your email before signing in.')
     if (mode === 'reset') setMessage('If an account exists for that address, a password reset link has been sent.')
     if (mode === 'update-password') {
       setMessage('Your password has been updated. Redirecting…')
-      setTimeout(() => router.replace('/'), 800)
+      setTimeout(() => router.replace('/dashboard'), 800)
     }
   }
 

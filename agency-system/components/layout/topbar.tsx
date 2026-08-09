@@ -40,7 +40,7 @@ export function TopBar() {
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-border bg-surface/90 px-4 backdrop-blur-md sm:px-6">
-      <button type="button" className="text-text-secondary md:hidden" onClick={() => router.push('/')} aria-label="Go to dashboard"><Home className="h-5 w-5" /></button>
+      <button type="button" className="text-text-secondary md:hidden" onClick={() => router.push('/dashboard')} aria-label="Go to dashboard"><Home className="h-5 w-5" /></button>
       <form onSubmit={submitSearch} className="relative w-full max-w-md">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
         <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects…" aria-label="Search projects" className="w-full rounded-md border border-border bg-surface-raised py-2 pl-9 pr-3 text-sm text-fg outline-none placeholder:text-text-tertiary focus:border-accent" />

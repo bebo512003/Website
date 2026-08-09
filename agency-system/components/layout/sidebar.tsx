@@ -13,7 +13,7 @@ export function Sidebar() {
   const { profile, can } = useAuth()
 
   const navItems = [
-    { title: 'Dashboard', href: '/', icon: LayoutDashboard, permission: 'dashboard.view' },
+    { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
     { title: 'Projects', href: '/projects', icon: FolderKanban, permission: 'project.view' },
     { title: 'Forms', href: '/forms', icon: ClipboardList, permission: 'submission.view' },
     { title: 'Tasks', href: '/tasks', icon: CheckSquare, permission: 'task.view' },
@@ -25,8 +25,8 @@ export function Sidebar() {
     { title: 'Administration', href: '/admin', icon: ShieldCheck, permission: 'admin.manage' },
     { title: 'Settings', href: '/settings', icon: Settings, permission: 'settings.view' },
   ].filter((item) => can(item.permission))
-  const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
-  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
+  const isActive = (href: string) => href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
+  const mobileItems = navItems.filter((item) => ['/dashboard', '/projects', '/forms', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
 
   return (
     <>
