@@ -366,6 +366,106 @@ async function runPermissionSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runPermissionUiContractSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  // This suite mirrors what the Admin UI does in "Roles & permissions": it never
+  // types permission keys by hand — it reads the catalog via list_permissions()
+  // (the checkbox list), then writes selections through set_role_permissions()
+  // (the Save button). The assertions prove the checkbox state equals the
+  // database state and that checking/unchecking boxes changes REAL access.
+
+  // ── 1. Checkbox catalog: list_permissions feeds the grouped UI ─────────────
+  await asUser(db, alice)
+  const catalog = (await db.query(`select * from public.list_permissions()`)).rows
+  ok(`${label}: UI checkbox catalog loads with names, categories, descriptions`, catalog.length >= 30 && catalog.every((p) => p.key && p.name && p.category))
+  const catalogSlugs = new Set(catalog.map((p) => p.category))
+  ok(`${label}: catalog covers the UI groups (submissions/forms/employees/portfolio/admin)`,
+    ['submissions', 'forms', 'employees', 'portfolio', 'access-control', 'admin'].every((slug) => catalogSlugs.has(slug)),
+    [...catalogSlugs].join(','))
+  const catalogKeys = new Set(catalog.map((p) => p.key))
+  ok(`${label}: catalog exposes form.manage & portfolio.manage checkboxes`, catalogKeys.has('form.manage') && catalogKeys.has('portfolio.manage'))
+
+  // ── 2. Create-role flow: create + tick boxes + save ─────────────────────────
+  const editorRoleId = (await scalar(db, `select (public.create_app_role('Content Editor', 'Checks boxes in the test')).id v`)).v
+  const editorBoxes = ['workspace.access', 'submission.view', 'form.manage']
+  await scalar(db, `select public.set_role_permissions($1, array['workspace.access','submission.view','form.manage'])`, [editorRoleId])
+
+  // Checkbox state == database state (exact match, nothing more).
+  const storedKeys = (await scalar(db,
+    `select coalesce(array_agg(p.key order by p.key), array[]::text[]) keys
+       from public.role_permissions rp join public.permissions p on p.id = rp.permission_id
+      where rp.role_id = $1`, [editorRoleId])).keys
+  ok(`${label}: saved checkboxes match role_permissions rows exactly`,
+    JSON.stringify(storedKeys) === JSON.stringify([...editorBoxes].sort()), JSON.stringify(storedKeys))
+  const listedRole = (await db.query(`select * from public.list_roles()`)).rows.find((r) => r.id === editorRoleId)
+  ok(`${label}: list_roles reports exactly the checked permissions`,
+    JSON.stringify(listedRole?.permission_keys) === JSON.stringify([...editorBoxes].sort()))
+
+  // ── 3. Checking a box changes REAL authorization ────────────────────────────
+  await scalar(db, `select public.assign_user_role($1, $2)`, [bob, editorRoleId])
+  await asUser(db, bob)
+  ok(`${label}: bob gains form.manage after box is checked`, (await scalar(db, `select public.has_permission('form.manage') v`)).v === true)
+  const bobCreatesForm = await db.query(`insert into public.form_templates (slug, title) values ('bob-editor-form', 'Bob Editor Form')`)
+    .then(() => true).catch(() => false)
+  ok(`${label}: checking the box lets bob actually create forms (RLS)`, bobCreatesForm)
+
+  // Unchecked boxes still deny: bob does not have portfolio.manage.
+  ok(`${label}: unchecked portfolio.manage still denies bob`, (await scalar(db, `select public.has_permission('portfolio.manage') v`)).v === false)
+  const brandingCategory = (await db.query(`select id from public.portfolio_categories where slug = 'branding'`)).rows[0]
+  const bobCreatesPortfolio = await db.query(
+    `insert into public.portfolio_projects (title, slug, category_id) values ('Nope', 'nope-project', $1)`, [brandingCategory.id])
+    .then((r) => (r.affectedRows ?? 0) > 0).catch(() => false)
+  ok(`${label}: bob cannot publish portfolio while the box is unchecked (RLS)`, !bobCreatesPortfolio)
+
+  // ── 4. Unchecking a box revokes access immediately (no re-login) ────────────
+  await asUser(db, alice)
+  const revokedBoxes = ['workspace.access', 'submission.view', 'portfolio.manage'] // form.manage unticked
+  await scalar(db, `select public.set_role_permissions($1, array['workspace.access','submission.view','portfolio.manage'])`, [editorRoleId])
+  const storedAfterRevoke = (await scalar(db,
+    `select coalesce(array_agg(p.key order by p.key), array[]::text[]) keys
+       from public.role_permissions rp join public.permissions p on p.id = rp.permission_id
+      where rp.role_id = $1`, [editorRoleId])).keys
+  ok(`${label}: unchecking replaces the stored set (no leftovers)`,
+    JSON.stringify(storedAfterRevoke) === JSON.stringify([...revokedBoxes].sort()), JSON.stringify(storedAfterRevoke))
+
+  await asUser(db, bob)
+  ok(`${label}: bob loses form.manage immediately after unchecking`, (await scalar(db, `select public.has_permission('form.manage') v`)).v === false)
+  const bobBlockedFromForms = await expectError(db, () => db.query(`insert into public.form_templates (slug, title) values ('bob-late', 'Too Late')`))
+  const bobLateRows = (await scalar(db, `select count(*)::int n from public.form_templates where slug = 'bob-late'`)).n
+  ok(`${label}: unchecked box blocks bob from creating forms (RLS)`, bobBlockedFromForms || bobLateRows === 0)
+  ok(`${label}: newly checked portfolio.manage grants bob portfolio access`, (await scalar(db, `select public.has_permission('portfolio.manage') v`)).v === true)
+  const bobPublishes = await db.query(
+    `insert into public.portfolio_projects (title, slug, category_id) values ('Bob Case Study', 'bob-case-study', $1)`, [brandingCategory.id])
+    .then(() => true).catch(() => false)
+  ok(`${label}: bob can now create portfolio projects (RLS)`, bobPublishes)
+
+  // ── 5. Only privileged users can change checkboxes ──────────────────────────
+  await asUser(db, erin) // manager: no role.assign_permissions
+  const managerToggleFails = await expectError(db, () => scalar(db, `select public.set_role_permissions($1, array['admin.manage'])`, [editorRoleId]))
+  ok(`${label}: manager cannot toggle role permissions (RPC guard)`, managerToggleFails)
+  await asUser(db, bob)
+  const bobToggleFails = await expectError(db, () => scalar(db, `select public.set_role_permissions($1, array['admin.manage'])`, [editorRoleId]))
+  ok(`${label}: employee cannot toggle role permissions (RPC guard)`, bobToggleFails)
+  const bobSelfGrantFails = await expectError(db, () => scalar(db, `select public.assign_user_role($1, $2)`, [bob, editorRoleId]))
+  ok(`${label}: employee cannot assign roles to themself (RPC guard)`, bobSelfGrantFails)
+
+  // The blocked attempts must not have changed the stored checkbox set.
+  await superUser(db)
+  const untouched = (await scalar(db,
+    `select coalesce(array_agg(p.key order by p.key), array[]::text[]) keys
+       from public.role_permissions rp join public.permissions p on p.id = rp.permission_id
+      where rp.role_id = $1`, [editorRoleId])).keys
+  ok(`${label}: blocked save attempts leave the stored permission set untouched`,
+    JSON.stringify(untouched) === JSON.stringify([...revokedBoxes].sort()))
+
+  // ── Cleanup: restore fixtures for any later suites ─────────────────────────
+  await asUser(db, alice)
+  await scalar(db, `select public.set_user_role($1, 'employee'::public.app_role)`, [bob])
+  await scalar(db, `select public.delete_app_role($1)`, [editorRoleId])
+  await superUser(db)
+}
+
 async function runDynamicFormSuite(db, ids, label) {
   const { anonVisitor, alice, bob, erin } = ids
 
@@ -615,6 +715,7 @@ async function main() {
   await runDynamicFormSuite(dbA, idsA, 'upgrade')
   await runTeamDirectorySuite(dbA, idsA, 'upgrade')
   await runPortfolioSuite(dbA, idsA, 'upgrade')
+  await runPermissionUiContractSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
