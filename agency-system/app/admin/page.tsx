@@ -302,8 +302,8 @@ export default function AdminPage() {
           )}
 
           {tab === 'clients' && (
-            <Panel title="Client accounts" description="People who submitted a service request and later signed in with the same e-mail automatically become client accounts linked to their CRM record. Clients never appear in team lists and never receive staff access.">
-              {clientProfiles.length === 0 ? <EmptyState icon={UserRound} title="No client accounts" description="A client account is created automatically when a form submitter creates a login with the same e-mail address used on their request." /> : (
+            <Panel title="Client accounts" description="Existing client-role accounts remain visible for compatibility. Public form submitters are CRM clients only and do not need or receive login accounts.">
+              {clientProfiles.length === 0 ? <EmptyState icon={UserRound} title="No client login accounts" description="This is expected for new clients: they can submit public forms without creating an account." /> : (
                 <div className="divide-y divide-border">
                   {clientProfiles.map((profile) => (
                     <div key={profile.id} className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">

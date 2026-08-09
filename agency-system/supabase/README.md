@@ -20,7 +20,9 @@ role/permission model described below, and `20260811000000_dynamic_form_builder.
 installs the dynamic form builder (`form_templates`, `form_questions`, `form_submissions`,
 `form_submission_answers`, `form_submission_attachments`, the `form.manage` permission,
 the `submit_dynamic_form` / `duplicate_form_template` / `reorder_form_questions` RPCs,
-and the private `form-files` storage bucket).
+and the private `form-files` storage bucket). Migration
+`20260815000000_admin_only_account_creation.sql` closes public sign-up and restricts
+permanent Auth provisioning to the Admin-controlled Team Management flow.
 
 ## 3. Authentication settings
 
@@ -30,7 +32,9 @@ In **Authentication → URL Configuration**:
 - Add local and deployment callback URLs that end in `/auth`.
 - Choose whether email confirmation is required.
 
-The first account in an empty workspace is the bootstrap Admin. Later accounts start as Employees. After onboarding, public sign-up can be disabled for an invite-only workspace.
+Public sign-up must remain disabled. Apply `20260815000000_admin_only_account_creation.sql`, then turn **Authentication → Providers → Email → Allow new users to sign up** OFF. Keep Anonymous Sign-ins enabled for public forms. The database guard also rejects direct sign-up requests and anonymous-to-permanent conversion if the dashboard setting is accidentally enabled.
+
+Existing installations keep their current Admin. For a fresh empty database, use `npm run bootstrap:admin` once with the documented bootstrap environment variables. Afterwards, every internal Auth user is created by an authenticated Admin from **Administration → Team Management**. The protected server route requires `SUPABASE_SERVICE_ROLE_KEY`; keep that key server-only and never expose it through a `NEXT_PUBLIC_*` variable.
 
 ## Security model
 

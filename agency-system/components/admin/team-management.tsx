@@ -55,6 +55,7 @@ export function TeamManagement() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Profile | null>(null)
   const [form, setForm] = useState(emptyForm)
+  const [initialPassword, setInitialPassword] = useState('')
   const [viewing, setViewing] = useState<Profile | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState('')
@@ -95,6 +96,7 @@ export function TeamManagement() {
 
   const resetForm = () => {
     setForm(emptyForm)
+    setInitialPassword('')
     setAvatarFile(null)
     setAvatarPreview('')
     setEditing(null)
@@ -147,6 +149,10 @@ export function TeamManagement() {
       setError('Full Name and Email are required')
       return
     }
+    if (!editing && initialPassword.length < 8) {
+      setError('The initial password must contain at least 8 characters')
+      return
+    }
     if (!canManage) {
       setError('You do not have permission to manage team members')
       return
@@ -195,7 +201,7 @@ export function TeamManagement() {
         const employeeSystem = roles.find(r => r.key === 'employee')
         if (employeeSystem) payload.role_id = employeeSystem.id
       }
-      result = await createTeamMember(payload)
+      result = await createTeamMember(payload, initialPassword)
     }
 
     setSaving(false)
@@ -204,7 +210,7 @@ export function TeamManagement() {
       return
     }
 
-    setMessage(editing ? 'Team member updated successfully' : 'Team member added successfully')
+    setMessage(editing ? 'Team member updated successfully' : 'Login account created. Give the team member the email and initial password you set.')
     setModalOpen(false)
     resetForm()
     await load()
@@ -251,7 +257,7 @@ export function TeamManagement() {
       {error && <InlineAlert>{error}</InlineAlert>}
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
-      <Panel title="Team Management" description="View, add, edit, activate/deactivate team members. Roles come from the dynamic Role system. Team members are always Employees/Internal Users, never Clients.">
+      <Panel title="Team Management" description="Create login accounts and manage internal team members. Roles come from the dynamic Role system. Public visitors and clients cannot create accounts.">
         <div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative flex-1 sm:max-w-sm">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
@@ -264,7 +270,7 @@ export function TeamManagement() {
           </div>
           <button onClick={openAdd} className={primaryButtonClassName} disabled={!canManage}>
             <Plus className="h-4 w-4" />
-            Add Team Member
+            Create Team Account
           </button>
         </div>
 
@@ -368,7 +374,7 @@ export function TeamManagement() {
       </Panel>
 
       {/* Add / Edit Modal */}
-      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm() }} title={editing ? 'Edit Team Member' : 'Add Team Member'} description="Team members are always Employee/Internal Users, not Clients. Roles come from the dynamic Role system.">
+      <Modal open={modalOpen} onClose={() => { setModalOpen(false); resetForm() }} title={editing ? 'Edit Team Member' : 'Create Team Account'} description={editing ? 'Update this internal user and their assigned role.' : 'Create the internal login here, then securely give the credentials to the team member.'}>
         <form onSubmit={handleSubmit} className="grid gap-5">
           {/* Avatar */}
           <div className="flex items-center gap-4">
@@ -401,6 +407,12 @@ export function TeamManagement() {
             <label className="text-xs text-text-secondary">Email *
               <input required type="email" className={`${inputClassName} mt-2`} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="alex@agency.com" />
             </label>
+            {!editing && (
+              <label className="text-xs text-text-secondary sm:col-span-2">Initial Password *
+                <input required type="password" minLength={8} maxLength={128} autoComplete="new-password" className={`${inputClassName} mt-2`} value={initialPassword} onChange={(e) => setInitialPassword(e.target.value)} placeholder="At least 8 characters" />
+                <span className="mt-1.5 block text-[11px] text-text-tertiary">This password is not stored in the profile or shown again. Give it securely to the new team member.</span>
+              </label>
+            )}
             <label className="text-xs text-text-secondary">Phone / WhatsApp
               <input className={`${inputClassName} mt-2`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 234 567 890" />
             </label>
@@ -464,7 +476,7 @@ export function TeamManagement() {
             <button type="button" className={secondaryButtonClassName} onClick={() => { setModalOpen(false); resetForm() }}>Cancel</button>
             <button className={primaryButtonClassName} disabled={saving}>
               {saving && <LoaderCircle className="h-4 w-4 animate-spin" />}
-              {editing ? 'Save changes' : 'Add member'}
+              {editing ? 'Save changes' : 'Create account'}
             </button>
           </div>
         </form>

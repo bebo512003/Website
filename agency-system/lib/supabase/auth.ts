@@ -7,22 +7,6 @@ function unavailableError() {
   return new Error('Supabase is not configured. Add the required environment variables before signing in.')
 }
 
-export async function signUp(email: string, password: string, fullName: string): Promise<AuthResult> {
-  if (!supabase) return { error: unavailableError() }
-
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin
-  const { error } = await supabase.auth.signUp({
-    email: email.trim(),
-    password,
-    options: {
-      data: { full_name: fullName.trim() },
-      emailRedirectTo: `${siteUrl}/auth`,
-    },
-  })
-
-  return { error: error ? new Error(error.message) : null }
-}
-
 export async function signIn(email: string, password: string): Promise<AuthResult> {
   if (!supabase) return { error: unavailableError() }
 

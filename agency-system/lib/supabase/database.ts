@@ -809,49 +809,29 @@ export async function getTeamMemberById(id: string): Promise<Result<Profile | nu
   return ok(data)
 }
 
-export async function createTeamMember(payload: TeamMemberPayload): Promise<Result<Profile | null>> {
+export async function createTeamMember(payload: TeamMemberPayload, initialPassword: string): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
-  // Prefer RPC admin_create_team_member if available (handles permissions & role validation)
-  const { data, error } = await supabase.rpc('admin_create_team_member', {
-    p_email: payload.email,
-    p_full_name: payload.full_name,
-    p_phone: payload.phone || null,
-    p_whatsapp: payload.whatsapp || null,
-    p_avatar_url: payload.avatar_url || null,
-    p_job_title: payload.job_title || null,
-    p_department: payload.department || null,
-    p_specialization: payload.specialization || null,
-    p_bio: payload.bio || null,
-    p_location: payload.location || null,
-    p_portfolio_url: payload.portfolio_url || null,
-    p_social_links: (payload.social_links as unknown as import('./types').Json) || {},
-    p_role_id: payload.role_id || null,
-    p_employee_role_id: payload.employee_role_id || null,
-    p_status: payload.status || 'active',
-  })
-  if (!error) return ok(data as Profile)
 
-  // Fallback: direct insert if RPC missing (e.g. local migration not applied)
-  const insertPayload = {
-    id: crypto.randomUUID(),
-    email: payload.email.toLowerCase().trim(),
-    full_name: payload.full_name.trim(),
-    phone: payload.phone || null,
-    whatsapp: payload.whatsapp || null,
-    avatar_url: payload.avatar_url || null,
-    job_title: payload.job_title || null,
-    department: payload.department || null,
-    specialization: payload.specialization || null,
-    bio: payload.bio || null,
-    location: payload.location || null,
-    portfolio_url: payload.portfolio_url || null,
-    social_links: payload.social_links || {},
-    role_id: payload.role_id || null,
-    employee_role_id: payload.employee_role_id || null,
-    status: payload.status || 'active',
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/team-members', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ member: payload, password: initialPassword }),
+      cache: 'no-store',
+    })
+    const result = await response.json() as { data?: Profile; error?: string }
+    if (!response.ok || !result.data) return fail(null, result.error || 'Unable to create the team account.')
+    return ok(result.data)
+  } catch {
+    return fail(null, 'Unable to reach the account provisioning service.')
   }
-  const { data: direct, error: directError } = await supabase.from('profiles').insert(insertPayload).select().single()
-  return directError ? fail(null, directError.message) : ok(direct as Profile)
 }
 
 export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promise<Result<Profile | null>> {

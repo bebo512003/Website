@@ -10,10 +10,12 @@ const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;
 
 // Upgrade path: every migration before the one under test reproduces the
 // previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260813000000'
+const MIGRATION_UNDER_TEST = '20260815000000'
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
-const priorMigrations = migrationFiles.filter((file) => !file.startsWith(MIGRATION_UNDER_TEST)).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
-const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))), 'utf8'))
+const migrationFile = migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))
+if (!migrationFile) throw new Error(`Migration ${MIGRATION_UNDER_TEST} not found`)
+const priorMigrations = migrationFiles.filter((file) => file < migrationFile).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
+const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFile), 'utf8'))
 const freshSchema = sanitize(readFileSync(join(supabaseDir, 'schema.sql'), 'utf8'))
 
 const STUBS = `
@@ -74,12 +76,16 @@ const asUser = async (db, uid, role = 'authenticated') => {
 }
 const scalar = async (db, sql, params = []) => (await db.query(sql, params)).rows[0]
 const expectError = async (db, fn) => { try { await fn(); return false } catch { return true } }
-const addUser = async (db, email, { anon = false, fullName = null } = {}) => {
+const addUser = async (db, email, { anon = false, fullName = null, adminProvisioned = false } = {}) => {
   const id = crypto.randomUUID()
+  const appMetadata = {
+    provider: anon ? 'anonymous' : 'email',
+    ...(adminProvisioned ? { agency_os_admin_provisioned: true } : {}),
+  }
   await db.query(
     `insert into auth.users (id, email, is_anonymous, raw_app_meta_data, raw_user_meta_data)
      values ($1, $2, $3, $4::jsonb, $5::jsonb)`,
-    [id, email, anon, JSON.stringify({ provider: anon ? 'anonymous' : 'email' }), JSON.stringify(fullName ? { full_name: fullName } : {})],
+    [id, email, anon, JSON.stringify(appMetadata), JSON.stringify(fullName ? { full_name: fullName } : {})],
   )
   return id
 }
@@ -97,23 +103,48 @@ async function applyAndSeed(db) {
   for (const prior of priorMigrations) await execMigrationLikePsql(db, prior) // previous production state
   await execMigrationLikePsql(db, migration)                                  // the new migration under test
 
-  // Anonymous page visitors must never receive a profile.
+  // Anonymous page visitors must never receive a profile. The first trusted,
+  // server-provisioned user is the one-time bootstrap Admin.
   const anonVisitor = await addUser(db, null, { anon: true })
-  const alice = await addUser(db, 'alice@agency.test', { fullName: 'Alice Admin' })
-  const bob = await addUser(db, 'bob@agency.test', { fullName: 'Bob Employee' })
-  const erin = await addUser(db, 'erin@agency.test', { fullName: 'Erin Manager' })
+  const alice = await addUser(db, 'alice@agency.test', { fullName: 'Alice Admin', adminProvisioned: true })
+
+  // Reproduce the protected Team Management sequence: permission-checked profile
+  // placeholder first, then server-only Auth Admin creation with trusted metadata.
+  await asUser(db, alice)
+  const managerRoleId = (await db.query(`select id from public.app_roles where key = 'manager'`)).rows[0].id
+  await db.query(`select public.admin_create_team_member('bob@agency.test', 'Bob Employee')`)
+  await db.query(`select public.admin_create_team_member('erin@agency.test', 'Erin Manager', p_role_id := $1)`, [managerRoleId])
+  await superUser(db)
+  const bob = await addUser(db, 'bob@agency.test', { fullName: 'Bob Employee', adminProvisioned: true })
+  const erin = await addUser(db, 'erin@agency.test', { fullName: 'Erin Manager', adminProvisioned: true })
   return { anonVisitor, alice, bob, erin }
 }
 
 async function runSuite(db, ids, label) {
   const { anonVisitor, alice, bob, erin } = ids
 
-  // ── Sign-up routing / client ≠ employee ─────────────────────────────
+  // ── Closed account provisioning ──────────────────────────────────────
   const pAlice = await scalar(db, 'select role, status from public.profiles where id = $1', [alice])
-  ok(`${label}: first real user becomes active admin`, pAlice?.role === 'admin' && pAlice?.status === 'active', JSON.stringify(pAlice))
+  ok(`${label}: trusted first user becomes active bootstrap admin`, pAlice?.role === 'admin' && pAlice?.status === 'active', JSON.stringify(pAlice))
   ok(`${label}: anonymous visitor has no profile`, (await scalar(db, 'select count(*)::int n from public.profiles where id = $1', [anonVisitor])).n === 0)
   const pBob = await scalar(db, 'select role from public.profiles where id = $1', [bob])
-  ok(`${label}: plain signup becomes employee`, pBob?.role === 'employee', pBob?.role)
+  ok(`${label}: Admin-provisioned team account becomes employee`, pBob?.role === 'employee', pBob?.role)
+  const pErin = await scalar(db, 'select role from public.profiles where id = $1', [erin])
+  ok(`${label}: Admin can provision a Manager without changing RBAC architecture`, pErin?.role === 'manager', pErin?.role)
+  let existingAccountAuthUpdateWorks = true
+  try {
+    await db.query(`update auth.users set raw_user_meta_data = raw_user_meta_data || '{"auth_refresh_test":true}'::jsonb where id = $1`, [bob])
+  } catch {
+    existingAccountAuthUpdateWorks = false
+  }
+  ok(`${label}: existing accounts remain usable by normal Auth update flows`, existingAccountAuthUpdateWorks)
+  const publicSignupBlocked = await expectError(db, () => addUser(db, 'visitor@public.test'))
+  ok(`${label}: public visitor cannot create an account by calling Auth directly`, publicSignupBlocked)
+  const anonymousConversionBlocked = await expectError(db, () => db.query(
+    `update auth.users set is_anonymous = false, email = 'converted@public.test', raw_app_meta_data = '{"provider":"email"}'::jsonb where id = $1`,
+    [anonVisitor],
+  ))
+  ok(`${label}: visitor cannot convert an anonymous form session into an account`, anonymousConversionBlocked)
 
   // Admin sets up a CRM client + project, erin becomes manager.
   await asUser(db, alice)
@@ -132,16 +163,25 @@ async function runSuite(db, ids, label) {
   const newcoClient = (await db.query(`select id, email from public.clients where email = 'dina@newco.test'`)).rows[0]
   ok(`${label}: intake submit creates CRM client record + project, no auth account`, !!newcoClient && (await scalar(db, `select count(*)::int n from public.projects where client_id = $1`, [newcoClient.id])).n === 1)
 
-  // The form submitter signs up with the same e-mail -> becomes client, linked, NOT employee.
-  const dina = await addUser(db, 'dina@newco.test', { fullName: 'Dina Founder' })
-  const pDina = (await db.query('select role, client_id, status from public.profiles where id = $1', [dina])).rows[0]
-  ok(`${label}: form submitter who signs up becomes client (not employee)`, pDina?.role === 'client', pDina?.role)
-  ok(`${label}: client account auto-linked to CRM record`, pDina?.client_id === newcoClient.id)
+  // Form submitters do not receive accounts, even when they call Auth directly.
+  const clientSignupBlocked = await expectError(db, () => addUser(db, 'dina@newco.test', { fullName: 'Dina Founder' }))
+  ok(`${label}: public form client cannot create an account`, clientSignupBlocked)
+  ok(`${label}: form client remains CRM-only with no Auth user`, (await scalar(db, `select count(*)::int n from auth.users where email = 'dina@newco.test'`)).n === 0)
 
-  // A staff signup with an unmatched e-mail still becomes employee.
-  const frank = await addUser(db, 'frank@agency.test')
-  const pFrank = (await db.query('select role from public.profiles where id = $1', [frank])).rows[0]
-  ok(`${label}: unmatched staff signup still becomes employee`, pFrank?.role === 'employee', pFrank?.role)
+  // Build a legacy client-profile fixture to keep the existing role/RLS regression
+  // coverage. This is not an account-creation path exposed by the application.
+  const dina = crypto.randomUUID()
+  const clientRoleId = (await db.query(`select id from public.app_roles where key = 'client'`)).rows[0].id
+  await db.query(
+    `insert into public.profiles (id, email, full_name, role, role_id, client_id)
+     values ($1, 'dina@newco.test', 'Dina Founder', 'client', $2, $3)`,
+    [dina, clientRoleId, newcoClient.id],
+  )
+  const pDina = (await db.query('select role, client_id, status from public.profiles where id = $1', [dina])).rows[0]
+  ok(`${label}: legacy client role remains isolated`, pDina?.role === 'client' && pDina?.client_id === newcoClient.id)
+
+  const unmatchedSignupBlocked = await expectError(db, () => addUser(db, 'frank@agency.test'))
+  ok(`${label}: unmatched e-mail cannot self-register as an employee`, unmatchedSignupBlocked)
 
   // ── Client restrictions ─────────────────────────────────────────────
   await asUser(db, dina)
@@ -229,7 +269,7 @@ async function runSuite(db, ids, label) {
       (select count(*)::int from public.clients) clients,
       (select count(*)::int from public.employee_roles) roles,
       (select count(*)::int from public.intake_forms) intakes`)
-  ok(`${label}: admin retains full access`, counts.profiles >= 5 && counts.projects === 3 && counts.clients === 2 && counts.roles === 1 && counts.intakes === 1, JSON.stringify(counts))
+  ok(`${label}: admin retains full access`, counts.profiles >= 4 && counts.projects === 3 && counts.clients === 2 && counts.roles === 1 && counts.intakes === 1, JSON.stringify(counts))
 
   await asUser(db, erin)
   ok(`${label}: manager keeps full portfolio access`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 3)
@@ -460,10 +500,15 @@ async function runTeamDirectorySuite(db, ids, label) {
 
   // ── Admin creates team members (always internal users, never clients) ───
   await asUser(db, alice)
-  const grace = (await db.query(
+  const gracePlaceholder = (await db.query(
     `select * from public.admin_create_team_member('grace@agency.test', 'Grace Designer', p_job_title := 'Senior Designer', p_department := 'Design', p_specialization := 'Brand Identity', p_bio := 'Leads brand identity work')`
   )).rows[0]
-  ok(`${label}: admin creates a team member via Team Management`, grace?.role === 'employee' && grace?.status === 'active' && grace?.job_title === 'Senior Designer' && grace?.department === 'Design')
+  await superUser(db)
+  const graceId = await addUser(db, 'grace@agency.test', { fullName: 'Grace Designer', adminProvisioned: true })
+  const grace = (await db.query(`select * from public.profiles where id = $1`, [graceId])).rows[0]
+  ok(`${label}: Admin-created employee receives a real login-linked profile`, grace?.role === 'employee' && grace?.status === 'active' && grace?.job_title === 'Senior Designer' && grace?.department === 'Design' && grace?.id !== gracePlaceholder?.id)
+  ok(`${label}: Admin placeholder is claimed and removed during Auth provisioning`, (await scalar(db, `select count(*)::int n from public.profiles where id = $1`, [gracePlaceholder.id])).n === 0)
+  await asUser(db, alice)
 
   const clientRoleId = (await db.query(`select id from public.app_roles where key = 'client'`)).rows[0].id
   const clientRoleRejected = await expectError(db, () => db.query(
@@ -488,7 +533,7 @@ async function runTeamDirectorySuite(db, ids, label) {
   await asUser(db, bob)
   ok(`${label}: employee has employee.view (team directory permission)`, (await scalar(db, `select public.has_permission('employee.view') v`)).v === true)
   const directory = (await db.query(`select id, role, status from public.profiles where role <> 'client'`)).rows
-  ok(`${label}: employee sees the internal team in the directory`, directory.length >= 5, `${directory.length} members`)
+  ok(`${label}: employee sees the internal team in the directory`, directory.length >= 4, `${directory.length} members`)
   ok(`${label}: client accounts never appear in the team directory`, !directory.some((r) => r.role === 'client' || r.id === dina))
 
   await asUser(db, dina)
@@ -562,7 +607,7 @@ async function runPortfolioSuite(db, ids, label) {
 }
 
 async function main() {
-  console.log('=== Path A: prior migrations + team-management migration (upgrade path) ===')
+  console.log('=== Path A: prior migrations + admin-only account migration (upgrade path) ===')
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
@@ -575,18 +620,24 @@ async function main() {
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
   const dbB = await makeDb()
   await dbB.exec(freshSchema)
-  const aliceB = await addUser(dbB, 'admin@fresh.test')
+  const aliceB = await addUser(dbB, 'admin@fresh.test', { adminProvisioned: true, fullName: 'Fresh Admin' })
   const carolClient = crypto.randomUUID()
   await asUser(dbB, aliceB)
   await dbB.query(`insert into public.clients (id, name, email) values ($1, 'Beta LLC', 'carol@beta.test')`, [carolClient])
   await superUser(dbB)
-  const carolB = await addUser(dbB, 'carol@beta.test')
-  const row = (await dbB.query('select role, client_id, status from public.profiles where id = $1', [carolB])).rows[0]
-  ok('fresh: install schema applies cleanly; client claim works', row?.role === 'client' && row?.client_id === carolClient && row?.status === 'active', JSON.stringify(row))
+  const carolSignupBlocked = await expectError(dbB, () => addUser(dbB, 'carol@beta.test'))
+  ok('fresh: public client account creation is blocked', carolSignupBlocked)
+  ok('fresh: public client remains a CRM record without Auth user', (await scalar(dbB, `select count(*)::int n from auth.users where email = 'carol@beta.test'`)).n === 0)
   const adminRow = (await dbB.query('select role from public.profiles where id = $1', [aliceB])).rows[0]
-  ok('fresh: bootstrap admin works', adminRow?.role === 'admin')
-  await asUser(dbB, carolB)
-  ok('fresh: client sees no projects', (await scalar(dbB, 'select count(*)::int n from public.projects')).n === 0)
+  ok('fresh: trusted bootstrap admin works', adminRow?.role === 'admin')
+
+  await asUser(dbB, aliceB)
+  const employeePlaceholder = (await dbB.query(`select * from public.admin_create_team_member('employee@fresh.test', 'Fresh Employee')`)).rows[0]
+  await superUser(dbB)
+  const employeeB = await addUser(dbB, 'employee@fresh.test', { adminProvisioned: true, fullName: 'Fresh Employee' })
+  const employeeRow = (await dbB.query('select role, full_name from public.profiles where id = $1', [employeeB])).rows[0]
+  ok('fresh: Admin Team Management provisions an employee Auth account', employeeRow?.role === 'employee' && employeeRow?.full_name === 'Fresh Employee')
+  ok('fresh: claimed placeholder does not remain as a second profile', (await scalar(dbB, 'select count(*)::int n from public.profiles where id = $1', [employeePlaceholder.id])).n === 0)
 
   // Fresh installs include the dynamic form builder end to end.
   await superUser(dbB)

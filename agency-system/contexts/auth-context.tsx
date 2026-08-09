@@ -9,7 +9,6 @@ import {
   signIn,
   signInAnonymously,
   signOut,
-  signUp,
   updatePassword,
   updateProfile,
   type AuthResult,
@@ -32,7 +31,6 @@ interface AuthContextType {
   can: (permission: string) => boolean
   hasAny: (...permissions: string[]) => boolean
   signIn: (email: string, password: string) => Promise<AuthResult>
-  signUp: (email: string, password: string, fullName: string) => Promise<AuthResult>
   signInAnonymously: () => Promise<AuthResult>
   signOut: () => Promise<AuthResult>
   resetPassword: (email: string) => Promise<AuthResult>
@@ -159,7 +157,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     can,
     hasAny,
     signIn,
-    signUp,
     signInAnonymously,
     signOut: handleSignOut,
     resetPassword: requestPasswordReset,

@@ -2,21 +2,18 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { ArrowRight, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, User, UserPlus, Users, Zap } from 'lucide-react'
+import { Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { InlineAlert, inputClassName, primaryButtonClassName } from '@/components/ui/page'
 
-type AuthMode = 'signin' | 'signup' | 'reset' | 'update-password'
-type GateStep = 'gate' | 'auth'
+type AuthMode = 'signin' | 'reset' | 'update-password'
 
 export default function AuthPage() {
   const router = useRouter()
-  const { user, configured, loading: authLoading, signIn, signUp, resetPassword, updatePassword } = useAuth()
-  const [step, setStep] = useState<GateStep>('gate')
+  const { user, configured, loading: authLoading, signIn, resetPassword, updatePassword } = useAuth()
   const [mode, setMode] = useState<AuthMode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
-  const [fullName, setFullName] = useState('')
   const [showPassword, setShowPassword] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -25,7 +22,6 @@ export default function AuthPage() {
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('mode') === 'update-password') {
       setMode('update-password')
-      setStep('auth')
     }
   }, [])
 
@@ -37,6 +33,7 @@ export default function AuthPage() {
     setMode(nextMode)
     setError('')
     setMessage('')
+    setPassword('')
   }
 
   const handleSubmit = async (event: React.FormEvent) => {
@@ -45,11 +42,11 @@ export default function AuthPage() {
     setError('')
     setMessage('')
 
-    let result
-    if (mode === 'signup') result = await signUp(email, password, fullName)
-    else if (mode === 'reset') result = await resetPassword(email)
-    else if (mode === 'update-password') result = await updatePassword(password)
-    else result = await signIn(email, password)
+    const result = mode === 'reset'
+      ? await resetPassword(email)
+      : mode === 'update-password'
+        ? await updatePassword(password)
+        : await signIn(email, password)
 
     setSubmitting(false)
     if (result.error) {
@@ -58,7 +55,6 @@ export default function AuthPage() {
     }
 
     if (mode === 'signin') router.replace('/dashboard')
-    if (mode === 'signup') setMessage('Account created. Check your inbox to confirm your email before signing in.')
     if (mode === 'reset') setMessage('If an account exists for that address, a password reset link has been sent.')
     if (mode === 'update-password') {
       setMessage('Your password has been updated. Redirecting…')
@@ -66,65 +62,9 @@ export default function AuthPage() {
     }
   }
 
-  const title = mode === 'signup' ? 'Create your account' : mode === 'reset' ? 'Reset your password' : mode === 'update-password' ? 'Choose a new password' : 'Welcome back'
-  const subtitle = mode === 'signup' ? 'New accounts start with Employee access.' : mode === 'reset' ? 'We will email you a secure reset link.' : mode === 'update-password' ? 'Use at least eight characters.' : 'Sign in with your Supabase account.'
+  const title = mode === 'reset' ? 'Reset your password' : mode === 'update-password' ? 'Choose a new password' : 'Welcome back'
+  const subtitle = mode === 'reset' ? 'We will email you a secure reset link.' : mode === 'update-password' ? 'Use at least eight characters.' : 'Login with your existing team account.'
 
-  // ── Gate: choose path ──────────────────────────────────────────
-  if (step === 'gate') {
-    return (
-      <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
-        <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
-        <section className="relative z-10 w-full max-w-md rounded-md border border-border bg-surface p-7 shadow-2xl sm:p-9">
-          <div className="mb-7">
-            <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-md border border-accent/30 bg-accent/10">
-              <Zap className="h-5 w-5 text-accent" />
-            </div>
-            <p className="mb-2 font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / SECURE ACCESS</p>
-            <h1 className="text-2xl font-semibold text-fg">Welcome to Agency OS</h1>
-            <p className="mt-2 text-sm text-text-secondary">Choose how you would like to continue.</p>
-          </div>
-
-          <div className="space-y-4">
-            <button
-              onClick={() => setStep('auth')}
-              className="group flex w-full items-center gap-4 rounded-md border border-border bg-surface-raised p-5 text-left transition hover:border-accent hover:bg-surface"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-border text-accent">
-                <Users className="h-5 w-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-fg">I&apos;m a team member</span>
-                <span className="mt-1 block text-xs text-text-tertiary">Sign in to your workspace with your existing account.</span>
-              </span>
-              <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition group-hover:text-accent" />
-            </button>
-
-            <button
-              onClick={() => router.push('/intake')}
-              className="group flex w-full items-center gap-4 rounded-md border border-border bg-surface-raised p-5 text-left transition hover:border-accent hover:bg-surface"
-            >
-              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded border border-border text-accent">
-                <UserPlus className="h-5 w-5" />
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="block text-sm font-semibold text-fg">I&apos;m a new client</span>
-                <span className="mt-1 block text-xs text-text-tertiary">Request a service without creating an account. No password needed.</span>
-              </span>
-              <ArrowRight className="h-4 w-4 shrink-0 text-text-tertiary transition group-hover:text-accent" />
-            </button>
-          </div>
-
-          <div className="mt-6 flex justify-center">
-            <button onClick={() => setStep('auth')} className="text-xs text-text-secondary hover:text-accent">
-              Sign in to an existing account
-            </button>
-          </div>
-        </section>
-      </main>
-    )
-  }
-
-  // ── Auth: sign-in / sign-up / reset ────────────────────────────
   return (
     <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
       <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
@@ -147,19 +87,9 @@ export default function AuthPage() {
         {message && <div className="mb-5"><InlineAlert tone="success">{message}</InlineAlert></div>}
 
         <form className="space-y-4" onSubmit={handleSubmit}>
-          {mode === 'signup' && (
-            <label className="block text-xs font-medium text-text-secondary">
-              Full name
-              <span className="relative mt-2 block">
-                <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
-                <input className={`${inputClassName} pl-9`} value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" required placeholder="Your name" />
-              </span>
-            </label>
-          )}
-
           {mode !== 'update-password' && (
             <label className="block text-xs font-medium text-text-secondary">
-              Email address
+              Email
               <span className="relative mt-2 block">
                 <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
                 <input className={`${inputClassName} pl-9`} type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" required placeholder="you@agency.com" />
@@ -182,19 +112,14 @@ export default function AuthPage() {
 
           <button className={`${primaryButtonClassName} w-full`} type="submit" disabled={!configured || submitting}>
             {submitting && <LoaderCircle className="h-4 w-4 animate-spin" />}
-            {mode === 'signup' ? 'Create account' : mode === 'reset' ? 'Send reset link' : mode === 'update-password' ? 'Update password' : 'Sign in'}
+            {mode === 'reset' ? 'Send reset link' : mode === 'update-password' ? 'Update password' : 'Login'}
           </button>
         </form>
 
-        <div className="mt-6 flex flex-wrap justify-center gap-x-5 gap-y-2 text-xs text-text-secondary">
-          {mode === 'signin' && <><button onClick={() => changeMode('signup')} className="hover:text-accent">Create an account</button><button onClick={() => changeMode('reset')} className="hover:text-accent">Forgot password?</button></>}
-          {(mode === 'signup' || mode === 'reset') && <button onClick={() => changeMode('signin')} className="hover:text-accent">Return to sign in</button>}
-        </div>
-
-        <div className="mt-4 flex justify-center">
-          <button onClick={() => { setStep('gate'); setMode('signin') }} className="text-xs text-text-secondary hover:text-accent">
-            ← Back to welcome
-          </button>
+        <div className="mt-6 flex justify-center text-xs text-text-secondary">
+          {mode === 'signin'
+            ? <button onClick={() => changeMode('reset')} className="hover:text-accent">Forgot Password?</button>
+            : <button onClick={() => changeMode('signin')} className="hover:text-accent">Return to Login</button>}
         </div>
       </section>
     </main>

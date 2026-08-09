@@ -6,13 +6,14 @@ The application contains no seeded users or placeholder business records. All da
 
 ## Features
 
-- Supabase email/password authentication, sign-up, sign-out, and password reset
+- Closed Supabase email/password authentication: login, sign-out, and password reset (no public sign-up)
 - Admin, Manager, Employee, and Client account types
 - Admin-managed employee job roles (Designer, Translator, Copywriter, Developer, …) with no hardcoding
 - Employee active/inactive status — inactive accounts immediately lose all workspace access
 - Database-enforced Row Level Security (RLS)
 - Employee access limited to explicitly assigned projects
-- Clients are never employees: form submitters who sign in get a client account with portal access only
+- Public form submitters remain CRM clients and never need or receive login accounts
+- Admin-only creation of employee, manager, and additional Admin login accounts from Team Management
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
@@ -30,9 +31,9 @@ The application contains no seeded users or placeholder business records. All da
 | Admin | Manages users, system roles, job roles, statuses, project assignments, clients, projects, tasks, and files. |
 | Manager | Manages clients, projects, tasks, and files. Cannot change account roles. |
 | Employee | Sees only assigned projects and related clients, tasks, and files. Can work with tasks and files in those projects. Carries an admin-assigned job role (Designer, Translator, …) and an Active/Inactive status. |
-| Client | Form submitters who later create a login with the same e-mail. Clients land on the client portal, never see the staff dashboard, never appear in employee lists, and have no staff permissions. |
+| Client | Reserved portal role for existing/legacy client accounts. Public form submitters do not need accounts and are stored as CRM clients only. Client roles never appear in employee lists and have no staff permissions. |
 
-The first real account created in an empty workspace becomes the bootstrap Admin. Later sign-ups become Employees — **unless** their e-mail matches a client record created by a form submission, in which case they automatically become a Client linked to that record. The database prevents removal or deactivation of the final active Admin. Inactive accounts are blocked by RLS throughout the database and by the application shell.
+Public account creation is disabled. After the one-time bootstrap Admin, every Employee, Manager, custom internal role, or additional Admin account is created from **Administration → Team Management**. The Admin selects the existing metadata-driven role and sets an initial password, then gives those credentials to the team member. Database Auth triggers reject direct sign-up requests and anonymous-account conversion, while the server provisioning route independently verifies the caller's `admin.manage` permission. The database still prevents removal or deactivation of the final active Admin. Inactive accounts remain blocked by RLS throughout the database and by the application shell.
 
 ## Local setup
 
@@ -46,6 +47,7 @@ Fill in the public values from **Supabase Dashboard → Project Settings → API
 ```env
 NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key # server only; never NEXT_PUBLIC
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
@@ -56,6 +58,29 @@ Then start the application:
 ```bash
 npm run dev
 ```
+
+## Closed account provisioning
+
+1. Apply `supabase/schema.sql` on a new database, or apply
+   `supabase/migrations/20260815000000_admin_only_account_creation.sql` after the earlier
+   migrations on an existing database.
+2. In **Supabase Dashboard → Authentication → Providers → Email**, turn **Allow new users
+   to sign up** OFF. The database trigger also rejects public sign-up if this dashboard
+   setting is accidentally re-enabled.
+3. Keep **Anonymous Sign-ins** ON so public `/intake` and `/f/<slug>` submissions continue
+   to work without an account.
+4. Add `SUPABASE_SERVICE_ROLE_KEY` only to the server/deployment environment. Never prefix
+   it with `NEXT_PUBLIC`.
+5. Existing installations keep their current Admin. On a brand-new empty installation,
+   set `BOOTSTRAP_ADMIN_EMAIL`, `BOOTSTRAP_ADMIN_PASSWORD`, and optionally
+   `BOOTSTRAP_ADMIN_NAME` in `.env.local`, run `npm run bootstrap:admin` once, then remove
+   those three bootstrap values.
+6. Login as Admin and use **Administration → Team Management → Create Team Account** for
+   every employee, manager, custom internal role, or additional Admin. Give the generated
+   e-mail/initial-password credentials to that person securely.
+
+Public form submissions create CRM client records and projects as configured; they do not
+create Auth users. Password reset remains available from `/auth` for existing accounts.
 
 ## Dynamic forms (no-code form builder)
 
@@ -116,8 +141,9 @@ Without this toggle, anonymous authentication will fail and the intake form will
 
 ## Security notes
 
-- Never expose a Supabase `service_role` key to this application.
-- Authorization is enforced in PostgreSQL policies, not only in UI checks.
+- Never expose the Supabase `service_role` key to browser code or a `NEXT_PUBLIC_*` variable. It is used only by the protected server Route Handler after JWT and `admin.manage` verification.
+- Public account creation is rejected by an `auth.users` trigger, not only hidden in the UI. Keep Supabase's Email provider sign-up toggle OFF as an additional Auth-layer control.
+- Authorization is enforced in PostgreSQL policies, triggers, and permission-checked RPCs, not only in UI checks.
 - The `profiles.role` column cannot be updated directly by browser clients. Role changes go through an Admin-only database function.
 - The `project-files` bucket is private. Object policies derive project access from the first folder in each storage path.
-- For a closed workspace, disable public sign-ups in Supabase after creating the initial Admin and invite users through your preferred onboarding process.
+- Internal users must be provisioned through Admin Team Management. Do not create employee accounts through public Auth endpoints.
