@@ -642,6 +642,17 @@ export async function getFormTemplates(): Promise<Result<import('./types').FormT
   return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormTemplateWithCounts[])
 }
 
+/** Public client landing page list — RLS & query filter for published forms only. */
+export async function getPublicFormTemplates(): Promise<Result<import('./types').FormTemplateWithCounts[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_templates')
+    .select('*, form_questions(count), form_submissions(count)')
+    .eq('status', 'published')
+    .order('created_at', { ascending: true })
+  return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormTemplateWithCounts[])
+}
+
 export async function getFormTemplateById(id: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_templates').select('*').eq('id', id).maybeSingle()
