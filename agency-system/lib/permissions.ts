@@ -107,3 +107,63 @@ export function permissionName(key: string): string {
 export function permissionCategories(): string[] {
   return [...new Set(PERMISSIONS.map((p) => p.category))]
 }
+
+// ── Category presentation for the role editor ────────────────────────────────
+// The `permissions` table stores category slugs in lowercase (e.g. 'access-control').
+// The admin UI groups checkboxes by category and shows these friendly labels so a
+// non-technical Admin never sees raw slugs or permission keys.
+export const CATEGORY_LABELS: Record<string, string> = {
+  general: 'Workspace',
+  projects: 'Projects',
+  clients: 'Clients',
+  tasks: 'Tasks',
+  files: 'Files',
+  submissions: 'Submissions',
+  forms: 'Forms',
+  portfolio: 'Portfolio',
+  employees: 'Team',
+  'access-control': 'Roles & Permissions',
+  settings: 'Settings',
+  reports: 'Reports',
+  notifications: 'Notifications',
+  admin: 'System',
+  portal: 'Client Portal',
+}
+
+// Display order for the grouped checkbox grid. Categories missing from this list
+// are appended alphabetically afterwards, so new catalog rows still show up.
+export const CATEGORY_ORDER: string[] = [
+  'general',
+  'submissions',
+  'forms',
+  'projects',
+  'clients',
+  'tasks',
+  'files',
+  'portfolio',
+  'employees',
+  'access-control',
+  'reports',
+  'notifications',
+  'settings',
+  'admin',
+  'portal',
+]
+
+export function categorySlug(category: string): string {
+  return category.trim().toLowerCase()
+}
+
+export function categoryLabel(category: string): string {
+  const slug = categorySlug(category)
+  return CATEGORY_LABELS[slug] || category.replace(/[-_]+/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase())
+}
+
+export function compareCategories(a: string, b: string): number {
+  const ia = CATEGORY_ORDER.indexOf(categorySlug(a))
+  const ib = CATEGORY_ORDER.indexOf(categorySlug(b))
+  if (ia !== -1 && ib !== -1) return ia - ib
+  if (ia !== -1) return -1
+  if (ib !== -1) return 1
+  return categoryLabel(a).localeCompare(categoryLabel(b))
+}

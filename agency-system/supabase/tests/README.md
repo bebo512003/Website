@@ -57,6 +57,16 @@ Covered guarantees:
   (including gaining the ability to delete a project).
 - Guard rails: users without `role.create` / `role.assign_permissions` / `employee.manage`
   are rejected by the RPCs.
+- **Checkbox UI contract** — the exact sequence the "Roles & permissions" admin UI
+  performs, logged in as different roles:
+  - `list_permissions()` (the checkbox catalog) returns every group the UI renders.
+  - Saving a checked set writes exactly those rows to `role_permissions` — checkbox
+    state equals database state, nothing more, nothing left over on re-save.
+  - Checking a box changes REAL access (the employee can suddenly create forms /
+    portfolio projects through RLS); unchecking revokes it immediately without
+    re-login; unchecked boxes keep denying the action at the database.
+  - Manager/Employee attempts to toggle checkboxes are rejected by the RPC guards and
+    leave the stored permission set untouched.
 
 Every check runs under `SET ROLE authenticated` / `SET ROLE anon` with a simulated JWT
 uid, so RLS is genuinely enforced by PostgreSQL.
