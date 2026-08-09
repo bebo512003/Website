@@ -11,7 +11,7 @@ import {
 } from '@/lib/supabase/database'
 import type { FormQuestion, FormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
-import { isAnswerEmpty, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
+import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
 import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
 
 // ── Public dynamic form page ─────────────────────────────────────────────────
@@ -121,6 +121,9 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const validate = (): boolean => {
     const nextErrors: Record<string, string> = {}
     for (const question of questions) {
+      // Skip questions hidden by an unmet show-if rule — they aren't required
+      // and won't be stored, mirroring the server-side submit logic.
+      if (!isQuestionVisible(question, values)) continue
       const value = values[question.id]
       if (question.required && isAnswerEmpty(value)) nextErrors[question.id] = i18n.requiredQuestion
       else if (question.question_type === 'number' && !isAnswerEmpty(value) && typeof value === 'string' && Number.isNaN(Number(value))) nextErrors[question.id] = i18n.badNumber
