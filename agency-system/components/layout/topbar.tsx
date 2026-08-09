@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { Bell, Home, LogOut, Moon, Search, Sun } from 'lucide-react'
+import { Bell, Home, LogOut, Moon, Search, Sun, User } from 'lucide-react'
 import { useTheme } from '@/contexts/theme-context'
 import { useAuth } from '@/contexts/auth-context'
 import { getNotifications } from '@/lib/supabase/database'
