@@ -83,7 +83,7 @@ export const ROUTE_PERMISSIONS: { prefix: string; permission: string; exact?: bo
   { prefix: '/settings', permission: 'settings.view' },
   { prefix: '/ai-assistant', permission: 'workspace.access' },
   { prefix: '/templates', permission: 'workspace.access' },
-  { prefix: '/', permission: 'dashboard.view', exact: true },
+  { prefix: '/dashboard', permission: 'dashboard.view', exact: true },
 ]
 
 export function permissionRequiredForPath(pathname: string): string | null {
