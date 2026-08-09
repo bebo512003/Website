@@ -14,7 +14,6 @@ import {
   Lock,
   LogIn,
   Menu,
-  Plus,
   Sparkles,
   X,
   Zap,
@@ -25,7 +24,7 @@ import { PortfolioProjectCard } from '@/components/portfolio/portfolio-project-c
 
 // ── Client Landing Page ──────────────────────────────────────────────────────
 // The first page every visitor sees. Three public paths are surfaced clearly:
-//   1. Landing → New Project (/intake) → Available Forms
+//   1. Landing → Request a Project (/forms) → Available Forms → Select Form → Submit
 //   2. Landing → Portfolio (/portfolio) → Project Details (/portfolio/<slug>)
 //   3. Landing → Login (/auth)
 // No authentication is required to start any of the first two flows.
@@ -55,15 +54,15 @@ const SERVICES = [
 const STEPS = [
   {
     n: '01',
-    title: 'Start a new project',
-    description: 'Tell us about your brand and what you are building. Takes only a few minutes.',
-    cta: { label: 'Begin a request', href: '/intake' },
+    title: 'Pick a form',
+    description: 'Select the form that best describes what you need. No account needed.',
+    cta: { label: 'See available forms', href: '/forms' },
   },
   {
     n: '02',
-    title: 'Pick a form',
-    description: 'Continue with the structured form that matches your service. No account needed.',
-    cta: { label: 'See available forms', href: '#available-forms' },
+    title: 'Fill it out',
+    description: 'Complete the structured questions. Takes only a few minutes.',
+    cta: { label: 'Open the forms', href: '/forms' },
   },
   {
     n: '03',
@@ -126,13 +125,13 @@ export function ClientLandingPage() {
             <a href="#services" className="text-xs text-text-secondary transition hover:text-fg">Services</a>
             <a href="#how" className="text-xs text-text-secondary transition hover:text-fg">How it works</a>
             <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
-            <a href="#available-forms" className="text-xs text-text-secondary transition hover:text-fg">Available forms</a>
+            <Link href="/forms" className="text-xs text-text-secondary transition hover:text-fg">Available forms</Link>
           </nav>
           <div className="hidden items-center gap-2 md:flex">
             <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
               <LogIn className="h-3.5 w-3.5" /> Sign in
             </Link>
-            <Link href="/intake" className="inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-3.5 py-2 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
+            <Link href="/forms" className="inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-3.5 py-2 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
               Start a project <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
@@ -152,13 +151,13 @@ export function ClientLandingPage() {
               <a href="#services" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Services</a>
               <a href="#how" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">How it works</a>
               <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
-              <a href="#available-forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Available forms</a>
+              <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Available forms</Link>
             </div>
             <div className="mt-3 grid gap-2 border-t border-border pt-3">
               <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
                 <LogIn className="h-4 w-4" /> Sign in
               </Link>
-              <Link href="/intake" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
+              <Link href="/forms" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
                 Start a project <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
@@ -184,8 +183,8 @@ export function ClientLandingPage() {
               Start a new project, explore our portfolio, or sign in to your workspace.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
-              <Link href="/intake" className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:brightness-110">
-                <Sparkles className="h-4 w-4" /> Start a new project
+              <Link href="/forms" className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:brightness-110">
+                <Sparkles className="h-4 w-4" /> Request a New Project
               </Link>
               <Link href="/portfolio" className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-5 py-3 text-sm font-semibold text-fg transition hover:border-line-light">
                 <Layers3 className="h-4 w-4" /> View our portfolio
@@ -217,7 +216,7 @@ export function ClientLandingPage() {
             <p className="mt-2 text-sm text-text-secondary">No account required for the first two. Sign in only when you need workspace access.</p>
             <ol className="mt-6 grid gap-3">
               {[
-                { label: 'Begin a new project', href: '/intake', accent: true },
+                { label: 'Request a New Project', href: '/forms', accent: true },
                 { label: 'Browse our portfolio', href: '/portfolio' },
                 { label: 'Sign in to your account', href: '/auth' },
               ].map((item) => (
@@ -258,7 +257,7 @@ export function ClientLandingPage() {
                 </span>
                 <h3 className="text-lg font-semibold text-fg">{service.name}</h3>
                 <p className="text-sm leading-6 text-text-secondary">{service.description}</p>
-                <Link href="/intake" className="mt-auto inline-flex items-center gap-1 text-xs font-semibold text-accent transition hover:brightness-110">
+                <Link href="/forms" className="mt-auto inline-flex items-center gap-1 text-xs font-semibold text-accent transition hover:brightness-110">
                   Request {service.name.toLowerCase()} <ArrowUpRight className="h-3.5 w-3.5" />
                 </Link>
               </article>
@@ -356,10 +355,10 @@ export function ClientLandingPage() {
               </div>
               <h3 className="text-base font-semibold text-fg">No published projects yet</h3>
               <p className="mx-auto mt-2 max-w-md text-sm text-text-secondary">
-                Our portfolio is being curated. In the meantime, you can still start a new project and we will share relevant work privately.
+                Our portfolio is being curated. In the meantime, you can still request a new project and we will share relevant work privately.
               </p>
-              <Link href="/intake" className="mt-5 inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
-                <Sparkles className="h-4 w-4" /> Start a project <ArrowRight className="h-4 w-4" />
+              <Link href="/forms" className="mt-5 inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
+                <Sparkles className="h-4 w-4" /> Request a New Project <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
           )}
@@ -377,8 +376,8 @@ export function ClientLandingPage() {
                 Each form below is a structured way to share what you need. Pick one — no account required.
               </p>
             </div>
-            <Link href="/intake" className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110">
-              <Plus className="h-4 w-4" /> Start a new project
+            <Link href="/forms" className="inline-flex shrink-0 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110">
+              <Sparkles className="h-4 w-4" /> Request a New Project
             </Link>
           </div>
 
@@ -393,11 +392,16 @@ export function ClientLandingPage() {
               </div>
               <h3 className="text-base font-semibold text-fg">No published forms yet</h3>
               <p className="mx-auto mt-2 max-w-md text-sm text-text-secondary">
-                Our team hasn&apos;t published any structured forms right now. You can still begin with the project intake and we will follow up.
+                Our team hasn&apos;t published any structured forms right now. Check back soon — or browse our portfolio while you wait.
               </p>
-              <Link href="/intake" className="mt-5 inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
-                <Sparkles className="h-4 w-4" /> Open the project intake
-              </Link>
+              <div className="mt-5 flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+                <Link href="/portfolio" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface-raised px-4 py-2.5 text-sm font-medium text-fg transition hover:border-line-light">
+                  <Layers3 className="h-4 w-4" /> Browse portfolio
+                </Link>
+                <Link href="/" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary transition hover:border-line-light">
+                  <ArrowRight className="h-4 w-4" /> Back to home
+                </Link>
+              </div>
             </div>
           ) : (
             <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -428,12 +432,12 @@ export function ClientLandingPage() {
             <p className="font-mono-tech text-[10px] opacity-60">05 / READY WHEN YOU ARE</p>
             <h2 className="mt-4 max-w-3xl font-display text-6xl leading-[0.85] sm:text-8xl">Let&apos;s begin.</h2>
             <p className="mt-4 max-w-xl text-sm leading-7 opacity-80 sm:text-base">
-              Pick the path that fits — start a new project, browse the portfolio, or sign in to your account.
+              Pick the path that fits — request a new project, browse the portfolio, or sign in to your account.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-            <Link href="/intake" className="inline-flex items-center justify-center gap-2 rounded-md border border-black/30 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/80">
-              <Sparkles className="h-4 w-4" /> Start a new project <ArrowRight className="h-4 w-4" />
+            <Link href="/forms" className="inline-flex items-center justify-center gap-2 rounded-md border border-black/30 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/80">
+              <Sparkles className="h-4 w-4" /> Request a New Project <ArrowRight className="h-4 w-4" />
             </Link>
             <Link href="/portfolio" className="inline-flex items-center justify-center gap-2 rounded-md border border-black/30 bg-transparent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:bg-black/10">
               <Layers3 className="h-4 w-4" /> View portfolio
@@ -456,8 +460,7 @@ export function ClientLandingPage() {
           </div>
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
             <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
-            <a href="#available-forms" className="hover:text-fg">Available forms</a>
-            <Link href="/intake" className="hover:text-fg">Start a project</Link>
+            <Link href="/forms" className="hover:text-fg">Request a project</Link>
             <Link href="/auth" className="hover:text-fg">Sign in</Link>
           </nav>
           <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>

@@ -74,9 +74,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { accent } = useAccent()
   const { user, profile, isClient, isDeactivated, isAnonymous, loading, can, permissionsLoaded } = useAuth()
   const isAuthPage = pathname === '/auth'
-  const isIntakePage = pathname === '/intake'
   // Published dynamic forms are public respondent pages (/f/<slug>).
   const isPublicFormPage = pathname.startsWith('/f/')
+  // The public forms listing page (/forms) is for selecting and requesting projects.
+  const isFormsPage = pathname === '/forms'
   // The company portfolio is intentionally outside the authenticated staff shell.
   const isPortfolioPage = pathname === '/portfolio' || pathname.startsWith('/portfolio/')
   const isPortalPage = pathname === '/portal'
@@ -84,10 +85,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // dashboard so the landing stays client-focused for visitors.
   const isLandingPage = pathname === '/'
   const isStaffDashboard = pathname === '/dashboard'
-  // The client landing page, public portfolio, public forms, intake, and the
-  // auth screen are the only publicly reachable pages. Everything else sits
+  // The client landing page, public portfolio, public forms listing, public forms,
+  // and the auth screen are the only publicly reachable pages. Everything else sits
   // behind the staff shell.
-  const isPublicPage = isLandingPage || isAuthPage || isIntakePage || isPublicFormPage || isPortfolioPage
+  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage
 
   useEffect(() => {
     if (loading) return
@@ -108,14 +109,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isIntakePage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage) {
+    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
     if (!isClient && isPortalPage) router.replace('/dashboard')
-  }, [isAuthPage, isClient, isIntakePage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isStaffDashboard, loading, profile, router, user])
+  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isStaffDashboard, loading, profile, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -124,7 +125,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Public pages render without the workspace shell.
   if (isAuthPage) return <div style={style}>{children}</div>
-  if (isIntakePage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}>{children}</div>
+  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}>{children}</div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 
