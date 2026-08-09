@@ -1,31 +1,17 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { usePathname, useRouter } from 'next/navigation'
-import { Bell, Home, LogOut, Moon, Search, Sun, User } from 'lucide-react'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { Home, LogOut, Moon, Search, Sun, User } from 'lucide-react'
 import { useTheme } from '@/contexts/theme-context'
 import { useAuth } from '@/contexts/auth-context'
-import { getNotifications } from '@/lib/supabase/database'
+import { NotificationDropdown } from './notification-dropdown'
 
 export function TopBar() {
   const router = useRouter()
-  const pathname = usePathname()
   const { theme, toggleTheme } = useTheme()
   const { profile, signOut } = useAuth()
   const [query, setQuery] = useState('')
-  const [unread, setUnread] = useState(0)
-
-  useEffect(() => {
-    let active = true
-    const refresh = async () => {
-      const result = await getNotifications(50)
-      if (active && !result.error) setUnread(result.data.filter((notification) => !notification.read_at).length)
-    }
-    void refresh()
-    const timer = window.setInterval(refresh, 30_000)
-    window.addEventListener('agency-notifications-changed', refresh)
-    return () => { active = false; window.clearInterval(timer); window.removeEventListener('agency-notifications-changed', refresh) }
-  }, [pathname])
 
   const submitSearch = (event: React.FormEvent) => {
     event.preventDefault()
@@ -47,7 +33,7 @@ export function TopBar() {
       </form>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        <button type="button" onClick={() => router.push('/notifications')} className="relative rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:text-fg" aria-label={`Open notifications${unread ? `, ${unread} unread` : ''}`}><Bell className="h-4 w-4" />{unread > 0 && <span className="absolute -right-1.5 -top-1.5 min-w-4 rounded-full bg-accent px-1 text-center text-[9px] font-bold leading-4 text-accent-foreground">{unread > 99 ? '99+' : unread}</span>}</button>
+        <NotificationDropdown />
         <button type="button" onClick={toggleTheme} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:text-fg" aria-label="Toggle color theme">{theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
         <div className="mx-1 hidden h-7 w-px bg-border sm:block" />
         <div className="hidden text-right sm:block"><div className="max-w-40 truncate text-xs font-semibold text-fg">{profile?.full_name || profile?.email}</div><div className="mt-0.5 font-mono-tech text-[8px] text-text-tertiary">{profile?.role || 'employee'}</div></div>

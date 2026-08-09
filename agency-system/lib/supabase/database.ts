@@ -523,7 +523,7 @@ export async function deleteFile(file: Pick<FileItem, 'id' | 'storage_path'>): P
   return error ? fail(false, error.message) : ok(true)
 }
 
-export async function getNotifications(limit = 50): Promise<Result<Notification[]>> {
+export async function getNotifications(limit = 100): Promise<Result<Notification[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(limit)
   return error ? fail([], error.message) : ok(data || [])
@@ -532,6 +532,12 @@ export async function getNotifications(limit = 50): Promise<Result<Notification[
 export async function markNotificationRead(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function markNotificationUnread(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('notifications').update({ read_at: null }).eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
 
@@ -545,6 +551,21 @@ export async function deleteNotification(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('notifications').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
+}
+
+export async function deleteAllReadNotifications(): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('notifications').delete().not('read_at', 'is', null)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function getUnreadNotificationCount(): Promise<Result<number>> {
+  if (!supabase) return fail(0)
+  const { count, error } = await supabase
+    .from('notifications')
+    .select('*', { count: 'exact', head: true })
+    .is('read_at', null)
+  return error ? fail(0, error.message) : ok(count || 0)
 }
 
 export async function createIntakeForm(form: import('./types').IntakeFormInsert): Promise<Result<import('./types').IntakeForm | null>> {
