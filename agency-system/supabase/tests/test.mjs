@@ -10,7 +10,7 @@ const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;
 
 // Upgrade path: every migration before the one under test reproduces the
 // previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260811000000'
+const MIGRATION_UNDER_TEST = '20260813000000'
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
 const priorMigrations = migrationFiles.filter((file) => !file.startsWith(MIGRATION_UNDER_TEST)).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
 const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))), 'utf8'))
@@ -451,13 +451,86 @@ async function runDynamicFormSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runTeamDirectorySuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+  // Client account created by the sign-up routing suite above.
+  const dina = (await db.query(`select id from public.profiles where email = 'dina@newco.test' and role = 'client'`)).rows[0]?.id
+  if (!dina) throw new Error('team suite precondition failed: no client profile found')
+
+  // ── Admin creates team members (always internal users, never clients) ───
+  await asUser(db, alice)
+  const grace = (await db.query(
+    `select * from public.admin_create_team_member('grace@agency.test', 'Grace Designer', p_job_title := 'Senior Designer', p_department := 'Design', p_specialization := 'Brand Identity', p_bio := 'Leads brand identity work')`
+  )).rows[0]
+  ok(`${label}: admin creates a team member via Team Management`, grace?.role === 'employee' && grace?.status === 'active' && grace?.job_title === 'Senior Designer' && grace?.department === 'Design')
+
+  const clientRoleId = (await db.query(`select id from public.app_roles where key = 'client'`)).rows[0].id
+  const clientRoleRejected = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('sneaky@agency.test', 'Sneaky', p_role_id := $1)`, [clientRoleId]))
+  ok(`${label}: team member cannot be created with the Client role`, clientRoleRejected)
+
+  const duplicateEmailRejected = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('grace@agency.test', 'Grace Clone')`))
+  ok(`${label}: duplicate team member e-mail is rejected`, duplicateEmailRejected)
+
+  // Only employee.manage/admin.manage may manage team members.
+  await asUser(db, erin)
+  const managerCreateFails = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('hank@agency.test', 'Hank')`))
+  ok(`${label}: manager cannot create team members (no employee.manage)`, managerCreateFails)
+  await asUser(db, bob)
+  const employeeCreateFails = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('ivy@agency.test', 'Ivy')`))
+  ok(`${label}: employee cannot create team members`, employeeCreateFails)
+
+  // ── Directory contents: internal members only, clients never appear ──────
+  await asUser(db, bob)
+  ok(`${label}: employee has employee.view (team directory permission)`, (await scalar(db, `select public.has_permission('employee.view') v`)).v === true)
+  const directory = (await db.query(`select id, role, status from public.profiles where role <> 'client'`)).rows
+  ok(`${label}: employee sees the internal team in the directory`, directory.length >= 5, `${directory.length} members`)
+  ok(`${label}: client accounts never appear in the team directory`, !directory.some((r) => r.role === 'client' || r.id === dina))
+
+  await asUser(db, dina)
+  ok(`${label}: client cannot browse the team directory (sees only own profile)`, (await scalar(db, 'select count(*)::int n from public.profiles')).n === 1)
+  ok(`${label}: client lacks employee.view`, (await scalar(db, `select public.has_permission('employee.view') v`)).v === false)
+
+  // ── Inactive members are flagged and lose access — never shown as active ─
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [grace.id])
+  await asUser(db, bob)
+  const graceRow = (await db.query('select status from public.profiles where id = $1', [grace.id])).rows[0]
+  ok(`${label}: deactivated member stays flagged inactive in the directory`, graceRow?.status === 'inactive')
+
+  await asUser(db, grace.id)
+  ok(`${label}: inactive member loses employee.view themselves`, (await scalar(db, `select public.has_permission('employee.view') v`)).v === false)
+  ok(`${label}: inactive member loses workspace access`, (await scalar(db, `select public.has_permission('workspace.access') v`)).v === false)
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [grace.id])
+  await asUser(db, grace.id)
+  ok(`${label}: reactivated member regains directory access`, (await scalar(db, `select public.has_permission('employee.view') v`)).v === true)
+
+  // ── Management guards ────────────────────────────────────────────────────
+  await asUser(db, erin)
+  const managerUpdateFails = await expectError(db, () => db.query(`select public.admin_update_team_member($1, p_job_title := 'Hacked')`, [grace.id]))
+  ok(`${label}: manager cannot edit team members via admin RPC`, managerUpdateFails)
+  const managerDeleteFails = await expectError(db, () => db.query(`select public.admin_delete_team_member($1)`, [grace.id]))
+  ok(`${label}: manager cannot delete team members via admin RPC`, managerDeleteFails)
+  await asUser(db, alice)
+  const deleteClientFails = await expectError(db, () => db.query(`select public.admin_delete_team_member($1)`, [dina]))
+  ok(`${label}: team management cannot delete client accounts`, deleteClientFails)
+
+  await superUser(db)
+}
+
 async function main() {
-  console.log('=== Path A: prior migrations + dynamic-form-builder migration (upgrade path) ===')
+  console.log('=== Path A: prior migrations + team-management migration (upgrade path) ===')
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
   await runPermissionSuite(dbA, idsA, 'upgrade')
   await runDynamicFormSuite(dbA, idsA, 'upgrade')
+  await runTeamDirectorySuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')

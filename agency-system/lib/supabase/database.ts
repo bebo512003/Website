@@ -559,6 +559,23 @@ export async function getTeamMembers(): Promise<Result<Profile[]>> {
   return error ? fail([], error.message) : ok((data as Profile[]) || [])
 }
 
+/**
+ * Single member lookup for the Team Directory profile page.
+ * RLS already scopes reads, but we additionally refuse to resolve client
+ * accounts through the team directory — clients must never surface here.
+ */
+export async function getTeamMemberById(id: string): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', id)
+    .maybeSingle()
+  if (error) return fail(null, error.message)
+  if (data && data.role === 'client') return ok(null)
+  return ok(data)
+}
+
 export async function createTeamMember(payload: TeamMemberPayload): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   // Prefer RPC admin_create_team_member if available (handles permissions & role validation)

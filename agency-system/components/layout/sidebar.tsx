@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, Zap } from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/auth-context'
 
@@ -18,6 +18,7 @@ export function Sidebar() {
     { title: 'Forms', href: '/forms', icon: ClipboardList, permission: 'submission.view' },
     { title: 'Tasks', href: '/tasks', icon: CheckSquare, permission: 'task.view' },
     { title: 'Clients', href: '/clients', icon: Users, permission: 'client.view' },
+    { title: 'Team', href: '/team', icon: UsersRound, permission: 'employee.view' },
     { title: 'Files', href: '/files', icon: FileText, permission: 'file.view' },
     { title: 'Notifications', href: '/notifications', icon: Bell, permission: 'notification.view' },
     { title: 'Reports', href: '/reports', icon: BarChart3, permission: 'report.view' },
@@ -25,7 +26,7 @@ export function Sidebar() {
     { title: 'Settings', href: '/settings', icon: Settings, permission: 'settings.view' },
   ].filter((item) => can(item.permission))
   const isActive = (href: string) => href === '/' ? pathname === '/' : pathname.startsWith(href)
-  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/notifications', '/admin', '/settings'].includes(item.href))
+  const mobileItems = navItems.filter((item) => ['/', '/projects', '/forms', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
 
   return (
     <>
