@@ -1,6 +1,13 @@
 # Architecture review & evolution plan
 
-Prepared 2026-08-09. Analysis only — no behavior changes.
+Prepared 2026-08-09. Historical review; later migrations override parts of this plan.
+
+> **2026-08-09 — authentication decision completed:** migration
+> `20260815000000_admin_only_account_creation.sql` removes public permanent-account
+> creation. Public forms continue through anonymous Auth and create CRM client records only.
+> Internal users are provisioned by an Admin through Team Management using a protected
+> server Route Handler; an `auth.users` trigger rejects direct sign-up and anonymous-account
+> conversion. The legacy client role remains intact for existing accounts.
 
 > **2026-08-09 — implementation status:** Phase B (roles & permissions → admin-managed
 > `employee_roles`) and the client separation parts of Phase C are **done** via migration
@@ -45,14 +52,16 @@ Prepared 2026-08-09. Analysis only — no behavior changes.
 ## 1. Current architecture
 
 **Stack:** Next.js 16 (App Router, all pages are client components), React 19, TypeScript,
-Tailwind 4, Supabase (Auth + Postgres + Storage) via the browser-only `@supabase/supabase-js`
-client. There is no server-side Supabase usage and no `service_role` key anywhere.
+Tailwind 4 and Supabase (Auth + Postgres + Storage). Normal data access uses the browser
+client. Admin account provisioning additionally uses one server-only Route Handler and a
+`SUPABASE_SERVICE_ROLE_KEY` that is never exposed to browser code.
 
 **Layers:**
 
 - `lib/supabase/client.ts` — singleton browser client from `NEXT_PUBLIC_` env vars.
 - `lib/supabase/types.ts` — hand-written `Database` types (mirrors SQL schema).
-- `lib/supabase/auth.ts` — sign-up/sign-in/anonymous/reset/profile helpers.
+- `lib/supabase/auth.ts` — sign-in/anonymous/reset/profile helpers (no public sign-up helper).
+- `app/api/admin/team-members/route.ts` — Admin-only server provisioning of Auth users.
 - `lib/supabase/database.ts` — one async function per table operation, all wrapped in
   `Result<{ data, error }>`. This is the single data-access layer; extend it, don't bypass it.
 - `contexts/auth-context.tsx` — session + `profile` (from `public.profiles`), exposes
@@ -97,9 +106,10 @@ Two different creations happen, and neither creates a staff account:
      (Logo only / VI only / Logo+VI combined / Company Profile always separate);
    - writes `intake_projects` links and marks the intake `submitted`.
 
-Staff users are created **only** by email/password sign-up at `/auth`: `handle_new_user`
-inserts a `profiles` row — the first real account in an empty workspace becomes `admin`
-(advisory-lock protected), every later one becomes `employee`.
+Staff users are created **only** by an authorized Admin from Team Management. The server
+creates the Auth user with trusted app metadata after the permission-checked profile step;
+`handle_new_user` links both records. The public `/auth` page only supports login and password
+recovery. A one-time server-side bootstrap creates the first Admin in an empty workspace.
 
 ## 4. Roles & authentication flow
 
@@ -112,8 +122,9 @@ inserts a `profiles` row — the first real account in an empty workspace become
   `can_access_entity(text, uuid)`.
 - Employee horizon is defined solely by `project_members` rows (admin assigns in `/admin` →
   Assignments). Managers/Admins see everything (same read access; only admins change roles).
-- `/auth` has a gate: "team member" (sign-in form) vs "new client" (→ `/intake` anonymous
-  flow). Anonymous sessions are blocked from the workspace by `AppShell`.
+- `/auth` exposes only e-mail, password, Login, and Forgot Password. Public forms remain
+  directly accessible without a permanent account. Anonymous sessions are blocked from the
+  workspace by `AppShell`.
 
 ## 5. Forms & submissions today
 
@@ -212,9 +223,8 @@ and after submit nothing freezes the row server-side (RLS still lets the owner u
 
 ## 9. Open decisions to confirm
 
-1. Do clients get **login accounts/portal**, or stay CRM records only? (Plan supports both;
-   Phase C is skippable without breaking the rest.)
+1. **Resolved:** public clients stay CRM records only and submit forms without accounts. Existing legacy client-role accounts remain supported.
 2. Employee roles: labels only, or full granular permission matrix from day one?
 3. Migrate historical `intake_forms` into the new tables, or leave them read-only/legacy?
 4. Should submitted forms be strictly frozen, or do we need post-submit amendments with audit?
-5. Employee onboarding stays open sign-up, or moves to admin invites (affects bootstrap login)?
+5. **Resolved:** no open sign-up; Admin Team Management provisions all internal accounts after one-time bootstrap.

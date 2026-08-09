@@ -14,18 +14,18 @@ What it does:
 
 1. Stubs the Supabase-only pieces (`auth.users`, `auth.uid()`, `storage.*`) and the
    `anon` / `authenticated` roles, with the same default grants Supabase applies.
-2. **Upgrade path** — applies every migration before the user-architecture migration
-   (reproducing a pre-change production database), applies the new migration exactly
-   like Supabase would (the enum `ALTER TYPE` autocommits outside the transaction),
-   then runs the assertion suite.
+2. **Upgrade path** — applies every migration before the Admin-only account-creation
+   migration, applies that migration exactly like Supabase would, then runs the
+   assertion suite.
 3. **Fresh-install path** — applies the full `supabase/schema.sql` and re-checks the
    core guarantees.
 
-Covered guarantees (125 checks):
+Covered guarantees:
 
-- First real account becomes bootstrap Admin; anonymous visitors never get profiles.
-- A form submitter who signs up with the same e-mail becomes a **client** linked to
-  their CRM record — never an employee. Unmatched staff sign-ups still become employees.
+- The first trusted server-provisioned account becomes bootstrap Admin; anonymous visitors never get profiles.
+- Public Auth sign-up and anonymous-to-permanent conversion are rejected by the database.
+- A form submitter remains a CRM client without an Auth account and can still submit anonymously.
+- Admin Team Management placeholders are claimed by trusted Auth Admin provisioning, producing a real employee login-linked profile.
 - Clients: no projects/tasks/notifications, staff-directory hidden, cannot modify other
   submissions, cannot be assigned to projects (blocked at the database, not only the UI),
   see only their own linked submissions.
