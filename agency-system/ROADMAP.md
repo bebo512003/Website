@@ -12,6 +12,8 @@
 - Private project file storage
 - Responsive navigation and explicit empty/loading/error states
 - Dynamic admin-managed form builder (templates, questions, options, publish/archive, public /f/<slug> rendering, per-question answer snapshots, public submissions with client automation)
+- Team Management (admin-created internal members with extended profiles, job/department/specialization fields, avatar storage, placeholder-claim sign-up merge)
+- Team Directory (permission-guarded /team page with member cards, full member profiles, search + role/department/status filters; clients excluded, inactive members hidden from regular staff)
 
 ## Next priorities
 

@@ -70,6 +70,7 @@ export const PERMISSIONS: PermissionDef[] = [
 // rules at the database layer.
 export const ROUTE_PERMISSIONS: { prefix: string; permission: string; exact?: boolean }[] = [
   { prefix: '/admin', permission: 'admin.manage' },
+  { prefix: '/team', permission: 'employee.view' },
   { prefix: '/projects', permission: 'project.view' },
   { prefix: '/clients', permission: 'client.view' },
   { prefix: '/tasks', permission: 'task.view' },
