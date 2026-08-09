@@ -41,6 +41,7 @@ create table storage.objects (
   owner_id text,
   created_at timestamptz not null default now()
 );
+alter table storage.objects enable row level security;
 create or replace function storage.foldername(name text) returns text[]
 language sql immutable as $$ select (string_to_array(name, '/'))[1:cardinality(string_to_array(name, '/')) - 1] $$;
 
@@ -523,6 +524,43 @@ async function runTeamDirectorySuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runPortfolioSuite(db, ids, label) {
+  const { anonVisitor, alice, bob } = ids
+
+  await asUser(db, alice)
+  const category = (await db.query(`select id from public.portfolio_categories where slug = 'branding'`)).rows[0]
+  const draft = (await db.query(`insert into public.portfolio_projects (title, slug, category_id, services) values ('Private Draft', 'private-draft', $1, array['Brand strategy']) returning id`, [category.id])).rows[0]
+  await db.query(`insert into public.portfolio_project_images (project_id, storage_path, uploaded_by) values ($1, 'draft-image/draft.png', $2)`, [draft.id, alice])
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('portfolio-images', 'draft-image/draft.png', $1)`, [alice])
+
+  // Staff without the portfolio permission cannot browse or mutate the separate system.
+  await asUser(db, bob)
+  ok(`${label}: employee cannot read an unpublished portfolio project`, (await scalar(db, 'select count(*)::int n from public.portfolio_projects')).n === 0)
+  const employeePublishResult = await db.query(`update public.portfolio_projects set published = true where id = $1 returning id`, [draft.id]).catch(() => ({ rows: [] }))
+  ok(`${label}: employee cannot publish portfolio content`, employeePublishResult.rows.length === 0)
+
+  // Anonymous visitors see neither the draft row nor its private image object.
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: anonymous visitor cannot read an unpublished project`, (await scalar(db, 'select count(*)::int n from public.get_public_portfolio_projects()')).n === 0)
+  ok(`${label}: anonymous visitor cannot read an unpublished image through the public API`, (await scalar(db, `select coalesce(sum(jsonb_array_length(images)), 0)::int n from public.get_public_portfolio_projects()`)).n === 0)
+  ok(`${label}: anonymous visitor cannot read an unpublished storage object`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
+
+  await asUser(db, alice)
+  await db.query(`update public.portfolio_projects set published = true where id = $1`, [draft.id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: published portfolio project is publicly readable`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_projects() where slug = 'private-draft'`)).n === 1)
+  ok(`${label}: public project details resolve by slug`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_project('private-draft')`)).n === 1)
+  ok(`${label}: published portfolio image is publicly readable through the narrow API`, (await scalar(db, `select coalesce(sum(jsonb_array_length(images)), 0)::int n from public.get_public_portfolio_projects()`)).n === 1)
+  ok(`${label}: published portfolio image storage object is readable`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 1)
+
+  await asUser(db, alice)
+  await db.query(`update public.portfolio_projects set published = false, archived = true where id = $1`, [draft.id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: archived portfolio project disappears from public view`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_projects()`)).n === 0)
+  ok(`${label}: archived portfolio image disappears from public storage`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
+  await superUser(db)
+}
+
 async function main() {
   console.log('=== Path A: prior migrations + team-management migration (upgrade path) ===')
   const dbA = await makeDb()
@@ -531,6 +569,7 @@ async function main() {
   await runPermissionSuite(dbA, idsA, 'upgrade')
   await runDynamicFormSuite(dbA, idsA, 'upgrade')
   await runTeamDirectorySuite(dbA, idsA, 'upgrade')
+  await runPortfolioSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')

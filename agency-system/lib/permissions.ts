@@ -44,6 +44,8 @@ export const PERMISSIONS: PermissionDef[] = [
 
   { key: 'form.manage', name: 'Manage forms', category: 'Forms', description: 'Create, edit, publish, duplicate, archive and delete dynamic forms and their questions.' },
 
+  { key: 'portfolio.manage', name: 'Manage portfolio', category: 'Portfolio', description: 'Create, edit, reorder, publish, archive, and delete public portfolio projects and images.' },
+
   { key: 'employee.view', name: 'View employees', category: 'Employees', description: 'View the team member directory.' },
   { key: 'employee.edit', name: 'Edit employees', category: 'Employees', description: 'Edit team member details.' },
   { key: 'employee.delete', name: 'Delete employees', category: 'Employees', description: 'Remove team members.' },

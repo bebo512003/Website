@@ -1,11 +1,12 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Briefcase, ClipboardList, FolderKanban, KeyRound, LoaderCircle, Pencil, Plus, ShieldCheck, Trash2, UserRound, UserCog, Users } from 'lucide-react'
+import { Briefcase, ClipboardList, FolderKanban, ImageIcon, KeyRound, LoaderCircle, Pencil, Plus, ShieldCheck, Trash2, UserRound, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { RolesPermissionsAdmin } from '@/components/admin/roles-permissions'
 import { FormsAdmin } from '@/components/admin/forms-admin'
 import { TeamManagement } from '@/components/admin/team-management'
+import { PortfolioManagement } from '@/components/admin/portfolio-management'
 import {
   addProjectMember,
   createEmployeeRole,
@@ -19,23 +20,14 @@ import {
   getProjects,
   removeProjectMember,
   setProfileClientLink,
-  setProfileEmployeeRole,
-  setProfileRole,
   setProfileStatus,
   updateEmployeeRole,
 } from '@/lib/supabase/database'
-import type { AppRole, Client, EmployeeRole, Profile, ProfileStatus, ProjectMember, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
+import type { Client, EmployeeRole, Profile, ProfileStatus, ProjectMember, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions' | 'forms'
+type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions' | 'forms' | 'portfolio'
 type MemberWithProfile = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
-
-const systemRoles: { value: AppRole; label: string }[] = [
-  { value: 'admin', label: 'Admin' },
-  { value: 'manager', label: 'Manager' },
-  { value: 'employee', label: 'Employee' },
-  { value: 'client', label: 'Client' },
-]
 
 const emptyProjectForm = {
   name: '',
@@ -52,7 +44,7 @@ const slugify = (value: string) =>
   value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `role_${crypto.randomUUID().slice(0, 8)}`
 
 export default function AdminPage() {
-  const { isAdmin, user } = useAuth()
+  const { isAdmin } = useAuth()
   const [tab, setTab] = useState<Tab>('team')
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
@@ -101,7 +93,6 @@ export default function AdminPage() {
   useEffect(() => { void loadMembers() }, [loadMembers])
 
   const memberIds = useMemo(() => new Set(members.map((member) => member.user_id)), [members])
-  const teamProfiles = useMemo(() => profiles.filter((profile) => profile.role !== 'client'), [profiles])
   const clientProfiles = useMemo(() => profiles.filter((profile) => profile.role === 'client'), [profiles])
   const clientNames = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
   const activeAssignableEmployees = useMemo(
@@ -113,17 +104,6 @@ export default function AdminPage() {
     if (updated) setProfiles((items) => items.map((item) => (item.id === fallbackId ? updated : item)))
   }
 
-  const changeRole = async (userId: string, role: AppRole) => {
-    setError('')
-    setMessage('')
-    const result = await setProfileRole(userId, role)
-    if (result.error) setError(result.error)
-    else {
-      applyProfile(result.data, userId)
-      setMessage('Role updated.')
-    }
-  }
-
   const changeStatus = async (userId: string, status: ProfileStatus) => {
     setError('')
     setMessage('')
@@ -132,17 +112,6 @@ export default function AdminPage() {
     else {
       applyProfile(result.data, userId)
       setMessage(status === 'active' ? 'Account activated.' : 'Account deactivated. The user immediately loses workspace access.')
-    }
-  }
-
-  const changeEmployeeRole = async (userId: string, employeeRoleId: string) => {
-    setError('')
-    setMessage('')
-    const result = await setProfileEmployeeRole(userId, employeeRoleId || null)
-    if (result.error) setError(result.error)
-    else {
-      applyProfile(result.data, userId)
-      setMessage('Job role updated.')
     }
   }
 
@@ -270,7 +239,7 @@ export default function AdminPage() {
       />
 
       <div className="flex flex-wrap gap-2">
-        {([['team', Users, 'Team Management'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['forms', ClipboardList, 'Forms'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
+        {([['team', Users, 'Team Management'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['forms', ClipboardList, 'Forms'], ['portfolio', ImageIcon, 'Portfolio Management'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
           <button key={id} onClick={() => setTab(id)} className={tab === id ? primaryButtonClassName : secondaryButtonClassName}><Icon className="h-4 w-4" />{label}</button>
         ))}
       </div>
@@ -282,6 +251,7 @@ export default function AdminPage() {
         <>
           {tab === 'permissions' && <RolesPermissionsAdmin />}
           {tab === 'forms' && <FormsAdmin />}
+          {tab === 'portfolio' && <PortfolioManagement />}
           {tab === 'team' && <TeamManagement />}
 
           {tab === 'roles' && (

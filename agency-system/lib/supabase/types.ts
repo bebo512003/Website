@@ -300,6 +300,68 @@ export type NotificationRow = {
   created_at: string
 }
 
+// ── Public company portfolio ────────────────────────────────────────────────
+// Portfolio records are deliberately separate from the internal `projects`
+// table. Public reads are restricted by RLS to published, non-archived rows.
+export type PortfolioCategoryRow = {
+  id: string
+  name: string
+  slug: string
+  is_active: boolean
+  display_order: number
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type PortfolioProjectRow = {
+  id: string
+  title: string
+  slug: string
+  cover_image_path: string | null
+  description: string | null
+  client_name: string | null
+  category_id: string | null
+  services: string[]
+  project_date: string | null
+  external_url: string | null
+  featured: boolean
+  published: boolean
+  archived: boolean
+  display_order: number
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type PortfolioProjectImageRow = {
+  id: string
+  project_id: string
+  storage_path: string
+  alt_text: string | null
+  display_order: number
+  uploaded_by: string | null
+  created_at: string
+}
+
+export type PortfolioPublicRpcRow = {
+  id: string
+  title: string
+  slug: string
+  cover_image_path: string | null
+  description: string | null
+  client_name: string | null
+  category_id: string | null
+  category_name: string | null
+  category_slug: string | null
+  services: string[]
+  project_date: string | null
+  external_url: string | null
+  featured: boolean
+  display_order: number
+  images: Json
+}
+
 type Relationship = { foreignKeyName: string; columns: string[]; isOneToOne?: boolean; referencedRelation: string; referencedColumns: string[] }
 
 type TableDefinition<Row extends Record<string, unknown>, Insert extends Record<string, unknown>, Update extends Record<string, unknown> = Partial<Insert>, Relationships extends Relationship[] = []> = {
@@ -390,6 +452,23 @@ export interface Database {
         { foreignKeyName: 'notifications_recipient_id_fkey'; columns: ['recipient_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'notifications_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
       ]>
+      portfolio_categories: TableDefinition<PortfolioCategoryRow, {
+        id?: string; name: string; slug: string; is_active?: boolean; display_order?: number; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<PortfolioCategoryRow>, [
+        { foreignKeyName: 'portfolio_categories_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      portfolio_projects: TableDefinition<PortfolioProjectRow, {
+        id?: string; title: string; slug: string; cover_image_path?: string | null; description?: string | null; client_name?: string | null; category_id?: string | null; services?: string[]; project_date?: string | null; external_url?: string | null; featured?: boolean; published?: boolean; archived?: boolean; display_order?: number; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<PortfolioProjectRow>, [
+        { foreignKeyName: 'portfolio_projects_category_id_fkey'; columns: ['category_id']; isOneToOne: false; referencedRelation: 'portfolio_categories'; referencedColumns: ['id'] },
+        { foreignKeyName: 'portfolio_projects_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      portfolio_project_images: TableDefinition<PortfolioProjectImageRow, {
+        id?: string; project_id: string; storage_path: string; alt_text?: string | null; display_order?: number; uploaded_by?: string | null; created_at?: string
+      }, Partial<PortfolioProjectImageRow>, [
+        { foreignKeyName: 'portfolio_project_images_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'portfolio_projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'portfolio_project_images_uploaded_by_fkey'; columns: ['uploaded_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
     }
     Views: { [_ in never]: never }
     Functions: {
@@ -420,6 +499,8 @@ export interface Database {
       set_role_permissions: { Args: { p_role_id: string; p_permission_keys: string[] }; Returns: AppRoleRow }
       assign_user_role: { Args: { p_user_id: string; p_role_id: string }; Returns: ProfileRow }
       add_permission: { Args: { p_key: string; p_name: string; p_category: string; p_description: string }; Returns: PermissionRow }
+      get_public_portfolio_projects: { Args: Record<string, never>; Returns: PortfolioPublicRpcRow[] }
+      get_public_portfolio_project: { Args: { p_slug: string }; Returns: PortfolioPublicRpcRow[] }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -470,6 +551,20 @@ export type Notification = NotificationRow
 export type Permission = PermissionRow
 export type AccessRole = AppRoleRow
 export type RolePermission = RolePermissionRow
+export type PortfolioCategory = PortfolioCategoryRow
+export type PortfolioCategoryInsert = Database['public']['Tables']['portfolio_categories']['Insert']
+export type PortfolioCategoryUpdate = Database['public']['Tables']['portfolio_categories']['Update']
+export type PortfolioProject = PortfolioProjectRow
+export type PortfolioProjectInsert = Database['public']['Tables']['portfolio_projects']['Insert']
+export type PortfolioProjectUpdate = Database['public']['Tables']['portfolio_projects']['Update']
+export type PortfolioProjectImage = PortfolioProjectImageRow
+export type PortfolioProjectImageInsert = Database['public']['Tables']['portfolio_project_images']['Insert']
+
+export type PortfolioImageWithUrl = PortfolioProjectImage & { image_url: string | null }
+export type PortfolioProjectWithRelations = PortfolioProject & {
+  portfolio_categories: Pick<PortfolioCategory, 'id' | 'name' | 'slug' | 'is_active'> | null
+  portfolio_project_images: PortfolioImageWithUrl[]
+}
 
 export type ProjectWithClient = Project & { clients: Pick<Client, 'id' | 'name'> | null }
 export type TaskWithRelations = Task & {
