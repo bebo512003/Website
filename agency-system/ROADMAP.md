@@ -11,6 +11,7 @@
 - Live clients, projects, tasks, files, reports, and notifications
 - Private project file storage
 - Responsive navigation and explicit empty/loading/error states
+- Dynamic admin-managed form builder (templates, questions, options, publish/archive, public /f/<slug> rendering, per-question answer snapshots, public submissions with client automation)
 
 ## Next priorities
 

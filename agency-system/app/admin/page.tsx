@@ -1,9 +1,10 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Briefcase, FolderKanban, KeyRound, LoaderCircle, Pencil, Plus, ShieldCheck, Trash2, UserRound, UserCog, Users } from 'lucide-react'
+import { Briefcase, ClipboardList, FolderKanban, KeyRound, LoaderCircle, Pencil, Plus, ShieldCheck, Trash2, UserRound, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { RolesPermissionsAdmin } from '@/components/admin/roles-permissions'
+import { FormsAdmin } from '@/components/admin/forms-admin'
 import {
   addProjectMember,
   createEmployeeRole,
@@ -25,7 +26,7 @@ import {
 import type { AppRole, Client, EmployeeRole, Profile, ProfileStatus, ProjectMember, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions'
+type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions' | 'forms'
 type MemberWithProfile = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
 
 const systemRoles: { value: AppRole; label: string }[] = [
@@ -268,7 +269,7 @@ export default function AdminPage() {
       />
 
       <div className="flex flex-wrap gap-2">
-        {([['team', Users, 'Team members'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
+        {([['team', Users, 'Team members'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['forms', ClipboardList, 'Forms'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
           <button key={id} onClick={() => setTab(id)} className={tab === id ? primaryButtonClassName : secondaryButtonClassName}><Icon className="h-4 w-4" />{label}</button>
         ))}
       </div>
@@ -279,6 +280,7 @@ export default function AdminPage() {
       {loading ? <Panel><LoadingState label="Loading administration…" /></Panel> : (
         <>
           {tab === 'permissions' && <RolesPermissionsAdmin />}
+          {tab === 'forms' && <FormsAdmin />}
           {tab === 'team' && (
             <Panel title="Team members" description="Staff accounts only. New sign-ups receive Employee access unless their e-mail matches a submitted service request — those become client accounts instead.">
               {teamProfiles.length === 0 ? <EmptyState icon={Users} title="No team members found" description="Authenticated staff accounts will appear here after the database migration has been applied." /> : (

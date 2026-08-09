@@ -14,6 +14,7 @@ The application contains no seeded users or placeholder business records. All da
 - Employee access limited to explicitly assigned projects
 - Clients are never employees: form submitters who sign in get a client account with portal access only
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
+- **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates
 - Private file upload and download through Supabase Storage
@@ -54,6 +55,31 @@ Then start the application:
 ```bash
 npm run dev
 ```
+
+## Dynamic forms (no-code form builder)
+
+Form templates, questions, options, and order live in the database; the frontend renders
+whatever the admin configures — nothing is hardcoded per form.
+
+1. Sign in as an Admin, open **Administration → Forms**, and click **New form**.
+2. In the builder, add questions (short/long text, single & multiple choice, Yes/No,
+   dropdown, number, date, file upload, rating), set required/placeholder/help text,
+   reorder with the arrows, and edit answer options.
+3. Click **Enable form** to publish. Share the public link `/f/<slug>` — respondents do
+   not need an account (Supabase **Anonymous sign-ins** must be enabled, same as `/intake`,
+   for file uploads and submission ownership).
+4. **Responses** arrive in the builder's *Responses* tab with a frozen per-question
+   snapshot. If a question is mapped to a contact field (name/e-mail/phone/company), the
+   submission automatically matches or creates the CRM client record, and optionally opens
+   a project.
+5. Duplicate, disable/enable, archive (keeps history), or delete (only when a form has no
+   responses) from **Administration → Forms** or the builder header.
+
+Managing forms requires the `form.manage` permission (granted to Admin by default;
+grantable to any role from *Roles & permissions*). To add a new question type later:
+allow it in the `form_questions.question_type` CHECK + the `submit_dynamic_form`
+validation, register it in `lib/forms/question-types.ts`, and add a render branch in
+`components/forms/dynamic-form-renderer.tsx`.
 
 ## Validation
 

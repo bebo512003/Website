@@ -388,3 +388,142 @@ export async function uploadIntakeAttachment(intakeId: string, userId: string, f
   if (error) { await supabase.storage.from('intake-files').remove([storagePath]); return fail(null, error.message) }
   return ok(data)
 }
+
+// ── Dynamic form builder ──────────────────────────────────────────────────────
+// Everything below is driven by database configuration: no form or question is
+// ever hardcoded in the frontend.
+
+const slugifyForm = (title: string) => {
+  const base = title.trim().toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
+  const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8)
+  return `${base || 'form'}-${suffix}`
+}
+
+/** Admin/staff list. RLS decides what each role sees (managers of forms see all statuses). */
+export async function getFormTemplates(): Promise<Result<import('./types').FormTemplateWithCounts[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_templates')
+    .select('*, form_questions(count), form_submissions(count)')
+    .order('updated_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormTemplateWithCounts[])
+}
+
+export async function getFormTemplateById(id: string): Promise<Result<import('./types').FormTemplate | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('form_templates').select('*').eq('id', id).maybeSingle()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+/** Public renderer lookup — RLS only exposes published forms to non-managers. */
+export async function getFormTemplateBySlug(slug: string): Promise<Result<import('./types').FormTemplate | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('form_templates').select('*').eq('slug', slug).maybeSingle()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function createFormTemplate(input: { title: string; description?: string | null }): Promise<Result<import('./types').FormTemplate | null>> {
+  if (!supabase) return fail(null)
+  const payload: import('./types').FormTemplateInsert = {
+    title: input.title.trim(),
+    description: input.description?.trim() || null,
+    slug: slugifyForm(input.title),
+  }
+  const { data, error } = await supabase.from('form_templates').insert(payload).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateFormTemplate(id: string, updates: import('./types').FormTemplateUpdate): Promise<Result<import('./types').FormTemplate | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('form_templates').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteFormTemplate(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('form_templates').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+/** Server-side copy of the template together with all of its questions. */
+export async function duplicateFormTemplate(id: string): Promise<Result<import('./types').FormTemplate | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('duplicate_form_template', { p_form_id: id })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function getFormQuestions(formId: string): Promise<Result<import('./types').FormQuestion[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('form_questions').select('*').eq('form_id', formId).order('position').order('created_at')
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function createFormQuestion(question: import('./types').FormQuestionInsert): Promise<Result<import('./types').FormQuestion | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('form_questions').insert(question).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateFormQuestion(id: string, updates: import('./types').FormQuestionUpdate): Promise<Result<import('./types').FormQuestion | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('form_questions').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteFormQuestion(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('form_questions').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function reorderFormQuestions(formId: string, orderedQuestionIds: string[]): Promise<Result<number | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('reorder_form_questions', { p_form_id: formId, p_question_ids: orderedQuestionIds })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+/** Respondent-facing submit. Server validates required fields, options, and ownership of uploaded files. */
+export async function submitDynamicForm(formId: string, answers: import('@/lib/forms/question-types').AnswerMap): Promise<Result<import('./types').FormSubmission | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('submit_dynamic_form', { p_form_id: formId, p_answers: answers as unknown as import('./types').Json })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function getFormSubmissions(formId: string): Promise<Result<import('./types').FormSubmission[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('form_submissions').select('*').eq('form_id', formId).order('submitted_at', { ascending: false })
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function getFormSubmissionDetails(submissionId: string): Promise<Result<{ answers: import('./types').FormSubmissionAnswer[]; attachments: import('./types').FormSubmissionAttachment[] }>> {
+  if (!supabase) return fail({ answers: [], attachments: [] })
+  const [answersResult, attachmentsResult] = await Promise.all([
+    supabase.from('form_submission_answers').select('*').eq('submission_id', submissionId).order('created_at'),
+    supabase.from('form_submission_attachments').select('*').eq('submission_id', submissionId).order('created_at'),
+  ])
+  if (answersResult.error) return fail({ answers: [], attachments: [] }, answersResult.error.message)
+  if (attachmentsResult.error) return fail({ answers: [], attachments: [] }, attachmentsResult.error.message)
+  return ok({ answers: answersResult.data || [], attachments: attachmentsResult.data || [] })
+}
+
+export async function updateFormSubmissionStatus(id: string, status: 'submitted' | 'archived'): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('form_submissions').update({ status }).eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+/** Upload a respondent file for a file_upload question. Must run before submitDynamicForm. */
+export async function uploadFormFile(userId: string, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
+  if (!supabase) return fail(null)
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
+  const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  if (upload.error) return fail(null, upload.error.message)
+  return ok({ storage_path: storagePath, name: file.name, size: file.size, mime_type: file.type || null })
+}
+
+export async function getFormFileUrl(storagePath: string): Promise<Result<string | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.storage.from('form-files').createSignedUrl(storagePath, 60)
+  return error ? fail(null, error.message) : ok(data.signedUrl)
+}
