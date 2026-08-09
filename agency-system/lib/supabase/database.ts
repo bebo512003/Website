@@ -796,7 +796,8 @@ export async function createTeamMember(payload: TeamMemberPayload, initialPasswo
 
 export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('admin_update_team_member', {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('admin_update_team_member', {
     p_user_id: payload.id,
     p_email: payload.email || null,
     p_full_name: payload.full_name || null,
@@ -833,7 +834,8 @@ export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promis
   if (payload.employee_role_id !== undefined) updates.employee_role_id = payload.employee_role_id
   if (payload.status !== undefined) updates.status = payload.status
 
-  const { data: direct, error: directError } = await supabase.from('profiles').update(updates).eq('id', payload.id).select().single()
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: direct, error: directError } = await (supabase as any).from('profiles').update(updates).eq('id', payload.id).select().single()
   return directError ? fail(null, directError.message) : ok(direct as Profile)
 }
 
@@ -892,7 +894,8 @@ export async function updateOwnEnhancedProfile(userId: string, updates: {
 }): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   
-  const { data, error } = await supabase.rpc('update_own_enhanced_profile', {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data, error } = await (supabase as any).rpc('update_own_enhanced_profile', {
     p_user_id: userId,
     p_full_name: updates.full_name || null,
     p_phone: updates.phone || null,
@@ -918,10 +921,11 @@ export async function updateOwnEnhancedProfile(userId: string, updates: {
   return error ? fail(null, error.message) : ok(data as Profile | null)
 }
 
-export async function markPasswordChanged(userId: string): Promise<Result<void>> {
-  if (!supabase) return fail()
-  const { error } = await supabase.rpc('mark_password_changed', { p_user_id: userId })
-  return error ? fail(null, error.message) : ok()
+export async function markPasswordChanged(userId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { error } = await (supabase as any).rpc('mark_password_changed', { p_user_id: userId })
+  return error ? fail(false, error.message) : ok(true)
 }
 
 export async function getSocialLinks(profile: Profile): Promise<Record<string, string>> {

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Plus, Shield, Camera, Mail, Phone, MapPin, Briefcase, Award, BookOpen, GitBranch, Globe, Linkedin, Instagram, Facebook, Twitter, Beaker, Trash2 } from 'lucide-react'
+import { Plus, Shield, Camera, Mail, Phone, MapPin, Briefcase, Award, BookOpen, GitBranch, Globe, Link, User, Trash2 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   getSocialLinks,
@@ -14,11 +14,11 @@ import type { Profile } from '@/lib/supabase/types'
 import { InlineAlert, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 const SOCIAL_PLATFORMS = [
-  { key: 'linkedin', label: 'LinkedIn', icon: <Linkedin className="h-4 w-4" /> },
-  { key: 'behance', label: 'Behance', icon: <Beaker className="h-4 w-4" /> },
-  { key: 'instagram', label: 'Instagram', icon: <Instagram className="h-4 w-4" /> },
-  { key: 'facebook', label: 'Facebook', icon: <Facebook className="h-4 w-4" /> },
-  { key: 'twitter', label: 'X/Twitter', icon: <Twitter className="h-4 w-4" /> },
+  { key: 'linkedin', label: 'LinkedIn', icon: <Link className="h-4 w-4" /> },
+  { key: 'behance', label: 'Behance', icon: <Link className="h-4 w-4" /> },
+  { key: 'instagram', label: 'Instagram', icon: <Link className="h-4 w-4" /> },
+  { key: 'facebook', label: 'Facebook', icon: <Link className="h-4 w-4" /> },
+  { key: 'twitter', label: 'X/Twitter', icon: <Link className="h-4 w-4" /> },
   { key: 'personal_website', label: 'Personal Website', icon: <Globe className="h-4 w-4" /> },
 ]
 
@@ -49,11 +49,11 @@ export default function UserProfilePage() {
     personal_website: '',
   })
   
-  const [customSocialLinks, setCustomSocialLinks] = useState([])
+  const [customSocialLinks, setCustomSocialLinks] = useState<{ key: string; label: string; url: string }[]>([])
   const [newLinkKey, setNewLinkKey] = useState('')
   const [newLinkLabel, setNewLinkLabel] = useState('')
   const [newLinkUrl, setNewLinkUrl] = useState('')
-  const [avatarFile, setAvatarFile] = useState(null)
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState('')
   const [avatarUrl, setAvatarUrl] = useState('')
   const [currentPassword, setCurrentPassword] = useState('')
@@ -99,15 +99,15 @@ export default function UserProfilePage() {
   
   useEffect(() => { void loadProfile() }, [loadProfile])
   
-  const handleAvatarChange = (e) => {
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null
     setAvatarFile(file)
     if (file) setAvatarPreview(URL.createObjectURL(file))
   }
   
-  const handleSocialChange = (platform, value) => setForm(prev => ({ ...prev, [platform]: value }))
+  const handleSocialChange = (platform: string, value: string) => setForm(prev => ({ ...prev, [platform]: value }))
   
-  const handleCustomLinkChange = (index, field, value) => {
+  const handleCustomLinkChange = (index: number, field: 'label' | 'url', value: string) => {
     setCustomSocialLinks(prev => prev.map((link, i) => i === index ? { ...link, [field]: value } : link))
   }
   
@@ -117,9 +117,9 @@ export default function UserProfilePage() {
     setNewLinkKey(''); setNewLinkLabel(''); setNewLinkUrl('')
   }
   
-  const removeCustomLink = (index) => setCustomSocialLinks(prev => prev.filter((_, i) => i !== index))
+  const removeCustomLink = (index: number) => setCustomSocialLinks(prev => prev.filter((_, i) => i !== index))
   
-  const saveProfile = async (e) => {
+  const saveProfile = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!user) return
     setSaving(true); setError(''); setMessage('')
@@ -139,13 +139,13 @@ export default function UserProfilePage() {
       
       if (result.error) setError(result.error)
       else { setMessage('Profile updated successfully'); setAvatarUrl(finalAvatarUrl) }
-    } catch (err) {
-      setError(err.message || 'Failed to save profile')
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to save profile')
     }
     setSaving(false)
   }
   
-  const handlePasswordChange = async (e) => {
+  const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!user) return
     if (newPassword !== confirmPassword) { setError('New passwords do not match'); return }
@@ -253,22 +253,25 @@ export default function UserProfilePage() {
           <Panel title="Social Links" description="Connect your social media profiles">
             <div className="space-y-6">
               <div className="grid gap-4 sm:grid-cols-2">
-                {SOCIAL_PLATFORMS.map(platform => (
-                  <label key={platform.key} className="flex items-center gap-3 text-sm">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-border bg-surface-raised text-text-secondary">{platform.icon}</span>
-                    <input type="url" className={`${inputClassName} flex-1`} value={form[platform.key] || ''} onChange={(e) => handleSocialChange(platform.key, e.target.value)} placeholder={`https://${platform.key === 'personal_website' ? 'yourwebsite.com' : platform.key}.com/yourprofile`} />
-                  </label>
-                ))}
+                {SOCIAL_PLATFORMS.map(platform => {
+                  const platformKey = platform.key as keyof typeof form
+                  return (
+                    <label key={platform.key} className="flex items-center gap-3 text-sm">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded border border-border bg-surface-raised text-text-secondary">{platform.icon}</span>
+                      <input type="url" className={`${inputClassName} flex-1`} value={form[platformKey] || ''} onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleSocialChange(platform.key, e.target.value)} placeholder={`https://${platform.key === 'personal_website' ? 'yourwebsite.com' : platform.key}.com/yourprofile`} />
+                    </label>
+                  )
+                })}
               </div>
               {customSocialLinks.length > 0 && (
                 <div className="space-y-3">
                   <p className="text-xs font-semibold text-text-secondary">Custom Links</p>
                   <div className="space-y-3">
-                    {customSocialLinks.map((link, index) => (
+                    {customSocialLinks.map((link, index: number) => (
                       <div key={index} className="flex items-center gap-2">
                         <Globe className="h-4 w-4 text-text-tertiary" />
-                        <input className={`${inputClassName} flex-1`} value={link.label} onChange={(e) => handleCustomLinkChange(index, 'label', e.target.value)} placeholder="Link name" />
-                        <input type="url" className={`${inputClassName} flex-1`} value={link.url} onChange={(e) => handleCustomLinkChange(index, 'url', e.target.value)} placeholder="URL" />
+                        <input className={`${inputClassName} flex-1`} value={link.label} onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleCustomLinkChange(index, 'label', e.target.value)} placeholder="Link name" />
+                        <input type="url" className={`${inputClassName} flex-1`} value={link.url} onChange={(e: React.ChangeEvent<HTMLInputElement>) => handleCustomLinkChange(index, 'url', e.target.value)} placeholder="URL" />
                         <button type="button" onClick={() => removeCustomLink(index)} className="p-2 text-red-400 hover:text-red-600"><Trash2 className="h-4 w-4" /></button>
                       </div>
                     ))}
@@ -276,9 +279,9 @@ export default function UserProfilePage() {
                 </div>
               )}
               <div className="flex items-center gap-2">
-                <input className={`${inputClassName} w-32`} value={newLinkKey} onChange={(e) => setNewLinkKey(e.target.value)} placeholder="link-key" />
-                <input className={`${inputClassName} flex-1`} value={newLinkLabel} onChange={(e) => setNewLinkLabel(e.target.value)} placeholder="Link name" />
-                <input type="url" className={`${inputClassName} flex-1`} value={newLinkUrl} onChange={(e) => setNewLinkUrl(e.target.value)} placeholder="https://..." />
+                <input className={`${inputClassName} w-32`} value={newLinkKey} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewLinkKey(e.target.value)} placeholder="link-key" />
+                <input className={`${inputClassName} flex-1`} value={newLinkLabel} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewLinkLabel(e.target.value)} placeholder="Link name" />
+                <input type="url" className={`${inputClassName} flex-1`} value={newLinkUrl} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setNewLinkUrl(e.target.value)} placeholder="https://..." />
                 <button type="button" onClick={addCustomLink} className={secondaryButtonClassName} disabled={!newLinkKey.trim() || !newLinkUrl.trim()}><Plus className="h-4 w-4" /></button>
               </div>
             </div>
