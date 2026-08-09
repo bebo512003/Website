@@ -49,9 +49,9 @@ export async function signOut(): Promise<AuthResult> {
 }
 
 export async function getProfile(userId: string): Promise<Profile | null> {
-  if (!supabase) return null
+  if (!supabase || !userId) return null
 
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).single()
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', userId).maybeSingle()
   if (error) {
     console.error('Unable to load the signed-in profile:', error.message)
     return null

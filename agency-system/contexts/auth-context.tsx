@@ -42,6 +42,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const loadProfile = useCallback(async (activeUser: User) => {
+    if (activeUser.is_anonymous) {
+      setProfile(null)
+      return
+    }
     setProfile(await getProfile(activeUser.id))
   }, [])
 
@@ -57,14 +61,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!mounted) return
       const activeUser = data.session?.user ?? null
       setUser(activeUser)
-      if (activeUser) await loadProfile(activeUser)
+      if (activeUser && !activeUser.is_anonymous) await loadProfile(activeUser)
       if (mounted) setLoading(false)
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
       const activeUser = session?.user ?? null
       setUser(activeUser)
-      if (!activeUser) {
+      if (!activeUser || activeUser.is_anonymous) {
         setProfile(null)
         setLoading(false)
         return

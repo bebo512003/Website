@@ -12,13 +12,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const { accent } = useAccent()
-  const { user, loading } = useAuth()
+  const { user, isAnonymous, loading } = useAuth()
   const isAuthPage = pathname === '/auth'
   const isIntakePage = pathname === '/intake'
 
   useEffect(() => {
-    if (!loading && !user && !isAuthPage && !isIntakePage) router.replace('/auth')
-  }, [isAuthPage, isIntakePage, loading, router, user])
+    if (!loading && (!user || isAnonymous) && !isAuthPage && !isIntakePage) router.replace('/auth')
+  }, [isAuthPage, isIntakePage, isAnonymous, loading, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -30,7 +30,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // /intake is a public page — render it without the workspace shell.
   if (isIntakePage) return <div style={style}>{children}</div>
 
-  if (loading || !user) {
+  if (loading || !user || isAnonymous) {
     return (
       <div className="flex min-h-screen items-center justify-center gap-3 bg-bg text-sm text-text-secondary" style={style}>
         <LoaderCircle className="h-5 w-5 animate-spin text-accent" />
