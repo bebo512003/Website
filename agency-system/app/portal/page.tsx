@@ -101,7 +101,7 @@ export default function ClientPortalPage() {
               icon={ClipboardList}
               title="No requests yet"
               description="Submit your first service request and it will appear here with its live status."
-              action={<Link href="/intake" className={primaryButtonClassName}><Sparkles className="h-4 w-4" /> Request a service</Link>}
+              action={<Link href="/forms" className={primaryButtonClassName}><Sparkles className="h-4 w-4" /> Request a service</Link>}
             />
           ) : (
             <div className="divide-y divide-border">
@@ -140,7 +140,7 @@ export default function ClientPortalPage() {
               <p className="mt-1 text-xs text-text-tertiary">Start a new service request — it will be linked to this account automatically.</p>
             </div>
           </div>
-          <Link href="/intake" className={secondaryButtonClassName}>Open the request form</Link>
+          <Link href="/forms" className={secondaryButtonClassName}>Open the request form</Link>
         </Panel>
       </div>
     </main>
