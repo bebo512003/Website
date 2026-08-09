@@ -15,6 +15,7 @@ The application contains no seeded users or placeholder business records. All da
 - Clients are never employees: form submitters who sign in get a client account with portal access only
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
+- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates
 - Private file upload and download through Supabase Storage
@@ -80,6 +81,22 @@ grantable to any role from *Roles & permissions*). To add a new question type la
 allow it in the `form_questions.question_type` CHECK + the `submit_dynamic_form`
 validation, register it in `lib/forms/question-types.ts`, and add a render branch in
 `components/forms/dynamic-form-renderer.tsx`.
+
+## Public company portfolio
+
+The public portfolio is deliberately separate from the internal employee workspace:
+
+- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in.
+- Admins open **Administration → Portfolio Management** to create and edit portfolio projects, manage categories, upload images, choose a cover image, reorder projects, feature projects, and publish/unpublish them.
+- A project is visible publicly only when `published = true` and `archived = false`. Drafts, unpublished projects, archived projects, and their images remain private through PostgreSQL RLS and the private `portfolio-images` Storage bucket.
+- The migration `supabase/migrations/20260814000000_public_portfolio.sql` creates the portfolio tables, default categories, the `portfolio.manage` permission, RLS policies, and storage policies. Apply all migrations (or the complete `supabase/schema.sql`) before using this feature.
+
+Recommended smoke test:
+
+1. Sign in as an Admin and open **Administration → Portfolio Management**.
+2. Create a project, select images, set the cover image, and click **Publish project**.
+3. Open `/portfolio` in a private/incognito window. The published project and its details page should load without login.
+4. Turn publishing off or archive the project; refresh the private window and confirm it no longer appears.
 
 ## Validation
 

@@ -21,7 +21,7 @@ What it does:
 3. **Fresh-install path** — applies the full `supabase/schema.sql` and re-checks the
    core guarantees.
 
-Covered guarantees (64 checks):
+Covered guarantees (125 checks):
 
 - First real account becomes bootstrap Admin; anonymous visitors never get profiles.
 - A form submitter who signs up with the same e-mail becomes a **client** linked to
@@ -36,6 +36,9 @@ Covered guarantees (64 checks):
   restores access. Only Admins change status.
 - Admin protections: the last Admin cannot demote or deactivate themself; Managers keep
   portfolio access but cannot change system roles or statuses.
+- Public portfolio: employees cannot read or publish drafts; anonymous visitors receive
+  only the narrow public RPC output for published projects; published image storage is
+  available through signed URLs and archived images disappear immediately.
 
 **Role & permission system** (migration `20260810000000_role_permission_system.sql`):
 

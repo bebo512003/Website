@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Briefcase, Eye, LoaderCircle, Pencil, Plus, Search, Trash2, UserCog, Users } from 'lucide-react'
+import { Eye, LoaderCircle, Pencil, Plus, Search, Trash2, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   createTeamMember,
@@ -13,10 +13,15 @@ import {
   uploadTeamAvatar,
   setProfileStatus,
 } from '@/lib/supabase/database'
-import type { AppRoleWithPermissions, EmployeeRole, Profile } from '@/lib/supabase/types'
+import type { AppRoleWithPermissions, EmployeeRole, Profile, ProfileStatus } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type SocialLinks = Record<string, string>
+
+function getSocialLinks(value: Profile['social_links']): SocialLinks {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => typeof item === 'string')) as SocialLinks
+}
 
 const emptyForm = {
   full_name: '',
@@ -55,6 +60,7 @@ export function TeamManagement() {
   const [avatarPreview, setAvatarPreview] = useState('')
 
   const canManage = can('employee.manage') || can('admin.manage')
+  const viewingSocialLinks = viewing ? getSocialLinks(viewing.social_links) : {}
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -100,23 +106,23 @@ export function TeamManagement() {
   }
 
   const openEdit = (member: Profile) => {
-    const social = (member.social_links as SocialLinks) || {}
+    const social = getSocialLinks(member.social_links)
     setForm({
       full_name: member.full_name || '',
       email: member.email,
       phone: member.phone || '',
-      whatsapp: (member as any).whatsapp || '',
+      whatsapp: member.whatsapp || '',
       avatar_url: member.avatar_url || '',
-      job_title: (member as any).job_title || '',
-      department: (member as any).department || '',
-      specialization: (member as any).specialization || '',
+      job_title: member.job_title || '',
+      department: member.department || '',
+      specialization: member.specialization || '',
       bio: member.bio || '',
-      location: (member as any).location || '',
-      portfolio_url: (member as any).portfolio_url || '',
+      location: member.location || '',
+      portfolio_url: member.portfolio_url || '',
       social_links: social,
       role_id: member.role_id || '',
       employee_role_id: member.employee_role_id || '',
-      status: (member.status as any) || 'active',
+      status: member.status,
     })
     setAvatarPreview(member.avatar_url || '')
     setEditing(member)
@@ -174,7 +180,7 @@ export function TeamManagement() {
       bio: form.bio.trim() || null,
       location: form.location.trim() || null,
       portfolio_url: form.portfolio_url.trim() || null,
-      social_links: Object.fromEntries(Object.entries(form.social_links).filter(([_, v]) => v.trim() !== '')),
+      social_links: Object.fromEntries(Object.entries(form.social_links).filter(([, value]) => value.trim() !== '')),
       role_id: form.role_id || null,
       employee_role_id: form.employee_role_id || null,
       status: form.status,
@@ -189,7 +195,7 @@ export function TeamManagement() {
         const employeeSystem = roles.find(r => r.key === 'employee')
         if (employeeSystem) payload.role_id = employeeSystem.id
       }
-      result = await createTeamMember(payload as any)
+      result = await createTeamMember(payload)
     }
 
     setSaving(false)
@@ -211,10 +217,10 @@ export function TeamManagement() {
     }
     const newStatus = member.status === 'active' ? 'inactive' : 'active'
     setError('')
-    const res = await setProfileStatus(member.id, newStatus as any)
+    const res = await setProfileStatus(member.id, newStatus)
     if (res.error) {
       // Fallback to direct update
-      const upd = await updateTeamMember({ id: member.id, status: newStatus as any })
+      const upd = await updateTeamMember({ id: member.id, status: newStatus })
       if (upd.error) {
         setError(upd.error)
         return
@@ -297,13 +303,13 @@ export function TeamManagement() {
                           <div className="min-w-0">
                             <p className="truncate text-sm font-semibold text-fg">{member.full_name || 'Unnamed'}</p>
                             <p className="truncate text-xs text-text-tertiary">{member.email}</p>
-                            {(member as any).location && <p className="truncate text-[11px] text-text-tertiary">{(member as any).location}</p>}
+                            {member.location && <p className="truncate text-[11px] text-text-tertiary">{member.location}</p>}
                           </div>
                         </div>
                       </td>
                       <td className="px-5 py-4">
-                        <p className="text-sm text-fg">{(member as any).job_title || jobRole?.name || '—'}</p>
-                        <p className="text-xs text-text-tertiary">{(member as any).department || (member as any).specialization || '—'}</p>
+                        <p className="text-sm text-fg">{member.job_title || jobRole?.name || '—'}</p>
+                        <p className="text-xs text-text-tertiary">{member.department || member.specialization || '—'}</p>
                       </td>
                       <td className="px-5 py-4">
                         <div className="flex flex-col gap-1">
@@ -417,7 +423,7 @@ export function TeamManagement() {
               <input type="url" className={`${inputClassName} mt-2`} value={form.portfolio_url} onChange={(e) => setForm({ ...form, portfolio_url: e.target.value })} placeholder="https://portfolio.example.com" />
             </label>
             <label className="text-xs text-text-secondary">Account Status
-              <select className={`${inputClassName} mt-2`} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as any })}>
+              <select className={`${inputClassName} mt-2`} value={form.status} onChange={(e) => setForm({ ...form, status: e.target.value as ProfileStatus })}>
                 <option value="active">Active</option>
                 <option value="inactive">Inactive</option>
               </select>
@@ -484,7 +490,7 @@ export function TeamManagement() {
                 <p className="text-sm text-text-tertiary">{viewing.email}</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   <span className="rounded border border-border px-2 py-0.5 text-xs">{roleMap.get(viewing.role_id || '')?.name || viewing.role}</span>
-                  {(viewing as any).job_title && <span className="rounded border border-border px-2 py-0.5 text-xs">{(viewing as any).job_title}</span>}
+                  {viewing.job_title && <span className="rounded border border-border px-2 py-0.5 text-xs">{viewing.job_title}</span>}
                   <span className={`rounded border px-2 py-0.5 text-xs ${viewing.status === 'active' ? 'border-green-500/30 text-green-400' : 'border-red-500/30 text-red-400'}`}>{viewing.status}</span>
                 </div>
               </div>
@@ -492,20 +498,20 @@ export function TeamManagement() {
 
             <div className="grid gap-3 rounded-md border border-border p-4 text-sm">
               <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Phone</span><span className="col-span-2 text-fg">{viewing.phone || '—'}</span></div>
-              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">WhatsApp</span><span className="col-span-2 text-fg">{(viewing as any).whatsapp || '—'}</span></div>
-              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Department</span><span className="col-span-2 text-fg">{(viewing as any).department || '—'}</span></div>
-              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Specialization</span><span className="col-span-2 text-fg">{(viewing as any).specialization || '—'}</span></div>
-              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Location</span><span className="col-span-2 text-fg">{(viewing as any).location || '—'}</span></div>
-              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Portfolio</span><span className="col-span-2 truncate text-fg">{(viewing as any).portfolio_url ? <a href={(viewing as any).portfolio_url} target="_blank" rel="noreferrer" className="text-accent underline">{(viewing as any).portfolio_url}</a> : '—'}</span></div>
+              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">WhatsApp</span><span className="col-span-2 text-fg">{viewing.whatsapp || '—'}</span></div>
+              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Department</span><span className="col-span-2 text-fg">{viewing.department || '—'}</span></div>
+              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Specialization</span><span className="col-span-2 text-fg">{viewing.specialization || '—'}</span></div>
+              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Location</span><span className="col-span-2 text-fg">{viewing.location || '—'}</span></div>
+              <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Portfolio</span><span className="col-span-2 truncate text-fg">{viewing.portfolio_url ? <a href={viewing.portfolio_url} target="_blank" rel="noreferrer" className="text-accent underline">{viewing.portfolio_url}</a> : '—'}</span></div>
               <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Job Role</span><span className="col-span-2 text-fg">{employeeRoleMap.get(viewing.employee_role_id || '')?.name || '—'}</span></div>
               <div className="grid grid-cols-3 gap-2"><span className="text-text-tertiary">Bio</span><span className="col-span-2 text-fg">{viewing.bio || '—'}</span></div>
             </div>
 
-            {(viewing.social_links as any) && Object.keys(viewing.social_links as any).length > 0 && (
+            {Object.keys(viewingSocialLinks).length > 0 && (
               <div className="rounded-md border border-border p-4">
                 <p className="mb-2 text-xs font-semibold text-fg">Social Links</p>
                 <div className="flex flex-wrap gap-2">
-                  {Object.entries((viewing.social_links as SocialLinks)).map(([k, v]) => v ? (
+                  {Object.entries(viewingSocialLinks).map(([k, v]) => v ? (
                     <a key={k} href={v} target="_blank" rel="noreferrer" className="rounded border border-border px-2.5 py-1 text-xs text-text-secondary hover:text-fg capitalize">
                       {k}
                     </a>
