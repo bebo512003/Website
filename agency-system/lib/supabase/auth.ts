@@ -73,3 +73,34 @@ export async function updatePassword(password: string): Promise<AuthResult> {
   const { error } = await supabase.auth.updateUser({ password })
   return { error: error ? new Error(error.message) : null }
 }
+
+export async function updatePasswordAndMarkChanged(password: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
+  
+  // First update the password
+  const { error: authError } = await supabase.auth.updateUser({ password })
+  if (authError) {
+    return { error: new Error(authError.message) }
+  }
+  
+  // Then mark the password as changed in the profile
+  const { data: { user } } = await supabase.auth.getUser()
+  if (user) {
+    await supabase.rpc('mark_password_changed', { p_user_id: user.id }).catch(() => {})
+  }
+  
+  return { error: null }
+}
+
+export async function checkMustChangePassword(userId: string): Promise<boolean> {
+  if (!supabase || !userId) return false
+  
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('must_change_password')
+    .eq('id', userId)
+    .maybeSingle()
+  
+  if (error || !data) return false
+  return data.must_change_password === true
+}

@@ -35,7 +35,6 @@ import type {
   TaskUpdate,
   TaskWithRelations,
 } from './types'
-
 export interface Result<T> {
   data: T
   error: string | null
@@ -48,193 +47,162 @@ const ok = <T>(data: T): Result<T> => ({ data, error: null })
 export function getDatabaseStatus() {
   return { connected: isDatabaseConnected }
 }
-
 export async function getProfiles(): Promise<Result<Profile[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('profiles').select('*').order('full_name')
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function setProfileRole(userId: string, role: AppRole): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: role })
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function setProfileStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_status', { target_user_id: userId, new_status: status })
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function setProfileEmployeeRole(userId: string, employeeRoleId: string | null): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_employee_role', { target_user_id: userId, new_employee_role_id: employeeRoleId })
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function setProfileClientLink(userId: string, clientId: string | null): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_client_link', { target_user_id: userId, new_client_id: clientId })
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function getEmployeeRoles(): Promise<Result<EmployeeRole[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('employee_roles').select('*').order('name')
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function createEmployeeRole(role: EmployeeRoleInsert): Promise<Result<EmployeeRole | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('employee_roles').insert(role).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function updateEmployeeRole(id: string, updates: EmployeeRoleUpdate): Promise<Result<EmployeeRole | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('employee_roles').update(updates).eq('id', id).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function deleteEmployeeRole(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('employee_roles').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
 
-// ── Role / permission system ──────────────────────────────────────────────────
+// Role / permission system
 export async function getCurrentUserPermissions(): Promise<Result<string[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.rpc('get_user_permissions')
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function getPermissions(): Promise<Result<Permission[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.rpc('list_permissions')
   return error ? fail([], error.message) : ok((data as unknown as Permission[]) || [])
 }
-
 export async function getAppRoles(): Promise<Result<AppRoleWithPermissions[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.rpc('list_roles')
   return error ? fail([], error.message) : ok((data as unknown as AppRoleWithPermissions[]) || [])
 }
-
 export async function createAppRole(name: string, description: string): Promise<Result<AccessRole | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('create_app_role', { p_name: name, p_description: description })
   return error ? fail(null, error.message) : ok(data as unknown as AccessRole)
 }
-
 export async function updateAppRole(id: string, name: string, description: string, isActive: boolean): Promise<Result<AccessRole | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('update_app_role', { p_role_id: id, p_name: name, p_description: description, p_is_active: isActive })
   return error ? fail(null, error.message) : ok(data as unknown as AccessRole)
 }
-
 export async function deleteAppRole(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { data, error } = await supabase.rpc('delete_app_role', { p_role_id: id })
   return error ? fail(false, error.message) : ok(data as boolean)
 }
-
 export async function setRolePermissions(roleId: string, permissionKeys: string[]): Promise<Result<AccessRole | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_role_permissions', { p_role_id: roleId, p_permission_keys: permissionKeys })
   return error ? fail(null, error.message) : ok(data as unknown as AccessRole)
 }
-
 export async function assignUserRole(userId: string, roleId: string): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('assign_user_role', { p_user_id: userId, p_role_id: roleId })
   return error ? fail(null, error.message) : ok(data as unknown as Profile)
 }
-
 export async function addPermission(key: string, name: string, category: string, description: string): Promise<Result<Permission | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('add_permission', { p_key: key, p_name: name, p_category: category, p_description: description })
   return error ? fail(null, error.message) : ok(data as unknown as Permission)
 }
 
-// Client portal: RLS scopes this to submissions the signed-in client created or owns.
+// Client portal
 export async function getClientIntakeSubmissions(): Promise<Result<IntakeForm[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('intake_forms').select('*').order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function getClients(): Promise<Result<Client[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('clients').select('*').order('name')
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function getClientById(id: string): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').select('*').eq('id', id).maybeSingle()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function createClient(client: ClientInsert): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').insert(client).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function updateClient(id: string, updates: ClientUpdate): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').update(updates).eq('id', id).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function deleteClient(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('clients').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
-
 export async function getProjects(): Promise<Result<ProjectWithClient[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('projects').select('*, clients(id, name)').order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as ProjectWithClient[])
 }
-
 export async function getProjectById(id: string): Promise<Result<ProjectWithClient | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').select('*, clients(id, name)').eq('id', id).maybeSingle()
   return error ? fail(null, error.message) : ok(data as unknown as ProjectWithClient | null)
 }
-
 export async function getProjectsByClientId(clientId: string): Promise<Result<Project[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('projects').select('*').eq('client_id', clientId).order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok(data || [])
 }
-
 export async function createProject(project: ProjectInsert): Promise<Result<Project | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').insert(project).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function updateProject(id: string, updates: ProjectUpdate): Promise<Result<Project | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').update(updates).eq('id', id).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
-
 export async function deleteProject(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('projects').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
 
-// ── Public company portfolio ────────────────────────────────────────────────
-// Keep both select lists explicit. The public page receives only fields needed
-// to render a published project and its image paths; no audit, archive, or
-// management-only fields are sent to an anonymous browser.
+// Public company portfolio
 const PORTFOLIO_ADMIN_SELECT = `id, title, slug, cover_image_path, description, client_name, category_id, services, project_date, external_url, featured, published, archived, display_order, portfolio_categories(id, name, slug, is_active), portfolio_project_images(id, project_id, storage_path, alt_text, display_order)`
 
 const slugifyPortfolio = (value: string) => {
@@ -271,8 +239,6 @@ function publicRpcRowToProject(row: PortfolioPublicRpcRow): PortfolioProjectWith
     project_date: row.project_date,
     external_url: row.external_url,
     featured: row.featured,
-    // These values are local implementation defaults. The RPC intentionally
-    // does not expose the management-only published/archive/audit columns.
     published: true,
     archived: false,
     display_order: row.display_order,
@@ -300,7 +266,6 @@ async function hydratePortfolioProjects(rows: unknown[]): Promise<PortfolioProje
   }))
 }
 
-/** Admin list. RLS returns all portfolio states only to authorized managers. */
 export async function getPortfolioProjects(): Promise<Result<PortfolioProjectWithRelations[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase
@@ -312,7 +277,6 @@ export async function getPortfolioProjects(): Promise<Result<PortfolioProjectWit
   return ok(await hydratePortfolioProjects((data || []) as unknown[]))
 }
 
-/** Public reads go through a narrow, column-safe RPC. RLS still protects the underlying tables and the RPC filters published, non-archived rows. */
 export async function getPublicPortfolioProjects(): Promise<Result<PortfolioProjectWithRelations[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.rpc('get_public_portfolio_projects')
@@ -585,7 +549,6 @@ export async function deleteNotification(id: string): Promise<Result<boolean>> {
 
 export async function createIntakeForm(form: import('./types').IntakeFormInsert): Promise<Result<import('./types').IntakeForm | null>> {
   if (!supabase) return fail(null)
-  // Ensure service_types is populated from service_type if not provided.
   const payload = { ...form }
   if (!payload.service_types || payload.service_types.length === 0) {
     if (payload.service_type) payload.service_types = [payload.service_type]
@@ -596,7 +559,6 @@ export async function createIntakeForm(form: import('./types').IntakeFormInsert)
 
 export async function updateIntakeForm(id: string, form: import('./types').IntakeFormUpdate): Promise<Result<import('./types').IntakeForm | null>> {
   if (!supabase) return fail(null)
-  // Ensure service_types is populated from service_type if needed.
   const payload = { ...form }
   if (payload.service_type && (!payload.service_types || payload.service_types.length === 0)) {
     payload.service_types = [payload.service_type]
@@ -622,17 +584,13 @@ export async function uploadIntakeAttachment(intakeId: string, userId: string, f
   return ok(data)
 }
 
-// ── Dynamic form builder ──────────────────────────────────────────────────────
-// Everything below is driven by database configuration: no form or question is
-// ever hardcoded in the frontend.
-
+// Dynamic form builder
 const slugifyForm = (title: string) => {
   const base = title.trim().toLowerCase().replace(/[^a-z0-9\u0600-\u06FF]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48)
   const suffix = crypto.randomUUID().replace(/-/g, '').slice(0, 8)
   return `${base || 'form'}-${suffix}`
 }
 
-/** Admin/staff list. RLS decides what each role sees (managers of forms see all statuses). */
 export async function getFormTemplates(): Promise<Result<import('./types').FormTemplateWithCounts[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase
@@ -648,7 +606,6 @@ export async function getFormTemplateById(id: string): Promise<Result<import('./
   return error ? fail(null, error.message) : ok(data)
 }
 
-/** Public renderer lookup — RLS only exposes published forms to non-managers. */
 export async function getFormTemplateBySlug(slug: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_templates').select('*').eq('slug', slug).maybeSingle()
@@ -678,7 +635,6 @@ export async function deleteFormTemplate(id: string): Promise<Result<boolean>> {
   return error ? fail(false, error.message) : ok(true)
 }
 
-/** Server-side copy of the template together with all of its questions. */
 export async function duplicateFormTemplate(id: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('duplicate_form_template', { p_form_id: id })
@@ -715,7 +671,6 @@ export async function reorderFormQuestions(formId: string, orderedQuestionIds: s
   return error ? fail(null, error.message) : ok(data)
 }
 
-/** Respondent-facing submit. Server validates required fields, options, and ownership of uploaded files. */
 export async function submitDynamicForm(formId: string, answers: import('@/lib/forms/question-types').AnswerMap): Promise<Result<import('./types').FormSubmission | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('submit_dynamic_form', { p_form_id: formId, p_answers: answers as unknown as import('./types').Json })
@@ -745,7 +700,6 @@ export async function updateFormSubmissionStatus(id: string, status: 'submitted'
   return error ? fail(false, error.message) : ok(true)
 }
 
-/** Upload a respondent file for a file_upload question. Must run before submitDynamicForm. */
 export async function uploadFormFile(userId: string, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
   if (!supabase) return fail(null)
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
@@ -761,7 +715,7 @@ export async function getFormFileUrl(storagePath: string): Promise<Result<string
   return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
-// ── Team Management ───────────────────────────────────────────────────────
+// Team Management
 export type TeamMemberPayload = {
   email: string
   full_name: string
@@ -778,6 +732,17 @@ export type TeamMemberPayload = {
   role_id?: string | null
   employee_role_id?: string | null
   status?: ProfileStatus
+  skills?: string | null
+  experience?: string | null
+  certifications?: string | null
+  previous_projects?: string | null
+  linkedin?: string | null
+  behance?: string | null
+  instagram?: string | null
+  facebook?: string | null
+  twitter?: string | null
+  personal_website?: string | null
+  other_social_links?: Record<string, string> | null
 }
 
 export type TeamMemberUpdatePayload = Partial<TeamMemberPayload> & { id: string }
@@ -792,11 +757,6 @@ export async function getTeamMembers(): Promise<Result<Profile[]>> {
   return error ? fail([], error.message) : ok((data as Profile[]) || [])
 }
 
-/**
- * Single member lookup for the Team Directory profile page.
- * RLS already scopes reads, but we additionally refuse to resolve client
- * accounts through the team directory — clients must never surface here.
- */
 export async function getTeamMemberById(id: string): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase
@@ -856,7 +816,6 @@ export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promis
   })
   if (!error) return ok(data as Profile)
 
-  // Fallback direct update
   const updates: Partial<Profile> = {}
   if (payload.full_name !== undefined) updates.full_name = payload.full_name
   if (payload.email !== undefined) updates.email = payload.email
@@ -898,8 +857,101 @@ export async function uploadTeamAvatar(userId: string, file: File): Promise<Resu
 
 export async function getAvatarPublicUrl(storagePath: string): Promise<Result<string | null>> {
   if (!supabase) return fail(null)
-  // If storagePath already looks like URL, return as is
   if (storagePath.startsWith('http')) return ok(storagePath)
   const { data } = supabase.storage.from('avatars').getPublicUrl(storagePath)
   return ok(data.publicUrl)
+}
+
+// Enhanced profile functions
+export async function getProfileById(id: string): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateOwnEnhancedProfile(userId: string, updates: {
+  full_name?: string
+  phone?: string
+  whatsapp?: string
+  bio?: string
+  job_title?: string
+  skills?: string
+  experience?: string
+  previous_projects?: string
+  certifications?: string
+  location?: string
+  portfolio_url?: string
+  linkedin?: string
+  behance?: string
+  instagram?: string
+  facebook?: string
+  twitter?: string
+  personal_website?: string
+  other_social_links?: Record<string, string>
+  avatar_url?: string
+}): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  
+  const { data, error } = await supabase.rpc('update_own_enhanced_profile', {
+    p_user_id: userId,
+    p_full_name: updates.full_name || null,
+    p_phone: updates.phone || null,
+    p_whatsapp: updates.whatsapp || null,
+    p_bio: updates.bio || null,
+    p_job_title: updates.job_title || null,
+    p_skills: updates.skills || null,
+    p_experience: updates.experience || null,
+    p_previous_projects: updates.previous_projects || null,
+    p_certifications: updates.certifications || null,
+    p_location: updates.location || null,
+    p_portfolio_url: updates.portfolio_url || null,
+    p_linkedin: updates.linkedin || null,
+    p_behance: updates.behance || null,
+    p_instagram: updates.instagram || null,
+    p_facebook: updates.facebook || null,
+    p_twitter: updates.twitter || null,
+    p_personal_website: updates.personal_website || null,
+    p_other_social_links: (updates.other_social_links as unknown as import('./types').Json) || null,
+    p_avatar_url: updates.avatar_url || null,
+  })
+  
+  return error ? fail(null, error.message) : ok(data as Profile | null)
+}
+
+export async function markPasswordChanged(userId: string): Promise<Result<void>> {
+  if (!supabase) return fail()
+  const { error } = await supabase.rpc('mark_password_changed', { p_user_id: userId })
+  return error ? fail(null, error.message) : ok()
+}
+
+export async function getSocialLinks(profile: Profile): Promise<Record<string, string>> {
+  const links: Record<string, string> = {}
+  
+  // From social_links JSON
+  if (profile.social_links && typeof profile.social_links === 'object' && !Array.isArray(profile.social_links)) {
+    Object.entries(profile.social_links).forEach(([key, value]) => {
+      if (typeof value === 'string' && value.trim()) {
+        links[key] = value.trim()
+      }
+    })
+  }
+  
+  // From individual social fields
+  if (profile.linkedin) links.linkedin = profile.linkedin
+  if (profile.behance) links.behance = profile.behance
+  if (profile.instagram) links.instagram = profile.instagram
+  if (profile.facebook) links.facebook = profile.facebook
+  if (profile.twitter) links.twitter = profile.twitter
+  if (profile.personal_website) links.personal_website = profile.personal_website
+  
+  // From other_social_links JSON
+  if (profile.other_social_links && typeof profile.other_social_links === 'object' && !Array.isArray(profile.other_social_links)) {
+    Object.entries(profile.other_social_links).forEach(([key, value]) => {
+      if (typeof value === 'string' && value.trim()) {
+        links[key] = value.trim()
+      }
+    })
+  }
+  
+  return links
 }

@@ -59,6 +59,9 @@ export function TeamManagement() {
   const [viewing, setViewing] = useState<Profile | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState('')
+  // Credentials display state
+  const [showCredentials, setShowCredentials] = useState(false)
+  const [newMemberCredentials, setNewMemberCredentials] = useState<{ email: string; password: string } | null>(null)
 
   const canManage = can('employee.manage') || can('admin.manage')
   const viewingSocialLinks = viewing ? getSocialLinks(viewing.social_links) : {}
@@ -210,6 +213,10 @@ export function TeamManagement() {
       return
     }
 
+    if (!editing && result.data) {
+      setNewMemberCredentials({ email: result.data.email, password: initialPassword })
+      setShowCredentials(true)
+    }
     setMessage(editing ? 'Team member updated successfully' : 'Login account created. Give the team member the email and initial password you set.')
     setModalOpen(false)
     resetForm()
@@ -548,6 +555,41 @@ export function TeamManagement() {
             <div className="flex justify-end">
               <button onClick={() => { if (viewing) { const v = viewing; setViewing(null); openEdit(v) } }} className={primaryButtonClassName} disabled={!canManage}>
                 <Pencil className="h-4 w-4" /> Edit member
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* Credentials Modal */}
+      <Modal open={showCredentials} onClose={() => setShowCredentials(false)} title="Team Member Credentials" description="Share these credentials with the new team member securely.">
+        {newMemberCredentials && (
+          <div className="space-y-4">
+            <div className="rounded-md border border-border bg-surface-raised p-4">
+              <p className="mb-2 text-xs font-semibold text-fg">Login Information</p>
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-border pb-2">
+                  <span className="text-sm text-text-tertiary">Email:</span>
+                  <span className="text-sm font-medium text-fg break-all">{newMemberCredentials.email}</span>
+                </div>
+                <div className="flex items-center justify-between border-b border-border pb-2">
+                  <span className="text-sm text-text-tertiary">Temporary Password:</span>
+                  <span className="text-sm font-mono font-medium text-fg break-all">{newMemberCredentials.password}</span>
+                </div>
+              </div>
+            </div>
+            <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-4">
+              <p className="text-sm text-yellow-400">
+                <strong>Important:</strong> This is the only time the password will be shown. The team member will be required to change it on first login.
+              </p>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowCredentials(false)} className={secondaryButtonClassName}>Close</button>
+              <button onClick={() => {
+                navigator.clipboard.writeText(newMemberCredentials.email)
+                setShowCredentials(false)
+              }} className={primaryButtonClassName}>
+                Copy Email
               </button>
             </div>
           </div>

@@ -28,6 +28,18 @@ export type ProfileRow = {
   social_links: Json
   created_at: string
   updated_at: string
+  must_change_password: boolean
+  skills: string | null
+  experience: string | null
+  certifications: string | null
+  previous_projects: string | null
+  linkedin: string | null
+  behance: string | null
+  instagram: string | null
+  facebook: string | null
+  twitter: string | null
+  personal_website: string | null
+  other_social_links: Json
 }
 
 export type EmployeeRoleRow = {

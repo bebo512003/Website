@@ -56,7 +56,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPermissionsLoaded(true)
       return
     }
-    setProfile(await getProfile(activeUser.id))
+    const profile = await getProfile(activeUser.id)
+    setProfile(profile)
     const result = await getCurrentUserPermissions()
     if (result.error) {
       setPermissions([])
@@ -64,6 +65,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPermissions(result.data)
     }
     setPermissionsLoaded(true)
+    
+    // Check if user needs to change password
+    if (profile?.must_change_password) {
+      // Redirect to profile page to force password change
+      window.location.href = '/profile'
+    }
   }, [])
 
   useEffect(() => {
