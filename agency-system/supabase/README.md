@@ -15,8 +15,12 @@ The schema is safe for an existing early Agency OS database: it replaces permiss
 
 If you already applied an earlier version of the schema, apply the newer migrations in
 order. In particular `20260809000000_user_employee_architecture.sql` adds the `client`
-account type, and `20260810000000_role_permission_system.sql` installs the granular
-role/permission model described below.
+account type, `20260810000000_role_permission_system.sql` installs the granular
+role/permission model described below, and `20260811000000_dynamic_form_builder.sql`
+installs the dynamic form builder (`form_templates`, `form_questions`, `form_submissions`,
+`form_submission_answers`, `form_submission_attachments`, the `form.manage` permission,
+the `submit_dynamic_form` / `duplicate_form_template` / `reorder_form_questions` RPCs,
+and the private `form-files` storage bucket).
 
 ## 3. Authentication settings
 

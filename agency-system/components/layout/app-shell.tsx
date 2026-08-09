@@ -75,13 +75,15 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const { user, profile, isClient, isDeactivated, isAnonymous, loading, can, permissionsLoaded } = useAuth()
   const isAuthPage = pathname === '/auth'
   const isIntakePage = pathname === '/intake'
+  // Published dynamic forms are public respondent pages (/f/<slug>).
+  const isPublicFormPage = pathname.startsWith('/f/')
   const isPortalPage = pathname === '/portal'
 
   useEffect(() => {
     if (loading) return
 
     // Everything except the public pages requires a signed-in, non-anonymous user.
-    if ((!user || isAnonymous) && !isAuthPage && !isIntakePage) {
+    if ((!user || isAnonymous) && !isAuthPage && !isIntakePage && !isPublicFormPage) {
       router.replace('/auth')
       return
     }
@@ -89,14 +91,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     if (!user || isAnonymous || !profile) return
 
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isIntakePage && !isAuthPage) {
+    if (isClient && !isPortalPage && !isIntakePage && !isAuthPage && !isPublicFormPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
     if (!isClient && isPortalPage) router.replace('/')
-  }, [isAuthPage, isClient, isIntakePage, isAnonymous, isPortalPage, loading, profile, router, user])
+  }, [isAuthPage, isClient, isIntakePage, isAnonymous, isPortalPage, isPublicFormPage, loading, profile, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -105,7 +107,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Public pages render without the workspace shell.
   if (isAuthPage) return <div style={style}>{children}</div>
-  if (isIntakePage) return <div style={style}>{children}</div>
+  if (isIntakePage || isPublicFormPage) return <div style={style}>{children}</div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 

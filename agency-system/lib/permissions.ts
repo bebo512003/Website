@@ -42,6 +42,8 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'submission.edit', name: 'Edit submissions', category: 'Submissions', description: 'Update submission records.' },
   { key: 'submission.assign', name: 'Assign submissions', category: 'Submissions', description: 'Assign submissions to projects or people.' },
 
+  { key: 'form.manage', name: 'Manage forms', category: 'Forms', description: 'Create, edit, publish, duplicate, archive and delete dynamic forms and their questions.' },
+
   { key: 'employee.view', name: 'View employees', category: 'Employees', description: 'View the team member directory.' },
   { key: 'employee.edit', name: 'Edit employees', category: 'Employees', description: 'Edit team member details.' },
   { key: 'employee.delete', name: 'Delete employees', category: 'Employees', description: 'Remove team members.' },

@@ -26,6 +26,22 @@ Prepared 2026-08-09. Analysis only — no behavior changes.
 > permission for at the database layer. The old `isAdmin`/`isManager` booleans are now
 > permission-derived. Remaining: Phase D dynamic forms and Phase E cleanup.
 
+> **2026-08-09 — Phase D dynamic forms done:** migration
+> `20260811000000_dynamic_form_builder.sql` adds `form_templates` + `form_questions`
+> (10 question types, options/placeholder/help text/required/order, extensible via a
+> registry), `form_submissions` + `form_submission_answers` with **per-question
+> snapshots** (edits never rewrite history), `form_submission_attachments` + private
+> `form-files` bucket with staff-readable policies, three RPCs (`submit_dynamic_form`
+> — server-side validation, client match/create, optional project creation;
+> `duplicate_form_template`; `reorder_form_questions`), a `form.manage` permission, and
+> delete/archive lifecycle guards. Frontend: **Administration → Forms** inventory,
+> `/admin/forms/[id]` builder (details, questions CRUD + reorder + options, preview,
+> responses inbox), public renderer `/f/[slug]`, and `/forms` is now the staff hub for
+> the dynamic catalog. Legacy hardcoded `/intake` stays functional; its data remains
+> readable. Regression suite extended to 97 checks covering the whole lifecycle (build →
+> publish → public submit → duplicate/reorder/disable/archive/delete).
+> Remaining: Phase E (legacy backfill/cleanup; multi-language labels per question).
+
 ## 1. Current architecture
 
 **Stack:** Next.js 16 (App Router, all pages are client components), React 19, TypeScript,

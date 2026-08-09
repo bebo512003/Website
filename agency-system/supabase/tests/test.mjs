@@ -10,7 +10,7 @@ const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;
 
 // Upgrade path: every migration before the one under test reproduces the
 // previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260810000000'
+const MIGRATION_UNDER_TEST = '20260811000000'
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
 const priorMigrations = migrationFiles.filter((file) => !file.startsWith(MIGRATION_UNDER_TEST)).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
 const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))), 'utf8'))
@@ -325,12 +325,139 @@ async function runPermissionSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runDynamicFormSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  // ── Permission wiring ─────────────────────────────────────────────
+  await asUser(db, alice)
+  ok(`${label}: form.manage granted to admin`, (await scalar(db, `select public.has_permission('form.manage') v`)).v === true)
+  const formPermListed = (await scalar(db, `select count(*)::int n from public.list_permissions() where key = 'form.manage'`)).n
+  ok(`${label}: form.manage appears in the permission catalog`, formPermListed === 1)
+
+  await asUser(db, erin)
+  ok(`${label}: manager does NOT have form.manage by default`, (await scalar(db, `select public.has_permission('form.manage') v`)).v === false)
+  const managerTemplateFails = await expectError(db, () => db.query(`insert into public.form_templates (slug, title) values ('mgr-form', 'Mgr Form')`))
+  ok(`${label}: manager cannot create forms (RLS)`, managerTemplateFails)
+
+  // ── Admin builds a completely new form without touching code ──────
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, description) values ('brand-questionnaire', 'Brand Questionnaire', 'Tell us about your brand')`)
+  const form = (await db.query(`select * from public.form_templates where slug = 'brand-questionnaire'`)).rows[0]
+  ok(`${label}: admin creates a form template (starts as draft)`, form?.status === 'draft')
+
+  await asUser(db, bob)
+  const employeeQuestionFails = await expectError(db, () => db.query(
+    `insert into public.form_questions (form_id, question_type, label, position) values ($1, 'short_text', 'Nope', 1)`, [form.id]))
+  ok(`${label}: employee cannot add questions (RLS)`, employeeQuestionFails)
+
+  await asUser(db, alice)
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Your full name', true, 'name', 1),
+    ($1, 'short_text', 'Your e-mail', true, 'email', 2),
+    ($1, 'dropdown', 'Project type', false, null, 3)`, [form.id])
+  await db.query(`update public.form_questions set options = '["Logo","Identity","Profile"]'::jsonb where form_id = $1 and question_type = 'dropdown'`, [form.id])
+  await db.query(`insert into public.form_questions (form_id, question_type, label, options, position) values
+    ($1, 'multiple_choice', 'Deliverables', '["Print","Social","Web"]'::jsonb, 4)`, [form.id])
+  const versioned = (await scalar(db, `select version from public.form_templates where id = $1`, [form.id])).version
+  ok(`${label}: question changes bump the form version`, versioned > 1, `version=${versioned}`)
+
+  // Draft forms are invisible to the public.
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: public cannot see a draft form`, (await scalar(db, 'select count(*)::int n from public.form_templates')).n === 0)
+
+  // Publish → public can read the form + its questions.
+  await asUser(db, alice)
+  await db.query(`update public.form_templates set status = 'published' where id = $1`, [form.id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: published form is publicly readable`, (await scalar(db, 'select count(*)::int n from public.form_templates')).n === 1)
+  ok(`${label}: published form questions are publicly readable`, (await scalar(db, 'select count(*)::int n from public.form_questions')).n === 4)
+
+  // ── Validation in the submit RPC ──────────────────────────────────
+  const questionIds = (await db.query(`select id, question_type, label from public.form_questions where form_id = $1 order by position`, [form.id])).rows
+  const [qName, qEmail, qType, qDeliverables] = questionIds.map((q) => q.id)
+  const missingRequired = await expectError(db, () => db.query(
+    `select public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({ [qEmail]: 'mona@demo.test' })]))
+  ok(`${label}: submit rejects missing required answers`, missingRequired)
+  const badOption = await expectError(db, () => db.query(
+    `select public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({ [qName]: 'Mona', [qEmail]: 'mona@demo.test', [qType]: 'Hacked' })]))
+  ok(`${label}: submit rejects a choice outside the configured options`, badOption)
+  const badMulti = await expectError(db, () => db.query(
+    `select public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({ [qName]: 'Mona', [qEmail]: 'mona@demo.test', [qDeliverables]: ['Print', 'Nope'] })]))
+  ok(`${label}: submit rejects tampered multiple-choice values`, badMulti)
+
+  // ── Happy path: anonymous visitor submits the dynamic form ────────
+  const submitted = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({
+    [qName]: 'Mona Founder',
+    [qEmail]: 'Mona@Demo.test',
+    [qType]: 'Logo',
+    [qDeliverables]: ['Print', 'Web'],
+  })])).rows[0]
+  ok(`${label}: anonymous visitor submits the dynamic form`, submitted?.status === 'submitted' && submitted?.respondent_name === 'Mona Founder')
+
+  await superUser(db)
+  const monaClient = (await db.query(`select id, email from public.clients where email = 'mona@demo.test'`)).rows[0]
+  ok(`${label}: submission auto-creates the CRM client (e-mail match automation)`, monaClient?.email === 'mona@demo.test' && submitted?.client_id === monaClient?.id)
+  const answerRows = await scalar(db, `select
+      count(*)::int total,
+      count(*) filter (where question_snapshot ->> 'label' = 'Your full name')::int named,
+      count(*) filter (where value = '"Logo"'::jsonb)::int dropdown
+    from public.form_submission_answers where submission_id = $1`, [submitted.id])
+  ok(`${label}: answers stored with per-question snapshots`, answerRows.total === 4 && answerRows.named === 1 && answerRows.dropdown === 1, JSON.stringify(answerRows))
+
+  // ── Read access ───────────────────────────────────────────────────
+  await asUser(db, bob)
+  ok(`${label}: employee (submission.view) reads submissions`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 1)
+  ok(`${label}: employee (submission.view) reads answer snapshots`, (await scalar(db, 'select count(*)::int n from public.form_submission_answers')).n === 4)
+  const employeeArchiveFails = await expectError(db, () => db.query(`update public.form_submissions set status = 'archived'`))
+  const archiveRows = await scalar(db, `select count(*)::int n from public.form_submissions where status = 'archived'`)
+  ok(`${label}: employee (no submission.edit) cannot archive submissions`, employeeArchiveFails || archiveRows.n === 0)
+
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: submitter re-reads only their own submission`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 1)
+
+  // ── Duplicate / reorder / delete lifecycle ────────────────────────
+  await asUser(db, bob)
+  const employeeDuplicateFails = await expectError(db, () => scalar(db, 'select public.duplicate_form_template($1) v', [form.id]))
+  ok(`${label}: employee cannot duplicate forms (RPC guard)`, employeeDuplicateFails)
+  const employeeReorderFails = await expectError(db, () => scalar(db, 'select public.reorder_form_questions($1, $2::uuid[]) v', [form.id, questionIds.map((q) => q.id)]))
+  ok(`${label}: employee cannot reorder questions (RPC guard)`, employeeReorderFails)
+
+  await asUser(db, alice)
+  const duplicate = (await db.query(`select * from public.duplicate_form_template($1)`, [form.id])).rows[0]
+  const duplicateQuestions = (await scalar(db, 'select count(*)::int n from public.form_questions where form_id = $1', [duplicate.id])).n
+  ok(`${label}: admin duplicates a form (copy starts as draft with all questions)`, duplicate?.status === 'draft' && duplicate?.slug !== form.slug && duplicateQuestions === 4)
+
+  const reordered = [questionIds[3].id, questionIds[0].id, questionIds[1].id, questionIds[2].id]
+  await db.query(`select public.reorder_form_questions($1, $2::uuid[])`, [form.id, reordered])
+  const firstPosition = (await db.query(`select id from public.form_questions where form_id = $1 and position = 1`, [form.id])).rows[0]
+  ok(`${label}: admin reorders questions atomically`, firstPosition?.id === questionIds[3].id)
+
+  const deleteProtected = await expectError(db, () => db.query(`delete from public.form_templates where id = $1`, [form.id]))
+  ok(`${label}: form with submissions cannot be deleted (archive instead)`, deleteProtected)
+  await db.query(`delete from public.form_templates where id = $1`, [duplicate.id])
+  ok(`${label}: form without submissions can be deleted`, (await scalar(db, 'select count(*)::int n from public.form_templates where id = $1', [duplicate.id])).n === 0)
+
+  // ── Disable / enable lifecycle ────────────────────────────────────
+  await db.query(`update public.form_templates set status = 'disabled' where id = $1`, [form.id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: disabled form disappears from public view`, (await scalar(db, `select count(*)::int n from public.form_templates where slug = 'brand-questionnaire'`)).n === 0)
+  const submitDisabled = await expectError(db, () => db.query(`select public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({ [qName]: 'X', [qEmail]: 'x@x.test' })]))
+  ok(`${label}: disabled form refuses submissions`, submitDisabled)
+
+  await asUser(db, alice)
+  await db.query(`update public.form_templates set status = 'archived' where id = $1`, [form.id])
+  ok(`${label}: admin archives a form (history kept)`, (await scalar(db, `select count(*)::int n from public.form_submissions where form_id = $1`, [form.id])).n === 1)
+
+  await superUser(db)
+}
+
 async function main() {
-  console.log('=== Path A: prior migrations + user-architecture migration (upgrade path) ===')
+  console.log('=== Path A: prior migrations + dynamic-form-builder migration (upgrade path) ===')
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
   await runPermissionSuite(dbA, idsA, 'upgrade')
+  await runDynamicFormSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -348,6 +475,23 @@ async function main() {
   ok('fresh: bootstrap admin works', adminRow?.role === 'admin')
   await asUser(dbB, carolB)
   ok('fresh: client sees no projects', (await scalar(dbB, 'select count(*)::int n from public.projects')).n === 0)
+
+  // Fresh installs include the dynamic form builder end to end.
+  await superUser(dbB)
+  const anonVisitorB = await addUser(dbB, null, { anon: true })
+  await asUser(dbB, aliceB)
+  ok('fresh: admin has form.manage', (await scalar(dbB, `select public.has_permission('form.manage') v`)).v === true)
+  await dbB.query(`insert into public.form_templates (slug, title) values ('fresh-form', 'Fresh Form')`)
+  const freshForm = (await dbB.query(`select id from public.form_templates where slug = 'fresh-form'`)).rows[0]
+  await dbB.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'E-mail', true, 'email', 1)`, [freshForm.id])
+  await dbB.query(`update public.form_templates set status = 'published' where id = $1`, [freshForm.id])
+  const freshQuestionId = (await dbB.query(`select id from public.form_questions where form_id = $1`, [freshForm.id])).rows[0].id
+  await asUser(dbB, anonVisitorB, 'anon')
+  ok('fresh: published dynamic form is publicly readable', (await scalar(dbB, 'select count(*)::int n from public.form_templates')).n === 1)
+  const freshSubmission = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'visitor@fresh.test' })])).rows[0]
+  ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'submitted' && freshSubmission?.respondent_email === 'visitor@fresh.test')
+  await asUser(dbB, aliceB)
+  ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

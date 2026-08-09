@@ -206,6 +206,80 @@ export type IntakeAttachmentRow = {
   created_at: string
 }
 
+// ── Dynamic form builder (Phase D) ──────────────────────────────────────────
+export type FormStatus = 'draft' | 'published' | 'disabled' | 'archived'
+export type FormQuestionType =
+  | 'short_text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'yes_no'
+  | 'dropdown' | 'number' | 'date' | 'file_upload' | 'rating'
+export type FormQuestionMapTo = 'name' | 'email' | 'phone' | 'company'
+
+export type FormTemplateRow = {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  status: FormStatus
+  version: number
+  settings: Json
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type FormQuestionRow = {
+  id: string
+  form_id: string
+  question_type: FormQuestionType
+  label: string
+  help_text: string | null
+  placeholder: string | null
+  required: boolean
+  options: Json
+  config: Json
+  map_to: FormQuestionMapTo | null
+  position: number
+  created_at: string
+  updated_at: string
+}
+
+export type FormSubmissionRow = {
+  id: string
+  form_id: string
+  form_version: number
+  status: 'submitted' | 'archived'
+  respondent_name: string | null
+  respondent_email: string | null
+  respondent_phone: string | null
+  company_name: string | null
+  client_id: string | null
+  project_id: string | null
+  created_by: string | null
+  submitted_at: string
+  created_at: string
+  updated_at: string
+}
+
+export type FormSubmissionAnswerRow = {
+  id: string
+  submission_id: string
+  question_id: string | null
+  question_snapshot: Json
+  value: Json
+  created_at: string
+}
+
+export type FormSubmissionAttachmentRow = {
+  id: string
+  submission_id: string
+  question_id: string | null
+  name: string
+  size: number
+  mime_type: string | null
+  storage_path: string
+  uploaded_by: string | null
+  created_at: string
+}
+
 export type NotificationRow = {
   id: string
   recipient_id: string
@@ -288,6 +362,21 @@ export interface Database {
       intake_attachments: TableDefinition<IntakeAttachmentRow, {
         id?: string; intake_id: string; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
       }, Partial<IntakeAttachmentRow>>
+      form_templates: TableDefinition<FormTemplateRow, {
+        id?: string; slug: string; title: string; description?: string | null; status?: FormStatus; version?: number; settings?: Json; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<FormTemplateRow>>
+      form_questions: TableDefinition<FormQuestionRow, {
+        id?: string; form_id: string; question_type: FormQuestionType; label: string; help_text?: string | null; placeholder?: string | null; required?: boolean; options?: Json; config?: Json; map_to?: FormQuestionMapTo | null; position?: number; created_at?: string; updated_at?: string
+      }, Partial<FormQuestionRow>>
+      form_submissions: TableDefinition<FormSubmissionRow, {
+        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
+      }, Partial<FormSubmissionRow>>
+      form_submission_answers: TableDefinition<FormSubmissionAnswerRow, {
+        id?: string; submission_id: string; question_id?: string | null; question_snapshot: Json; value?: Json; created_at?: string
+      }, Partial<FormSubmissionAnswerRow>>
+      form_submission_attachments: TableDefinition<FormSubmissionAttachmentRow, {
+        id?: string; submission_id: string; question_id?: string | null; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
+      }, Partial<FormSubmissionAttachmentRow>>
       notifications: TableDefinition<NotificationRow, {
         id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; type?: NotificationRow['type']; title: string; message: string; action_url?: string | null; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
@@ -308,6 +397,9 @@ export interface Database {
       set_user_client_link: { Args: { target_user_id: string; new_client_id: string | null }; Returns: ProfileRow }
       update_own_profile: { Args: { new_full_name: string; new_avatar_url: string; new_agency_name: string; new_agency_website: string; new_phone: string; new_bio: string }; Returns: ProfileRow }
       submit_intake_form: { Args: { target_intake_id: string }; Returns: IntakeFormRow }
+      submit_dynamic_form: { Args: { p_form_id: string; p_answers: Json }; Returns: FormSubmissionRow }
+      duplicate_form_template: { Args: { p_form_id: string }; Returns: FormTemplateRow }
+      reorder_form_questions: { Args: { p_form_id: string; p_question_ids: string[] }; Returns: number }
       get_user_permissions: { Args: Record<string, never>; Returns: string[] }
       has_permission: { Args: { required_permission: string }; Returns: boolean }
       list_permissions: { Args: Record<string, never>; Returns: PermissionRow[] }
@@ -350,6 +442,20 @@ export type IntakeFormInsert = Database['public']['Tables']['intake_forms']['Ins
 export type IntakeFormUpdate = Database['public']['Tables']['intake_forms']['Update']
 export type IntakeProject = IntakeProjectRow
 export type IntakeAttachment = IntakeAttachmentRow
+export type FormTemplate = FormTemplateRow
+export type FormTemplateInsert = Database['public']['Tables']['form_templates']['Insert']
+export type FormTemplateUpdate = Database['public']['Tables']['form_templates']['Update']
+export type FormQuestion = FormQuestionRow
+export type FormQuestionInsert = Database['public']['Tables']['form_questions']['Insert']
+export type FormQuestionUpdate = Database['public']['Tables']['form_questions']['Update']
+export type FormSubmission = FormSubmissionRow
+export type FormSubmissionAnswer = FormSubmissionAnswerRow
+export type FormSubmissionAttachment = FormSubmissionAttachmentRow
+/** Template row plus aggregate counts returned by the admin list query. */
+export type FormTemplateWithCounts = FormTemplate & {
+  form_questions: { count: number }[]
+  form_submissions: { count: number }[]
+}
 export type Notification = NotificationRow
 export type Permission = PermissionRow
 export type AccessRole = AppRoleRow
