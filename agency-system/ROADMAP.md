@@ -4,9 +4,10 @@
 
 - English-only product interface
 - Supabase email/password authentication and password recovery
-- Admin, Manager, and Employee roles
+- Admin, Manager, Employee, and Client account types with sign-up routing by e-mail
+- Admin-managed employee job roles and active/inactive statuses enforced by RLS
 - Employee project assignment boundaries enforced with RLS
-- Admin user-role and project-assignment controls
+- Admin user-role, job-role, status, and project-assignment controls
 - Live clients, projects, tasks, files, reports, and notifications
 - Private project file storage
 - Responsive navigation and explicit empty/loading/error states

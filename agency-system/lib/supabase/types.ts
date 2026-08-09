@@ -1,5 +1,6 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
-export type AppRole = 'admin' | 'manager' | 'employee'
+export type AppRole = 'admin' | 'manager' | 'employee' | 'client'
+export type ProfileStatus = 'active' | 'inactive'
 export type ProjectStatus = 'active' | 'review' | 'completed' | 'on-hold' | 'cancelled'
 export type TaskStatus = 'todo' | 'inprogress' | 'review' | 'done'
 export type TaskPriority = 'high' | 'medium' | 'low'
@@ -10,10 +11,24 @@ export type ProfileRow = {
   full_name: string | null
   avatar_url: string | null
   role: AppRole
+  status: ProfileStatus
+  employee_role_id: string | null
+  client_id: string | null
   agency_name: string | null
   agency_website: string | null
   phone: string | null
   bio: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type EmployeeRoleRow = {
+  id: string
+  key: string
+  name: string
+  description: string | null
+  is_active: boolean
+  created_by: string | null
   created_at: string
   updated_at: string
 }
@@ -187,8 +202,11 @@ export interface Database {
   public: {
     Tables: {
       profiles: TableDefinition<ProfileRow, {
-        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; agency_name?: string | null; agency_website?: string | null; phone?: string | null; bio?: string | null; created_at?: string; updated_at?: string
+        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; status?: ProfileStatus; employee_role_id?: string | null; client_id?: string | null; agency_name?: string | null; agency_website?: string | null; phone?: string | null; bio?: string | null; created_at?: string; updated_at?: string
       }>
+      employee_roles: TableDefinition<EmployeeRoleRow, {
+        id?: string; key: string; name: string; description?: string | null; is_active?: boolean; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<EmployeeRoleRow>, [{ foreignKeyName: 'employee_roles_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
       clients: TableDefinition<ClientRow, {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
@@ -246,6 +264,9 @@ export interface Database {
       can_access_project: { Args: { target_project_id: string }; Returns: boolean }
       can_access_client: { Args: { target_client_id: string }; Returns: boolean }
       set_user_role: { Args: { target_user_id: string; new_role: AppRole }; Returns: ProfileRow }
+      set_user_status: { Args: { target_user_id: string; new_status: ProfileStatus }; Returns: ProfileRow }
+      set_user_employee_role: { Args: { target_user_id: string; new_employee_role_id: string | null }; Returns: ProfileRow }
+      set_user_client_link: { Args: { target_user_id: string; new_client_id: string | null }; Returns: ProfileRow }
       update_own_profile: { Args: { new_full_name: string; new_avatar_url: string; new_agency_name: string; new_agency_website: string; new_phone: string; new_bio: string }; Returns: ProfileRow }
       submit_intake_form: { Args: { target_intake_id: string }; Returns: IntakeFormRow }
     }
@@ -256,6 +277,9 @@ export interface Database {
 
 export type Profile = ProfileRow
 export type ProfileUpdate = Partial<Pick<ProfileRow, 'full_name' | 'avatar_url' | 'agency_name' | 'agency_website' | 'phone' | 'bio'>>
+export type EmployeeRole = EmployeeRoleRow
+export type EmployeeRoleInsert = Database['public']['Tables']['employee_roles']['Insert']
+export type EmployeeRoleUpdate = Database['public']['Tables']['employee_roles']['Update']
 export type Client = ClientRow
 export type ClientInsert = Database['public']['Tables']['clients']['Insert']
 export type ClientUpdate = Database['public']['Tables']['clients']['Update']
