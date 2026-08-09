@@ -51,6 +51,9 @@ export function TopBar() {
         <button type="button" onClick={toggleTheme} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:text-fg" aria-label="Toggle color theme">{theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}</button>
         <div className="mx-1 hidden h-7 w-px bg-border sm:block" />
         <div className="hidden text-right sm:block"><div className="max-w-40 truncate text-xs font-semibold text-fg">{profile?.full_name || profile?.email}</div><div className="mt-0.5 font-mono-tech text-[8px] text-text-tertiary">{profile?.role || 'employee'}</div></div>
+        <button type="button" onClick={() => router.push('/profile')} className="rounded-md border border-border bg-surface p-1.5 text-text-secondary transition hover:text-fg" aria-label="Open profile">
+          <User className="h-4 w-4" />
+        </button>
         <button type="button" onClick={handleSignOut} className="rounded-md border border-border bg-surface p-2 text-text-secondary transition hover:border-red-500/30 hover:text-red-400" aria-label="Sign out"><LogOut className="h-4 w-4" /></button>
       </div>
     </header>
