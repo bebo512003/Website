@@ -5,6 +5,7 @@ import { Briefcase, ClipboardList, FolderKanban, KeyRound, LoaderCircle, Pencil,
 import { useAuth } from '@/contexts/auth-context'
 import { RolesPermissionsAdmin } from '@/components/admin/roles-permissions'
 import { FormsAdmin } from '@/components/admin/forms-admin'
+import { TeamManagement } from '@/components/admin/team-management'
 import {
   addProjectMember,
   createEmployeeRole,
@@ -269,7 +270,7 @@ export default function AdminPage() {
       />
 
       <div className="flex flex-wrap gap-2">
-        {([['team', Users, 'Team members'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['forms', ClipboardList, 'Forms'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
+        {([['team', Users, 'Team Management'], ['roles', Briefcase, 'Job roles'], ['permissions', KeyRound, 'Roles & permissions'], ['forms', ClipboardList, 'Forms'], ['clients', UserRound, 'Client accounts'], ['projects', FolderKanban, 'Projects'], ['access', UserCog, 'Assignments']] as const).map(([id, Icon, label]) => (
           <button key={id} onClick={() => setTab(id)} className={tab === id ? primaryButtonClassName : secondaryButtonClassName}><Icon className="h-4 w-4" />{label}</button>
         ))}
       </div>
@@ -281,37 +282,7 @@ export default function AdminPage() {
         <>
           {tab === 'permissions' && <RolesPermissionsAdmin />}
           {tab === 'forms' && <FormsAdmin />}
-          {tab === 'team' && (
-            <Panel title="Team members" description="Staff accounts only. New sign-ups receive Employee access unless their e-mail matches a submitted service request — those become client accounts instead.">
-              {teamProfiles.length === 0 ? <EmptyState icon={Users} title="No team members found" description="Authenticated staff accounts will appear here after the database migration has been applied." /> : (
-                <div className="divide-y divide-border">
-                  {teamProfiles.map((profile) => (
-                    <div key={profile.id} className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-fg">{profile.full_name || 'Unnamed user'}</p>
-                        <p className="mt-1 truncate text-xs text-text-tertiary">{profile.email}</p>
-                      </div>
-                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 lg:w-[560px]">
-                        <select aria-label={`System role for ${profile.email}`} value={profile.role} onChange={(event) => void changeRole(profile.id, event.target.value as AppRole)} className={inputClassName}>
-                          {systemRoles.map((role) => <option key={role.value} value={role.value}>{role.label}</option>)}
-                        </select>
-                        {profile.role === 'employee' ? (
-                          <select aria-label={`Job role for ${profile.email}`} value={profile.employee_role_id || ''} onChange={(event) => void changeEmployeeRole(profile.id, event.target.value)} className={inputClassName}>
-                            <option value="">No job role</option>
-                            {employeeRoles.map((role) => <option key={role.id} value={role.id}>{role.name}{role.is_active ? '' : ' (disabled)'}</option>)}
-                          </select>
-                        ) : <span className="hidden sm:block" />}
-                        <select aria-label={`Status for ${profile.email}`} value={profile.status} onChange={(event) => void changeStatus(profile.id, event.target.value as ProfileStatus)} className={inputClassName} disabled={profile.id === user?.id && profile.role === 'admin'}>
-                          <option value="active">Active</option>
-                          <option value="inactive">Inactive</option>
-                        </select>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-          )}
+          {tab === 'team' && <TeamManagement />}
 
           {tab === 'roles' && (
             <Panel title="Job roles" description="Define the roles your employees work in, such as Designer, Translator, Copywriter, Developer, or Project Manager. Nothing is hardcoded — create what you need.">

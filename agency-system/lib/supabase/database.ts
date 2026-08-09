@@ -527,3 +527,149 @@ export async function getFormFileUrl(storagePath: string): Promise<Result<string
   const { data, error } = await supabase.storage.from('form-files').createSignedUrl(storagePath, 60)
   return error ? fail(null, error.message) : ok(data.signedUrl)
 }
+
+// ── Team Management ───────────────────────────────────────────────────────
+export type TeamMemberPayload = {
+  email: string
+  full_name: string
+  phone?: string | null
+  whatsapp?: string | null
+  avatar_url?: string | null
+  job_title?: string | null
+  department?: string | null
+  specialization?: string | null
+  bio?: string | null
+  location?: string | null
+  portfolio_url?: string | null
+  social_links?: Record<string, string> | null
+  role_id?: string | null
+  employee_role_id?: string | null
+  status?: ProfileStatus
+}
+
+export type TeamMemberUpdatePayload = Partial<TeamMemberPayload> & { id: string }
+
+export async function getTeamMembers(): Promise<Result<Profile[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .neq('role', 'client')
+    .order('full_name')
+  return error ? fail([], error.message) : ok((data as Profile[]) || [])
+}
+
+export async function createTeamMember(payload: TeamMemberPayload): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  // Prefer RPC admin_create_team_member if available (handles permissions & role validation)
+  const { data, error } = await supabase.rpc('admin_create_team_member', {
+    p_email: payload.email,
+    p_full_name: payload.full_name,
+    p_phone: payload.phone || null,
+    p_whatsapp: payload.whatsapp || null,
+    p_avatar_url: payload.avatar_url || null,
+    p_job_title: payload.job_title || null,
+    p_department: payload.department || null,
+    p_specialization: payload.specialization || null,
+    p_bio: payload.bio || null,
+    p_location: payload.location || null,
+    p_portfolio_url: payload.portfolio_url || null,
+    p_social_links: (payload.social_links as unknown as import('./types').Json) || {},
+    p_role_id: payload.role_id || null,
+    p_employee_role_id: payload.employee_role_id || null,
+    p_status: payload.status || 'active',
+  })
+  if (!error) return ok(data as Profile)
+
+  // Fallback: direct insert if RPC missing (e.g. local migration not applied)
+  const insertPayload = {
+    id: crypto.randomUUID(),
+    email: payload.email.toLowerCase().trim(),
+    full_name: payload.full_name.trim(),
+    phone: payload.phone || null,
+    whatsapp: payload.whatsapp || null,
+    avatar_url: payload.avatar_url || null,
+    job_title: payload.job_title || null,
+    department: payload.department || null,
+    specialization: payload.specialization || null,
+    bio: payload.bio || null,
+    location: payload.location || null,
+    portfolio_url: payload.portfolio_url || null,
+    social_links: (payload.social_links || {}) as any,
+    role_id: payload.role_id || null,
+    employee_role_id: payload.employee_role_id || null,
+    status: payload.status || 'active',
+  } as any
+  const { data: direct, error: directError } = await supabase.from('profiles').insert(insertPayload as any).select().single()
+  return directError ? fail(null, directError.message) : ok(direct as Profile)
+}
+
+export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('admin_update_team_member', {
+    p_user_id: payload.id,
+    p_email: payload.email || null,
+    p_full_name: payload.full_name || null,
+    p_phone: payload.phone || null,
+    p_whatsapp: payload.whatsapp || null,
+    p_avatar_url: payload.avatar_url || null,
+    p_job_title: payload.job_title || null,
+    p_department: payload.department || null,
+    p_specialization: payload.specialization || null,
+    p_bio: payload.bio || null,
+    p_location: payload.location || null,
+    p_portfolio_url: payload.portfolio_url || null,
+    p_social_links: (payload.social_links as unknown as import('./types').Json) || null,
+    p_role_id: payload.role_id || null,
+    p_employee_role_id: payload.employee_role_id || null,
+    p_status: payload.status || null,
+  })
+  if (!error) return ok(data as Profile)
+
+  // Fallback direct update
+  const updates: Record<string, any> = {}
+  if (payload.full_name !== undefined) updates.full_name = payload.full_name
+  if (payload.email !== undefined) updates.email = payload.email
+  if (payload.phone !== undefined) updates.phone = payload.phone
+  if (payload.whatsapp !== undefined) updates.whatsapp = payload.whatsapp
+  if (payload.avatar_url !== undefined) updates.avatar_url = payload.avatar_url
+  if (payload.job_title !== undefined) updates.job_title = payload.job_title
+  if (payload.department !== undefined) updates.department = payload.department
+  if (payload.specialization !== undefined) updates.specialization = payload.specialization
+  if (payload.bio !== undefined) updates.bio = payload.bio
+  if (payload.location !== undefined) updates.location = payload.location
+  if (payload.portfolio_url !== undefined) updates.portfolio_url = payload.portfolio_url
+  if (payload.social_links !== undefined) updates.social_links = payload.social_links
+  if (payload.role_id !== undefined) updates.role_id = payload.role_id
+  if (payload.employee_role_id !== undefined) updates.employee_role_id = payload.employee_role_id
+  if (payload.status !== undefined) updates.status = payload.status
+
+  const { data: direct, error: directError } = await supabase.from('profiles').update(updates as any).eq('id', payload.id).select().single()
+  return directError ? fail(null, directError.message) : ok(direct as Profile)
+}
+
+export async function deleteTeamMember(userId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.rpc('admin_delete_team_member', { p_user_id: userId })
+  if (!error) return ok(true)
+  const { error: directError } = await supabase.from('profiles').delete().eq('id', userId)
+  return directError ? fail(false, directError.message) : ok(true)
+}
+
+export async function uploadTeamAvatar(userId: string, file: File): Promise<Result<string | null>> {
+  if (!supabase) return fail(null)
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
+  const { error } = await supabase.storage.from('avatars').upload(storagePath, file, { contentType: file.type, upsert: false })
+  if (error) return fail(null, error.message)
+  const { data } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+  return ok(data.publicUrl)
+}
+
+export async function getAvatarPublicUrl(storagePath: string): Promise<Result<string | null>> {
+  if (!supabase) return fail(null)
+  // If storagePath already looks like URL, return as is
+  if (storagePath.startsWith('http')) return ok(storagePath)
+  const { data } = supabase.storage.from('avatars').getPublicUrl(storagePath)
+  return ok(data.publicUrl)
+}
