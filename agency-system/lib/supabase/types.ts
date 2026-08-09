@@ -299,15 +299,55 @@ export type FormSubmissionAttachmentRow = {
   created_at: string
 }
 
+export type NotificationType =
+  | 'info'
+  | 'assignment'
+  | 'project_update'
+  | 'task_update'
+  | 'task_assignment'
+  | 'form_submission'
+  | 'submission'
+
+export type NotificationMetadata = {
+  submission_id?: string
+  form_id?: string
+  form_name?: string
+  client_name?: string
+  respondent_name?: string | null
+  respondent_email?: string | null
+  respondent_phone?: string | null
+  company_name?: string | null
+  project_id?: string | null
+  project_name?: string | null
+  task_id?: string | null
+  task_title?: string | null
+  assigned_by?: string | null
+  due_date?: string | null
+  priority?: string | null
+  status?: string | null
+  progress?: number | null
+  phase?: number | null
+  intake_id?: string | null
+  contact_email?: string | null
+  contact_phone?: string | null
+  services?: string[] | null
+  submitted_at?: string | null
+  assigned_at?: string | null
+  [key: string]: unknown
+}
+
 export type NotificationRow = {
   id: string
   recipient_id: string
   actor_id: string | null
   project_id: string | null
-  type: 'info' | 'assignment' | 'project_update' | 'task_update'
+  submission_id?: string | null
+  task_id?: string | null
+  type: NotificationType
   title: string
   message: string
   action_url: string | null
+  metadata: NotificationMetadata | Json
   read_at: string | null
   created_at: string
 }
@@ -459,10 +499,12 @@ export interface Database {
         id?: string; submission_id: string; question_id?: string | null; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
       }, Partial<FormSubmissionAttachmentRow>>
       notifications: TableDefinition<NotificationRow, {
-        id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; type?: NotificationRow['type']; title: string; message: string; action_url?: string | null; read_at?: string | null; created_at?: string
+        id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
         { foreignKeyName: 'notifications_recipient_id_fkey'; columns: ['recipient_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'notifications_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'notifications_submission_id_fkey'; columns: ['submission_id']; isOneToOne: false; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
+        { foreignKeyName: 'notifications_task_id_fkey'; columns: ['task_id']; isOneToOne: false; referencedRelation: 'tasks'; referencedColumns: ['id'] },
       ]>
       portfolio_categories: TableDefinition<PortfolioCategoryRow, {
         id?: string; name: string; slug: string; is_active?: boolean; display_order?: number; created_by?: string | null; created_at?: string; updated_at?: string

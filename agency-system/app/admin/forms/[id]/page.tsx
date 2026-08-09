@@ -127,6 +127,21 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const [detailsCache, setDetailsCache] = useState<Record<string, { answers: FormSubmissionAnswer[]; attachments: FormSubmissionAttachment[] }>>({})
   const [detailsLoading, setDetailsLoading] = useState(false)
 
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const sp = new URLSearchParams(window.location.search)
+      const tabParam = sp.get('tab')
+      const subParam = sp.get('submission')
+      if (tabParam === 'submissions') setTab('submissions')
+      if (subParam) {
+        setExpandedId(subParam)
+        void getFormSubmissionDetails(subParam).then((res) => {
+          if (res.data) setDetailsCache((cache) => ({ ...cache, [subParam]: res.data }))
+        })
+      }
+    }
+  }, [])
+
   const load = useCallback(async () => {
     const [templateResult, questionsResult] = await Promise.all([getFormTemplateById(id), getFormQuestions(id)])
     if (!templateResult.data) {
@@ -561,7 +576,11 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                 const expanded = expandedId === submission.id
                 const details = detailsCache[submission.id]
                 return (
-                  <div key={submission.id} className="px-5 py-4">
+                  <div
+                    key={submission.id}
+                    id={`submission-${submission.id}`}
+                    className={`px-5 py-4 transition ${expanded ? 'bg-accent/[0.04] border-l-2 border-accent' : 'border-l-2 border-transparent'}`}
+                  >
                     <button onClick={() => void toggleSubmission(submission.id)} className="flex w-full flex-col gap-2 text-left sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-3">
                         {expanded ? <ChevronDown className="h-4 w-4 text-text-tertiary" /> : <ChevronRight className="h-4 w-4 text-text-tertiary" />}

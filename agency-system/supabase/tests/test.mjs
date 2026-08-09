@@ -10,7 +10,7 @@ const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;
 
 // Upgrade path: every migration before the one under test reproduces the
 // previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260815000000'
+const MIGRATION_UNDER_TEST = '20260817000000'
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
 const migrationFile = migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))
 if (!migrationFile) throw new Error(`Migration ${MIGRATION_UNDER_TEST} not found`)
@@ -706,6 +706,76 @@ async function runPortfolioSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runNotificationSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  // 1. Dynamic Form Submission -> Admin receives notification
+  await asUser(db, alice)
+  const templateId = (await db.query(`insert into public.form_templates (slug, title, status) values ('branding-request', 'Branding & Visual Identity', 'published') returning id`)).rows[0].id
+  const qName = (await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'Full Name', true, 'name', 1) returning id`, [templateId])).rows[0].id
+  const qEmail = (await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'Email', true, 'email', 2) returning id`, [templateId])).rows[0].id
+
+  // Clear alice's notifications first to test fresh
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id = $1`, [alice])
+
+  // Anonymous visitor submits the dynamic form
+  await asUser(db, anonVisitor, 'anon')
+  const answers = { [qName]: 'Mona Founder', [qEmail]: 'mona@branding.test' }
+  const submission = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [templateId, JSON.stringify(answers)])).rows[0]
+
+  // Alice (Admin) checks her notifications
+  await asUser(db, alice)
+  const adminNotifs = (await db.query(`select * from public.notifications where recipient_id = $1 order by created_at desc`, [alice])).rows
+  ok(`${label}: admin receives notification on dynamic form submission`, adminNotifs.length > 0)
+  const formNotif = adminNotifs.find((n) => n.submission_id === submission.id || n.type === 'form_submission')
+  ok(`${label}: form submission notification contains title & form name`, formNotif?.title?.includes('Branding & Visual Identity') && formNotif?.message?.includes('Mona Founder'))
+  ok(`${label}: form submission notification contains action_url`, formNotif?.action_url?.includes(`/admin/forms/${templateId}`))
+  ok(`${label}: form submission notification contains metadata`, formNotif?.metadata?.client_name === 'Mona Founder' && formNotif?.metadata?.submission_id === submission.id)
+
+  // Bob (Employee) must NOT receive admin form submission notifications
+  await asUser(db, bob)
+  const bobNotifsBefore = (await db.query(`select * from public.notifications where recipient_id = $1 and type = 'form_submission'`, [bob])).rows
+  ok(`${label}: employee does NOT receive admin form submission notifications`, bobNotifsBefore.length === 0)
+
+  // 2. Project Assignment -> Employee receives notification
+  await asUser(db, alice)
+  const newProjId = (await db.query(`insert into public.projects (name, client_id, status) select 'Mobile App Redesign', id, 'active' from public.clients limit 1 returning id`)).rows[0].id
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [newProjId, bob, alice])
+
+  await asUser(db, bob)
+  const bobProjectNotif = (await db.query(`select * from public.notifications where recipient_id = $1 and project_id = $2 and type = 'assignment'`, [bob, newProjId])).rows[0]
+  ok(`${label}: employee receives notification on project assignment`, !!bobProjectNotif)
+  ok(`${label}: project notification contains project name & assigner`, bobProjectNotif?.message?.includes('Mobile App Redesign') && bobProjectNotif?.message?.includes('Alice Admin'))
+  ok(`${label}: project notification links to project`, bobProjectNotif?.action_url === `/projects/${newProjId}`)
+
+  // 3. Task Assignment -> Employee receives notification
+  await asUser(db, alice)
+  const taskId = (await db.query(`insert into public.tasks (title, project_id, assignee_id, due_date, priority) values ('Create wireframes', $1, $2, '2026-09-01', 'high') returning id`, [newProjId, bob])).rows[0].id
+
+  await asUser(db, bob)
+  const bobTaskNotif = (await db.query(`select * from public.notifications where recipient_id = $1 and task_id = $2`, [bob, taskId])).rows[0]
+  ok(`${label}: employee receives notification on task assignment`, !!bobTaskNotif)
+  ok(`${label}: task notification contains task title, project & due date`, bobTaskNotif?.title?.includes('Create wireframes') && bobTaskNotif?.message?.includes('2026-09-01'))
+  ok(`${label}: task notification links to project/task`, bobTaskNotif?.action_url?.includes(`/projects/${newProjId}`))
+
+  // 4. Mark as read / persistence across queries
+  ok(`${label}: notification starts unread (read_at is null)`, bobTaskNotif?.read_at === null)
+  await db.query(`update public.notifications set read_at = now() where id = $1`, [bobTaskNotif.id])
+  const updatedNotif = (await db.query(`select * from public.notifications where id = $1`, [bobTaskNotif.id])).rows[0]
+  ok(`${label}: notification can be marked as read`, updatedNotif?.read_at !== null)
+
+  // 5. Notification Security: Bob cannot see or mutate Alice's notifications
+  const bobSeesAliceNotifs = (await db.query(`select * from public.notifications where recipient_id = $1`, [alice])).rows
+  ok(`${label}: employee cannot see admin notifications (RLS)`, bobSeesAliceNotifs.length === 0)
+  const bobUpdatesAlice = await db.query(`update public.notifications set read_at = now() where recipient_id = $1`, [alice]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: employee cannot update admin notifications (RLS)`, bobUpdatesAlice <= 0)
+  const bobDeletesAlice = await db.query(`delete from public.notifications where recipient_id = $1`, [alice]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: employee cannot delete admin notifications (RLS)`, bobDeletesAlice <= 0)
+
+  await superUser(db)
+}
+
 async function main() {
   console.log('=== Path A: prior migrations + admin-only account migration (upgrade path) ===')
   const dbA = await makeDb()
@@ -716,6 +786,7 @@ async function main() {
   await runTeamDirectorySuite(dbA, idsA, 'upgrade')
   await runPortfolioSuite(dbA, idsA, 'upgrade')
   await runPermissionUiContractSuite(dbA, idsA, 'upgrade')
+  await runNotificationSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -756,6 +827,8 @@ async function main() {
   ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'submitted' && freshSubmission?.respondent_email === 'visitor@fresh.test')
   await asUser(dbB, aliceB)
   ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
+  const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows
+  ok('fresh: admin receives notification on submission', freshAdminNotifs.length >= 1 && freshAdminNotifs[0].type === 'form_submission')
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

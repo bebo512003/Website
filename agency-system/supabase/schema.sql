@@ -171,10 +171,12 @@ create table if not exists public.notifications (
   recipient_id uuid not null references public.profiles(id) on delete cascade,
   actor_id uuid references public.profiles(id) on delete set null,
   project_id uuid references public.projects(id) on delete cascade,
-  type text not null default 'info' check (type in ('info', 'assignment', 'project_update', 'task_update')),
+  task_id uuid references public.tasks(id) on delete cascade,
+  type text not null default 'info' check (type in ('info', 'assignment', 'project_update', 'task_update', 'task_assignment', 'form_submission', 'submission')),
   title text not null,
   message text not null,
   action_url text,
+  metadata jsonb not null default '{}'::jsonb,
   read_at timestamptz,
   created_at timestamptz not null default now()
 );
@@ -204,6 +206,7 @@ create index if not exists idx_interactions_client on public.interactions(client
 create index if not exists idx_comments_entity on public.comments(entity_type, entity_id);
 create index if not exists idx_notifications_recipient on public.notifications(recipient_id, created_at desc);
 create index if not exists idx_notifications_unread on public.notifications(recipient_id) where read_at is null;
+create index if not exists idx_notifications_task on public.notifications(task_id);
 
 create or replace function public.current_user_role()
 returns public.app_role
@@ -409,11 +412,47 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare project_name text;
+declare
+  proj_rec public.projects;
+  assigner_name text;
 begin
-  select name into project_name from public.projects where id = new.project_id;
-  insert into public.notifications (recipient_id, actor_id, project_id, type, title, message, action_url)
-  values (new.user_id, auth.uid(), new.project_id, 'assignment', 'New project assignment', 'You were assigned to ' || coalesce(project_name, 'a project') || '.', '/projects/' || new.project_id::text);
+  select * into proj_rec from public.projects where id = new.project_id;
+
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'An administrator')
+  into assigner_name
+  from public.profiles
+  where id = coalesce(new.assigned_by, auth.uid());
+
+  if assigner_name is null then
+    assigner_name := 'An administrator';
+  end if;
+
+  insert into public.notifications (
+    recipient_id,
+    actor_id,
+    project_id,
+    type,
+    title,
+    message,
+    action_url,
+    metadata
+  )
+  values (
+    new.user_id,
+    coalesce(new.assigned_by, (select id from public.profiles where id = auth.uid())),
+    new.project_id,
+    'assignment',
+    'You have been assigned to a new project',
+    'You were assigned to project “' || coalesce(proj_rec.name, 'a project') || '” (Status: ' || coalesce(proj_rec.status::text, 'active') || ') by ' || assigner_name || '.',
+    '/projects/' || new.project_id::text,
+    jsonb_build_object(
+      'project_id', new.project_id,
+      'project_name', coalesce(proj_rec.name, 'Project'),
+      'assigned_by', assigner_name,
+      'status', coalesce(proj_rec.status::text, 'active'),
+      'assigned_at', now()
+    )
+  );
   return new;
 end;
 $$;
@@ -430,8 +469,23 @@ set search_path = public
 as $$
 begin
   if (old.status, old.progress, old.phase, old.due_date) is distinct from (new.status, new.progress, new.phase, new.due_date) then
-    insert into public.notifications (recipient_id, actor_id, project_id, type, title, message, action_url)
-    select pm.user_id, auth.uid(), new.id, 'project_update', 'Project updated', new.name || ' has new progress or status information.', '/projects/' || new.id::text
+    insert into public.notifications (recipient_id, actor_id, project_id, type, title, message, action_url, metadata)
+    select
+      pm.user_id,
+      auth.uid(),
+      new.id,
+      'project_update',
+      'Project updated',
+      new.name || ' has new progress or status information.',
+      '/projects/' || new.id::text,
+      jsonb_build_object(
+        'project_id', new.id,
+        'project_name', new.name,
+        'status', new.status,
+        'progress', new.progress,
+        'phase', new.phase,
+        'due_date', new.due_date
+      )
     from public.project_members pm
     where pm.project_id = new.id and pm.user_id is distinct from auth.uid();
   end if;
@@ -449,20 +503,62 @@ language plpgsql
 security definer
 set search_path = public
 as $$
-declare project_name text;
+declare
+  proj_rec public.projects;
+  assigner_name text;
 begin
   if new.assignee_id is not null
-    and new.assignee_id is distinct from auth.uid()
     and (tg_op = 'INSERT' or new.assignee_id is distinct from old.assignee_id)
     and exists (
       select 1 from public.profiles p
       where p.id = new.assignee_id
-        and (p.role in ('admin'::public.app_role, 'manager'::public.app_role)
-          or exists (select 1 from public.project_members pm where pm.project_id = new.project_id and pm.user_id = new.assignee_id))
+        and p.status = 'active'
+        and p.role <> 'client'::public.app_role
     ) then
-    select name into project_name from public.projects where id = new.project_id;
-    insert into public.notifications (recipient_id, actor_id, project_id, type, title, message, action_url)
-    values (new.assignee_id, auth.uid(), new.project_id, 'task_update', 'New task assignment', 'You were assigned “' || new.title || '” in ' || coalesce(project_name, 'a project') || '.', '/projects/' || new.project_id::text);
+
+    select * into proj_rec from public.projects where id = new.project_id;
+
+    select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'A team member')
+    into assigner_name
+    from public.profiles
+    where id = coalesce(new.created_by, auth.uid());
+
+    if assigner_name is null then
+      assigner_name := 'A team member';
+    end if;
+
+    insert into public.notifications (
+      recipient_id,
+      actor_id,
+      project_id,
+      task_id,
+      type,
+      title,
+      message,
+      action_url,
+      metadata
+    )
+    values (
+      new.assignee_id,
+      coalesce(new.created_by, (select id from public.profiles where id = auth.uid())),
+      new.project_id,
+      new.id,
+      'task_assignment',
+      'New task assignment: ' || new.title,
+      'You were assigned “' || new.title || '” in project “' || coalesce(proj_rec.name, 'a project') || '” by ' || assigner_name || case when new.due_date is not null then ' (Due: ' || to_char(new.due_date, 'YYYY-MM-DD') || ')' else '' end || '.',
+      '/projects/' || new.project_id::text || '?task=' || new.id::text,
+      jsonb_build_object(
+        'task_id', new.id,
+        'task_title', new.title,
+        'project_id', new.project_id,
+        'project_name', coalesce(proj_rec.name, 'Project'),
+        'assigned_by', assigner_name,
+        'due_date', new.due_date,
+        'priority', new.priority,
+        'status', new.status,
+        'assigned_at', now()
+      )
+    );
   end if;
   return new;
 end;
@@ -738,6 +834,69 @@ end;
 $$;
 revoke all on function public.submit_intake_form(uuid) from public, anon;
 grant execute on function public.submit_intake_form(uuid) to authenticated, anon;
+
+create or replace function public.notify_intake_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  client_display_name text;
+begin
+  if new.status = 'submitted' and (tg_op = 'INSERT' or old.status is distinct from 'submitted') then
+    client_display_name := coalesce(
+      nullif(trim(new.contact_name), ''),
+      nullif(trim(new.company_name), ''),
+      nullif(trim(new.contact_email), ''),
+      'Anonymous client'
+    );
+
+    insert into public.notifications (
+      recipient_id,
+      actor_id,
+      project_id,
+      type,
+      title,
+      message,
+      action_url,
+      metadata
+    )
+    select
+      p.id,
+      (select id from public.profiles where id = auth.uid()),
+      new.project_id,
+      'submission',
+      'New intake form submission',
+      'New intake #' || substring(new.id::text, 1, 8) || ' submitted by ' || client_display_name || '.',
+      '/intake?id=' || new.id::text,
+      jsonb_build_object(
+        'intake_id', new.id,
+        'client_name', client_display_name,
+        'contact_email', new.contact_email,
+        'contact_phone', new.phone,
+        'company_name', new.company_name,
+        'services', new.service_types,
+        'submitted_at', coalesce(new.submitted_at, now())
+      )
+    from public.profiles p
+    where p.status = 'active'
+      and (
+        p.role = 'admin'::public.app_role
+        or exists (
+          select 1 from public.role_permissions rp
+          join public.permissions perm on perm.id = rp.permission_id
+          where rp.role_id = p.role_id and perm.key = 'admin.manage'
+        )
+      );
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_intake_submission on public.intake_forms;
+create trigger notify_intake_submission after insert or update of status on public.intake_forms
+for each row execute function public.notify_intake_submission();
 
 insert into storage.buckets (id, name, public) values ('intake-files', 'intake-files', false)
 on conflict (id) do update set public = false;
@@ -2082,6 +2241,9 @@ create table if not exists public.form_submissions (
 create index if not exists idx_form_submissions_form on public.form_submissions(form_id, submitted_at desc);
 create index if not exists idx_form_submissions_email on public.form_submissions(respondent_email);
 
+alter table public.notifications add column if not exists submission_id uuid references public.form_submissions(id) on delete cascade;
+create index if not exists idx_notifications_submission on public.notifications(submission_id);
+
 create table if not exists public.form_submission_answers (
   id uuid primary key default gen_random_uuid(),
   submission_id uuid not null references public.form_submissions(id) on delete cascade,
@@ -2530,6 +2692,81 @@ end;
 $$;
 revoke all on function public.submit_dynamic_form(uuid, jsonb) from public, anon;
 grant execute on function public.submit_dynamic_form(uuid, jsonb) to authenticated, anon;
+
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+begin
+  select * into form_rec from public.form_templates where id = new.form_id;
+
+  client_display_name := coalesce(
+    nullif(trim(new.respondent_name), ''),
+    nullif(trim(new.company_name), ''),
+    nullif(trim(new.respondent_email), ''),
+    'Anonymous client'
+  );
+
+  notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+  notif_message := 'New submission #' || substring(new.id::text, 1, 8) || ' received from ' || client_display_name || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+
+  insert into public.notifications (
+    recipient_id,
+    actor_id,
+    project_id,
+    submission_id,
+    type,
+    title,
+    message,
+    action_url,
+    metadata
+  )
+  select
+    p.id,
+    (select id from public.profiles where id = auth.uid()),
+    new.project_id,
+    new.id,
+    'form_submission',
+    notif_title,
+    notif_message,
+    '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text,
+    jsonb_build_object(
+      'submission_id', new.id,
+      'form_id', new.form_id,
+      'form_name', coalesce(form_rec.title, 'Form'),
+      'client_name', client_display_name,
+      'respondent_name', new.respondent_name,
+      'respondent_email', new.respondent_email,
+      'respondent_phone', new.respondent_phone,
+      'company_name', new.company_name,
+      'project_id', new.project_id,
+      'submitted_at', new.submitted_at
+    )
+  from public.profiles p
+  where p.status = 'active'
+    and (
+      p.role = 'admin'::public.app_role
+      or exists (
+        select 1 from public.role_permissions rp
+        join public.permissions perm on perm.id = rp.permission_id
+        where rp.role_id = p.role_id and perm.key = 'admin.manage'
+      )
+    );
+
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_form_submission on public.form_submissions;
+create trigger notify_form_submission after insert on public.form_submissions
+for each row execute function public.notify_form_submission();
 
 -- ── 6. Storage: private bucket for form uploads ──────────────────────────────
 insert into storage.buckets (id, name, public) values ('form-files', 'form-files', false)
