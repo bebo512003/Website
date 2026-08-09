@@ -30,7 +30,7 @@ export default function AuthPage() {
   }, [])
 
   useEffect(() => {
-    if (!authLoading && user && mode !== 'update-password') router.replace('/')
+    if (!authLoading && user && !user.is_anonymous && mode !== 'update-password') router.replace('/')
   }, [authLoading, mode, router, user])
 
   const changeMode = (nextMode: AuthMode) => {
