@@ -1,0 +1,13 @@
+{
+  "name": "agency-os-db-tests",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Self-contained RLS regression tests. Runs the real schema/migrations on PGlite (WASM PostgreSQL) with simulated auth roles — no Supabase project needed.",
+  "scripts": {
+    "test": "node test.mjs"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.4"
+  }
+}

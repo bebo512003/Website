@@ -7,10 +7,13 @@ The application contains no seeded users or placeholder business records. All da
 ## Features
 
 - Supabase email/password authentication, sign-up, sign-out, and password reset
-- Admin, Manager, and Employee roles
+- Admin, Manager, Employee, and Client account types
+- Admin-managed employee job roles (Designer, Translator, Copywriter, Developer, …) with no hardcoding
+- Employee active/inactive status — inactive accounts immediately lose all workspace access
 - Database-enforced Row Level Security (RLS)
 - Employee access limited to explicitly assigned projects
-- Admin controls for user roles, projects, and employee assignments
+- Clients are never employees: form submitters who sign in get a client account with portal access only
+- Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates
 - Private file upload and download through Supabase Storage
@@ -20,13 +23,14 @@ The application contains no seeded users or placeholder business records. All da
 
 ## Role model
 
-| Role | Access |
+| Account type | Access |
 | --- | --- |
-| Admin | Manages users, roles, project assignments, clients, projects, tasks, and files. |
+| Admin | Manages users, system roles, job roles, statuses, project assignments, clients, projects, tasks, and files. |
 | Manager | Manages clients, projects, tasks, and files. Cannot change account roles. |
-| Employee | Sees only assigned projects and related clients, tasks, and files. Can work with tasks and files in those projects. |
+| Employee | Sees only assigned projects and related clients, tasks, and files. Can work with tasks and files in those projects. Carries an admin-assigned job role (Designer, Translator, …) and an Active/Inactive status. |
+| Client | Form submitters who later create a login with the same e-mail. Clients land on the client portal, never see the staff dashboard, never appear in employee lists, and have no staff permissions. |
 
-The first real account created in an empty workspace becomes the bootstrap Admin. Every later sign-up receives the Employee role until an Admin changes it. The database prevents removal of the final Admin.
+The first real account created in an empty workspace becomes the bootstrap Admin. Later sign-ups become Employees — **unless** their e-mail matches a client record created by a form submission, in which case they automatically become a Client linked to that record. The database prevents removal or deactivation of the final active Admin. Inactive accounts are blocked by RLS throughout the database and by the application shell.
 
 ## Local setup
 

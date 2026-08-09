@@ -28,6 +28,7 @@ The first account in an empty workspace is the bootstrap Admin. Later accounts s
 RLS is enabled for:
 
 - `profiles`
+- `employee_roles`
 - `clients`
 - `projects`
 - `project_members`
@@ -39,7 +40,11 @@ RLS is enabled for:
 
 Admins and Managers can access the full project portfolio. Employees can read a project only when `(project_id, auth.uid())` exists in `project_members`. Related client, task, file, interaction, and comment policies reuse this access check.
 
-Only Admins can call `set_user_role`. Profile owners use `update_own_profile`, which cannot change role or email. The final Admin cannot demote themself.
+The `client` account type is denied by default: management helpers only resolve for active Admin/Manager profiles, project membership is restricted to active team members, and profile visibility is staff-or-self. Clients only read their own profile and the intake submissions linked to their CRM record.
+
+Every access helper is status-aware: setting `profiles.status = 'inactive'` immediately revokes all workspace reads and writes, including notifications and previously uploaded files.
+
+Only Admins can call `set_user_role`, `set_user_status`, `set_user_employee_role`, and `set_user_client_link`. Profile owners use `update_own_profile`, which cannot change role, status, or email. The final active Admin cannot demote or deactivate themself. Job roles in `employee_roles` are Admin-managed rows — create them from the Admin dashboard instead of editing code.
 
 ## Private file storage
 

@@ -23,6 +23,8 @@ interface AuthContextType {
   configured: boolean
   isAdmin: boolean
   isManager: boolean
+  isClient: boolean
+  isDeactivated: boolean
   isAnonymous: boolean
   signIn: (email: string, password: string) => Promise<AuthResult>
   signUp: (email: string, password: string, fullName: string) => Promise<AuthResult>
@@ -115,6 +117,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     configured: isDatabaseConnected,
     isAdmin: profile?.role === 'admin',
     isManager: profile?.role === 'admin' || profile?.role === 'manager',
+    isClient: profile?.role === 'client',
+    isDeactivated: !!profile && profile.status === 'inactive',
     isAnonymous,
     signIn,
     signUp,

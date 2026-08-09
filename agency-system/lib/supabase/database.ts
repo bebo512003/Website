@@ -4,10 +4,15 @@ import type {
   Client,
   ClientInsert,
   ClientUpdate,
+  EmployeeRole,
+  EmployeeRoleInsert,
+  EmployeeRoleUpdate,
   FileItem,
   FileWithProject,
+  IntakeForm,
   Notification,
   Profile,
+  ProfileStatus,
   Project,
   ProjectInsert,
   ProjectMember,
@@ -42,6 +47,55 @@ export async function setProfileRole(userId: string, role: AppRole): Promise<Res
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: role })
   return error ? fail(null, error.message) : ok(data)
+}
+
+export async function setProfileStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('set_user_status', { target_user_id: userId, new_status: status })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function setProfileEmployeeRole(userId: string, employeeRoleId: string | null): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('set_user_employee_role', { target_user_id: userId, new_employee_role_id: employeeRoleId })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function setProfileClientLink(userId: string, clientId: string | null): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('set_user_client_link', { target_user_id: userId, new_client_id: clientId })
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function getEmployeeRoles(): Promise<Result<EmployeeRole[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('employee_roles').select('*').order('name')
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function createEmployeeRole(role: EmployeeRoleInsert): Promise<Result<EmployeeRole | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('employee_roles').insert(role).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function updateEmployeeRole(id: string, updates: EmployeeRoleUpdate): Promise<Result<EmployeeRole | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('employee_roles').update(updates).eq('id', id).select().single()
+  return error ? fail(null, error.message) : ok(data)
+}
+
+export async function deleteEmployeeRole(id: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.from('employee_roles').delete().eq('id', id)
+  return error ? fail(false, error.message) : ok(true)
+}
+
+// Client portal: RLS scopes this to submissions the signed-in client created or owns.
+export async function getClientIntakeSubmissions(): Promise<Result<IntakeForm[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('intake_forms').select('*').order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok(data || [])
 }
 
 export async function getClients(): Promise<Result<Client[]>> {
