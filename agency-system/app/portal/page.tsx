@@ -5,33 +5,19 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { ClipboardList, LogOut, Sparkles, UserRound, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { getClientIntakeSubmissions } from '@/lib/supabase/database'
-import type { IntakeForm } from '@/lib/supabase/types'
+import { getClientFormSubmissions } from '@/lib/supabase/database'
+import type { ClientFormSubmission } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
-const serviceLabels: Record<string, string> = {
-  logo_design: 'Logo Design',
-  visual_identity: 'Visual Identity',
-  company_profile: 'Company Profile',
-}
-
 const statusLabels: Record<string, string> = {
-  draft: 'Draft',
   submitted: 'Submitted',
   archived: 'Archived',
-}
-
-const formatServices = (submission: IntakeForm) => {
-  const keys = submission.service_types.length > 0
-    ? submission.service_types
-    : submission.service_type ? [submission.service_type] : []
-  return keys.map((key) => serviceLabels[key] || key).join(' + ') || 'Service request'
 }
 
 export default function ClientPortalPage() {
   const router = useRouter()
   const { user, profile, loading: authLoading, signOut } = useAuth()
-  const [submissions, setSubmissions] = useState<IntakeForm[]>([])
+  const [submissions, setSubmissions] = useState<ClientFormSubmission[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -43,7 +29,7 @@ export default function ClientPortalPage() {
     }
     let cancelled = false
     void (async () => {
-      const result = await getClientIntakeSubmissions()
+      const result = await getClientFormSubmissions()
       if (cancelled) return
       setSubmissions(result.data)
       setError(result.error || '')
@@ -57,7 +43,7 @@ export default function ClientPortalPage() {
     router.replace('/auth')
   }
 
-  const displayName = profile?.full_name || submissions[0]?.contact_name || profile?.email || 'Client'
+  const displayName = profile?.full_name || submissions[0]?.respondent_name || profile?.email || 'Client'
   const companyName = submissions.find((item) => item.company_name)?.company_name
 
   return (
@@ -93,7 +79,7 @@ export default function ClientPortalPage() {
 
         {error && <InlineAlert>{error}</InlineAlert>}
 
-        <Panel title="Your requests" description="Every service request submitted for your account.">
+        <Panel title="Your requests" description="Every Dynamic Form response submitted for your account.">
           {loading ? (
             <LoadingState label="Loading your requests…" />
           ) : submissions.length === 0 ? (
@@ -101,7 +87,7 @@ export default function ClientPortalPage() {
               icon={ClipboardList}
               title="No requests yet"
               description="Submit your first service request and it will appear here with its live status."
-              action={<Link href="/forms" className={primaryButtonClassName}><Sparkles className="h-4 w-4" /> Request a service</Link>}
+              action={<Link href="/forms" className={primaryButtonClassName}><Sparkles className="h-4 w-4" /> Request a New Project</Link>}
             />
           ) : (
             <div className="divide-y divide-border">
@@ -111,9 +97,11 @@ export default function ClientPortalPage() {
                 return (
                   <div key={submission.id} className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-fg">{formatServices(submission)}</p>
+                      <p className="truncate text-sm font-semibold text-fg">
+                        {submission.form_templates?.title || 'Service request'}
+                      </p>
                       <p className="mt-1 text-xs text-text-tertiary">
-                        {submission.company_name || 'Request'} · {new Date(when).toLocaleDateString()}
+                        {submission.company_name || submission.respondent_name || 'Request'} · {new Date(when).toLocaleDateString()}
                       </p>
                     </div>
                     <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${
@@ -137,10 +125,10 @@ export default function ClientPortalPage() {
             <Sparkles className="mt-0.5 h-5 w-5 text-accent" />
             <div>
               <h2 className="text-sm font-semibold">Need something new?</h2>
-              <p className="mt-1 text-xs text-text-tertiary">Start a new service request — it will be linked to this account automatically.</p>
+              <p className="mt-1 text-xs text-text-tertiary">Start a new project request from the published forms — it will be linked to this account automatically.</p>
             </div>
           </div>
-          <Link href="/forms" className={secondaryButtonClassName}>Open the request form</Link>
+          <Link href="/forms" className={secondaryButtonClassName}>Request a New Project</Link>
         </Panel>
       </div>
     </main>

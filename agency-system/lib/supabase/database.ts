@@ -11,8 +11,8 @@ import type {
   EmployeeRoleInsert,
   EmployeeRoleUpdate,
   FileItem,
+  ClientFormSubmission,
   FileWithProject,
-  IntakeForm,
   Notification,
   Permission,
   PortfolioCategory,
@@ -141,11 +141,14 @@ export async function addPermission(key: string, name: string, category: string,
   return error ? fail(null, error.message) : ok(data as unknown as Permission)
 }
 
-// Client portal
-export async function getClientIntakeSubmissions(): Promise<Result<IntakeForm[]>> {
+// Client portal — Dynamic Form submissions linked to the signed-in client record
+export async function getClientFormSubmissions(): Promise<Result<ClientFormSubmission[]>> {
   if (!supabase) return fail([])
-  const { data, error } = await supabase.from('intake_forms').select('*').order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok(data || [])
+  const { data, error } = await supabase
+    .from('form_submissions')
+    .select('*, form_templates(title, slug)')
+    .order('submitted_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as ClientFormSubmission[])
 }
 export async function getClients(): Promise<Result<Client[]>> {
   if (!supabase) return fail([])
@@ -581,52 +584,6 @@ export async function getUnreadNotificationCount(): Promise<Result<number>> {
     .select('*', { count: 'exact', head: true })
     .is('read_at', null)
   return error ? fail(0, error.message) : ok(count || 0)
-}
-
-export async function createIntakeForm(form: import('./types').IntakeFormInsert): Promise<Result<import('./types').IntakeForm | null>> {
-  if (!supabase) return fail(null)
-  const payload = { ...form }
-  if (!payload.service_types || payload.service_types.length === 0) {
-    if (payload.service_type) payload.service_types = [payload.service_type]
-  }
-  const { data, error } = await supabase.from('intake_forms').insert(payload).select().single()
-  return error ? fail(null, error.message) : ok(data)
-}
-
-export async function updateIntakeForm(id: string, form: import('./types').IntakeFormUpdate): Promise<Result<import('./types').IntakeForm | null>> {
-  if (!supabase) return fail(null)
-  const payload = { ...form }
-  if (payload.service_type && (!payload.service_types || payload.service_types.length === 0)) {
-    payload.service_types = [payload.service_type]
-  }
-  const { data, error } = await supabase.from('intake_forms').update(payload).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
-}
-
-export async function submitIntakeForm(id: string): Promise<Result<import('./types').IntakeForm | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('submit_intake_form', { target_intake_id: id })
-  return error ? fail(null, error.message) : ok(data)
-}
-
-export async function uploadIntakeAttachment(intakeId: string, userId: string, file: File): Promise<Result<import('./types').IntakeAttachment | null>> {
-  if (!supabase) return fail(null)
-  const validation = validateFile(file, 'intake-files')
-  if (!validation.valid) return fail(null, validation.error || 'Invalid intake file.')
-
-  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
-  const storagePath = `${userId}/${intakeId}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('intake-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
-  if (upload.error) return fail(null, upload.error.message)
-  const { data, error } = await supabase.from('intake_attachments').insert({ intake_id: intakeId, name: file.name, size: file.size, mime_type: file.type || null, storage_path: storagePath, uploaded_by: userId }).select().single()
-  if (error) { await supabase.storage.from('intake-files').remove([storagePath]); return fail(null, error.message) }
-  return ok(data)
-}
-
-export async function getIntakeFileUrl(storagePath: string, expiresIn = STORAGE_RULES['intake-files'].signedUrlDurationSeconds || 120): Promise<Result<string | null>> {
-  if (!supabase || !storagePath) return fail(null)
-  const { data, error } = await supabase.storage.from('intake-files').createSignedUrl(storagePath, expiresIn)
-  return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
 // Dynamic form builder

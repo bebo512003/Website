@@ -76,7 +76,7 @@ export default function SubmissionsPage() {
   if (!allowed) {
     return (
       <Page>
-        <PageHeader eyebrow="SUBMISSIONS" title="Submissions" description="Intake and form responses." />
+        <PageHeader eyebrow="SUBMISSIONS" title="Submissions" description="Dynamic Form responses." />
         <Panel>
           <EmptyState
             icon={ShieldCheck}

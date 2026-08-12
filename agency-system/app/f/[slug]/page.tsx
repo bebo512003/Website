@@ -90,7 +90,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const submitTimeRef = useRef<number>(0)
 
-  // Anonymous session (same pattern as /intake): gives the respondent ownership
+  // Anonymous session: gives the respondent ownership
   // of their submission and the ability to upload files. The form still works
   // read-and-submit without it, only file uploads require the session.
   useEffect(() => {

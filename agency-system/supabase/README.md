@@ -57,12 +57,13 @@ RLS is enabled for every application table:
 
 - identity/access: `profiles`, `employee_roles`, `app_roles`, `permissions`, `role_permissions`
 - operations: `clients`, `projects`, `project_members`, `tasks`, `files`, `interactions`, `comments`, `notifications`
-- legacy intake: `intake_forms`, `intake_projects`, `intake_attachments`
+- archived legacy intake (read-only): `intake_forms`, `intake_projects`, `intake_attachments`
 - dynamic forms: `form_templates`, `form_questions`, `form_submissions`, `form_submission_answers`, `form_submission_attachments`
 - public portfolio: `portfolio_categories`, `portfolio_projects`, `portfolio_project_images`
 
-Storage object policies separately protect `project-files`, `intake-files`, `form-files`,
-`portfolio-images`, and `avatars`.
+Storage object policies separately protect `project-files`, `form-files`,
+`portfolio-images`, and `avatars`. The retired `intake-files` bucket remains only
+so leftover historical objects can still be read or deleted by authorized staff.
 
 ## Roles & permissions (granular RBAC)
 
@@ -96,7 +97,7 @@ Project/portfolio reads still follow membership: `can_access_project` requires
 `has_permission('project.view')` plus either `project.view_all` (Admin/Manager) or a
 `project_members` row (Employee).
 
-The `client` account type is denied by default: management helpers only resolve for active authorized profiles, project membership is restricted to active team members, and directory visibility requires `employee.view` (owners can always read their own profile). Clients only read their own profile and the intake submissions linked to their CRM record.
+The `client` account type is denied by default: management helpers only resolve for active authorized profiles, project membership is restricted to active team members, and directory visibility requires `employee.view` (owners can always read their own profile). Clients only read their own profile and the Dynamic Form submissions linked to their CRM record.
 
 Every access helper is status-aware: setting `profiles.status = 'inactive'` immediately revokes all workspace reads and writes, including notifications and previously uploaded files.
 

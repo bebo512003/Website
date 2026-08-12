@@ -12,7 +12,7 @@ export default function AdminFormsPage() {
   if (!allowed) {
     return (
       <Page>
-        <PageHeader eyebrow="ADMIN / FORMS" title="Forms" description="Build and publish dynamic intake forms." />
+        <PageHeader eyebrow="ADMIN / FORMS" title="Forms" description="Build and publish Dynamic Forms." />
         <Panel>
           <EmptyState
             icon={ShieldCheck}

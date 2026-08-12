@@ -10,7 +10,6 @@ export type StorageBucketId =
   | 'portfolio-images'
   | 'project-files'
   | 'form-files'
-  | 'intake-files'
 
 export type BucketVisibility = 'public' | 'private'
 
@@ -141,7 +140,7 @@ export const STORAGE_RULES: Record<StorageBucketId, StorageBucketRule> = {
   'form-files': {
     id: 'form-files',
     name: 'Form Attachments',
-    purpose: 'Public form response attachments and client intake uploads',
+    purpose: 'Public Dynamic Form response attachments',
     purposeAr: 'مرفقات نماذج الاستبيان وردود العملاء',
     visibility: 'private',
     maxSizeBytes: 20 * 1024 * 1024, // 20 MB
@@ -172,38 +171,6 @@ export const STORAGE_RULES: Record<StorageBucketId, StorageBucketRule> = {
     acceptAttribute: '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.odt,.ods,.txt,.csv,.zip,.rar,.7z,.png,.jpg,.jpeg,.webp,.gif,.mp3,.wav,.mp4,.mov',
     requiresSignedUrl: true,
     signedUrlDurationSeconds: 120, // 2 minutes
-  },
-
-  'intake-files': {
-    id: 'intake-files',
-    name: 'Intake Files',
-    purpose: 'Legacy client intake attachments',
-    purposeAr: 'مرفقات نماذج الاستقبال السابقة',
-    visibility: 'private',
-    maxSizeBytes: 20 * 1024 * 1024, // 20 MB
-    maxSizeFormatted: '20 MB',
-    allowedMimeTypes: [
-      'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-      'application/pdf',
-      'application/msword',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-      'application/vnd.ms-excel',
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'application/vnd.ms-powerpoint',
-      'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-      'text/plain', 'text/csv',
-      'application/zip', 'application/x-zip-compressed', 'application/x-7z-compressed',
-      'application/x-rar-compressed', 'application/vnd.rar',
-    ],
-    allowedExtensions: [
-      '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-      '.txt', '.csv',
-      '.zip', '.rar', '.7z',
-      '.png', '.jpg', '.jpeg', '.webp', '.gif',
-    ],
-    acceptAttribute: '.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.png,.jpg,.jpeg,.webp,.gif',
-    requiresSignedUrl: true,
-    signedUrlDurationSeconds: 120,
   },
 }
 
