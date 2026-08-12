@@ -125,12 +125,14 @@ export function Modal({
   description,
   children,
   onClose,
+  maxWidthClassName = 'max-w-xl',
 }: {
   open: boolean
   title: string
   description?: string
   children: React.ReactNode
   onClose: () => void
+  maxWidthClassName?: string
 }) {
   if (!open) return null
 
@@ -140,7 +142,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
-        className="max-h-[90vh] w-full max-w-xl overflow-y-auto rounded-md border border-border bg-surface p-6 shadow-2xl"
+        className={`max-h-[90vh] w-full ${maxWidthClassName} overflow-y-auto rounded-md border border-border bg-surface p-6 shadow-2xl`}
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="mb-5 flex items-start justify-between gap-4">

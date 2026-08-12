@@ -163,7 +163,7 @@ export default function ProjectsPage() {
             {filtered.map((project) => (
               <article key={project.id} className="flex min-h-64 flex-col bg-surface p-5 transition hover:bg-surface-raised">
                 <div className="flex items-start justify-between gap-4">
-                  <span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] text-text-tertiary">{statusLabels[project.status]}</span>
+                  <div className="flex items-center gap-1.5"><span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] text-text-tertiary">{statusLabels[project.status]}</span><span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] uppercase text-text-tertiary">{project.priority}</span></div>
                   {canEdit && <div className="flex gap-1"><button className="rounded border border-border p-1.5 text-text-tertiary hover:text-fg" onClick={() => openEdit(project)} aria-label={`Edit ${project.name}`}><Pencil className="h-3.5 w-3.5" /></button>{can('project.delete') && <button className="rounded border border-border p-1.5 text-text-tertiary hover:text-red-400" onClick={() => void remove(project)} aria-label={`Delete ${project.name}`}><Trash2 className="h-3.5 w-3.5" /></button>}</div>}
                 </div>
                 <Link href={`/projects/${project.id}`} className="mt-5 block text-lg font-semibold text-fg hover:text-accent">{project.name}</Link>

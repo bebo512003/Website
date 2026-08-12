@@ -1451,6 +1451,157 @@ async function runSubmissionReviewWorkflowSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runSubmissionConversionSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  await asUser(db, alice)
+  const formId = (await db.query(
+    `insert into public.form_templates (slug, title, status) values ('controlled-conversion', 'Controlled Conversion', 'published') returning id`
+  )).rows[0].id
+  const emailQuestion = (await db.query(
+    `insert into public.form_questions (form_id, question_type, label, required, map_to, position)
+     values ($1, 'short_text', 'Contact e-mail', true, 'email', 1) returning id`, [formId]
+  )).rows[0].id
+  const briefQuestion = (await db.query(
+    `insert into public.form_questions (form_id, question_type, label, required, position)
+     values ($1, 'long_text', 'Project brief', true, 2) returning id`, [formId]
+  )).rows[0].id
+
+  await asUser(db, anonVisitor, 'anon')
+  const submission = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [
+    formId,
+    JSON.stringify({ [emailQuestion]: 'controlled@conversion.test', [briefQuestion]: 'Preserve this original answer.' }),
+  ])).rows[0]
+  ok(`${label}: public submissions do not create projects by default`, submission?.project_id === null && submission?.status === 'new')
+
+  await asUser(db, alice)
+  const prematureConversionFails = await expectError(db, () => db.query(
+    `select * from public.convert_submission_to_project($1, null, $2::jsonb, 'Premature', null, 'Website', 'high', 'active', 1, 'Discovery', null, null, null, 'USD', $3, null, '{}'::uuid[])`,
+    [submission.id, JSON.stringify({ name: 'Premature Client', type: 'smb' }), alice]
+  ))
+  ok(`${label}: conversion requires Qualified or Approved status`, prematureConversionFails)
+
+  const fakeConvertedStatusFails = await expectError(db, () =>
+    db.query(`select public.update_form_submission_status($1, 'converted')`, [submission.id]))
+  ok(`${label}: Converted status cannot be set without creating a project`, fakeConvertedStatusFails)
+
+  await db.query(`select public.update_form_submission_status($1, 'qualified', 'Ready for controlled conversion')`, [submission.id])
+
+  await asUser(db, erin)
+  const managerConversionFails = await expectError(db, () => db.query(
+    `select * from public.convert_submission_to_project($1, null, $2::jsonb, 'Manager Attempt', null, 'Website', 'high', 'active', 1, 'Discovery', null, null, null, 'USD', $3, null, '{}'::uuid[])`,
+    [submission.id, JSON.stringify({ name: 'Manager Client', type: 'smb' }), erin]
+  ))
+  ok(`${label}: only Admin can perform deliberate conversion`, managerConversionFails)
+
+  await expectError(db, () => db.query(
+    `update public.form_templates set settings = '{"create_project_on_submit": true}'::jsonb where id = $1`, [formId]
+  ))
+  const managerAutomationEnabled = (await db.query(
+    `select coalesce(settings ->> 'create_project_on_submit', 'false') = 'true' enabled from public.form_templates where id = $1`, [formId]
+  )).rows[0]?.enabled
+  ok(`${label}: non-Admin cannot configure submit-time project automation`, managerAutomationEnabled !== true)
+
+  await asUser(db, alice)
+  const project = (await db.query(
+    `select * from public.convert_submission_to_project(
+       $1, null, $2::jsonb, $3, $4, 'Website', 'high', 'review', 2, 'Planning',
+       '2026-08-15', '2026-09-30', 25000, 'USD', $5, $6, array[$5]::uuid[]
+     )`,
+    [
+      submission.id,
+      JSON.stringify({ name: 'Controlled Client', type: 'enterprise', contact_person: 'Casey', email: 'new-controlled-client@test.local', phone: '+1 555 0100' }),
+      'Controlled Website Project',
+      'Configured from a qualified submission.',
+      bob,
+      erin,
+    ]
+  )).rows[0]
+
+  const converted = (await db.query(
+    `select status, client_id, project_id, converted_at, converted_by from public.form_submissions where id = $1`,
+    [submission.id]
+  )).rows[0]
+  ok(`${label}: conversion creates configured project and links it to its client`,
+    project?.name === 'Controlled Website Project' && project?.type === 'Website' && project?.priority === 'high' &&
+    project?.status === 'review' && project?.phase === 2 && project?.phase_name === 'Planning' &&
+    project?.owner_id === bob && project?.manager_id === erin && !!project?.client_id)
+  ok(`${label}: project preserves immutable original submission reference`, project?.source_submission_id === submission.id)
+  ok(`${label}: submission links back to project and records converter/timestamp`,
+    converted?.status === 'converted' && converted?.project_id === project.id && converted?.client_id === project.client_id &&
+    converted?.converted_by === alice && converted?.converted_at !== null)
+
+  const preservedAnswers = (await db.query(
+    `select value from public.form_submission_answers where submission_id = $1 order by created_at`, [submission.id]
+  )).rows
+  ok(`${label}: submitted answers remain preserved after conversion`,
+    preservedAnswers.length === 2 && preservedAnswers.some((row) => row.value === 'Preserve this original answer.'))
+
+  const assignments = (await db.query(
+    `select user_id from public.project_members where project_id = $1`, [project.id]
+  )).rows.map((row) => row.user_id)
+  ok(`${label}: owner, manager, and selected team receive project assignment`,
+    assignments.includes(bob) && assignments.includes(erin) && assignments.length === 2)
+
+  const conversionEvent = (await db.query(
+    `select * from public.form_submission_events where submission_id = $1 and event_type = 'converted_to_project'`,
+    [submission.id]
+  )).rows[0]
+  ok(`${label}: conversion writes a full audit event with preserved-answer metadata`,
+    conversionEvent?.actor_id === alice && conversionEvent?.metadata?.project_id === project.id &&
+    conversionEvent?.metadata?.answers_preserved === true && conversionEvent?.metadata?.automatic === false)
+
+  const duplicateConversionFails = await expectError(db, () => db.query(
+    `select * from public.convert_submission_to_project($1, $2, null, 'Duplicate', null, 'General', 'medium', 'active', 1, null, null, null, null, 'USD', $3, null, '{}'::uuid[])`,
+    [submission.id, project.client_id, alice]
+  ))
+  ok(`${label}: duplicate conversion is rejected without a second project`, duplicateConversionFails &&
+    (await scalar(db, `select count(*)::int n from public.projects where source_submission_id = $1`, [submission.id])).n === 1)
+
+  const sourceMutationFails = await expectError(db, () =>
+    db.query(`update public.projects set source_submission_id = null where id = $1`, [project.id]))
+  ok(`${label}: original submission reference cannot be cleared or replaced`, sourceMutationFails)
+
+  const convertedStatusMutationFails = await expectError(db, () =>
+    db.query(`select public.update_form_submission_status($1, 'approved')`, [submission.id]))
+  ok(`${label}: converted submissions cannot return to an earlier workflow status`, convertedStatusMutationFails)
+
+  // Explicit Admin automation remains available as an exceptional opt-in.
+  const autoForm = (await db.query(
+    `insert into public.form_templates (slug, title, status, settings)
+     values ('admin-auto-conversion', 'Admin Auto Conversion', 'published', '{"create_project_on_submit": true}'::jsonb)
+     returning id, settings`
+  )).rows[0]
+  const autoEmailQuestion = (await db.query(
+    `insert into public.form_questions (form_id, question_type, label, required, map_to, position)
+     values ($1, 'short_text', 'E-mail', true, 'email', 1) returning id`, [autoForm.id]
+  )).rows[0].id
+  ok(`${label}: Admin opt-in stores automation attribution`,
+    autoForm.settings?.create_project_on_submit === true && autoForm.settings?.auto_project_configured_by === alice)
+
+  await asUser(db, anonVisitor, 'anon')
+  const automatedSubmission = (await db.query(
+    `select * from public.submit_dynamic_form($1, $2::jsonb)`,
+    [autoForm.id, JSON.stringify({ [autoEmailQuestion]: 'explicit-auto@test.local' })]
+  )).rows[0]
+  await asUser(db, alice)
+  const automatedStored = (await db.query(
+    `select status, project_id, converted_at from public.form_submissions where id = $1`, [automatedSubmission.id]
+  )).rows[0]
+  const automatedProject = (await db.query(
+    `select source_submission_id from public.projects where id = $1`, [automatedStored.project_id]
+  )).rows[0]
+  const automatedEvent = (await db.query(
+    `select metadata from public.form_submission_events where submission_id = $1 and event_type = 'converted_to_project'`,
+    [automatedSubmission.id]
+  )).rows[0]
+  ok(`${label}: explicitly Admin-configured automation links and finalizes the project`,
+    automatedStored?.status === 'converted' && automatedStored?.converted_at !== null &&
+    automatedProject?.source_submission_id === automatedSubmission.id && automatedEvent?.metadata?.automatic === true)
+
+  await superUser(db)
+}
+
 async function runStorageSecuritySuite(db, ids, label) {
   const { anonVisitor, alice, bob, carol } = ids
 
@@ -1560,6 +1711,7 @@ async function main() {
   await runNotificationSuite(dbA, idsA, 'upgrade')
   await runStorageSecuritySuite(dbA, idsA, 'upgrade')
   await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
+  await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -1615,6 +1767,22 @@ async function main() {
   await dbB.query(`select public.update_form_submission_status($1, 'qualified', 'Fresh qualification note')`, [freshSubmission.id])
   const freshEvents = (await dbB.query(`select * from public.form_submission_events where submission_id = $1 order by created_at asc`, [freshSubmission.id])).rows
   ok('fresh: full event audit log recorded on fresh schema', freshEvents.length === 3 && freshEvents.map((e) => e.event_type).includes('status_changed'))
+
+  const freshProject = (await dbB.query(
+    `select * from public.convert_submission_to_project(
+       $1, $2, null, 'Fresh Converted Project', 'Fresh conversion', 'General', 'medium', 'active',
+       1, 'Discovery', null, null, null, 'USD', $3, null, array[$4]::uuid[]
+     )`,
+    [freshSubmission.id, freshSubmission.client_id, aliceB, employeeB]
+  )).rows[0]
+  ok('fresh: controlled conversion creates a source-linked project',
+    freshProject?.source_submission_id === freshSubmission.id && freshProject?.client_id === freshSubmission.client_id)
+  ok('fresh: converted project retains the submitted answer',
+    (await scalar(dbB, `select count(*)::int n from public.form_submission_answers where submission_id = $1`, [freshSubmission.id])).n === 1)
+  ok('fresh: duplicate controlled conversion remains blocked', await expectError(dbB, () => dbB.query(
+    `select * from public.convert_submission_to_project($1, $2, null, 'Duplicate', null, 'General', 'medium', 'active', 1, null, null, null, null, 'USD', $3, null, '{}'::uuid[])`,
+    [freshSubmission.id, freshSubmission.client_id, aliceB]
+  )))
 
   await dbB.close()
 

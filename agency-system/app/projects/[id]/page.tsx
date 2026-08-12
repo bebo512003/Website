@@ -2,7 +2,7 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Calendar, CheckCircle2, Clock, FolderKanban, LoaderCircle, Plus, Trash2, Users } from 'lucide-react'
+import { ArrowLeft, Calendar, CheckCircle2, Clock, FileInput, Flag, FolderKanban, LoaderCircle, Plus, Trash2, UserRound, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { createTask, deleteTask, getProjectById, getProjectMembers, getTasksByProjectId, updateProject, updateTask } from '@/lib/supabase/database'
 import type { Profile, ProjectMember, ProjectStatus, ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
@@ -107,12 +107,23 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       <PageHeader eyebrow={`PROJECT / ${project.type.toUpperCase()}`} title={project.name} description={project.description || 'No description provided.'} action={<button className={primaryButtonClassName} onClick={openTask}><Plus className="h-4 w-4" /> New task</button>} />
       {error && <InlineAlert>{error}</InlineAlert>}{message && <InlineAlert tone="success">{message}</InlineAlert>}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Panel className="p-5"><Users className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Client</p><p className="mt-1 text-sm font-semibold">{project.clients?.name || 'Unavailable'}</p></Panel>
         <Panel className="p-5"><Calendar className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Due date</p><p className="mt-1 text-sm font-semibold">{project.due_date ? new Date(`${project.due_date}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : 'Not set'}</p></Panel>
         <Panel className="p-5"><CheckCircle2 className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Status</p><p className="mt-1 text-sm font-semibold">{projectStatusLabels[project.status]}</p></Panel>
         <Panel className="p-5"><Clock className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Current phase</p><p className="mt-1 text-sm font-semibold">{project.phase}/10 {project.phase_name && `· ${project.phase_name}`}</p></Panel>
+        <Panel className="p-5"><Flag className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Priority</p><p className="mt-1 text-sm font-semibold capitalize">{project.priority}</p></Panel>
+        <Panel className="p-5"><UserRound className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Owner / Manager</p><p className="mt-1 text-sm font-semibold">{project.owner?.full_name || project.owner?.email || 'No owner'}</p><p className="mt-1 text-xs text-text-tertiary">{project.manager?.full_name || project.manager?.email || 'No separate manager'}</p></Panel>
       </div>
+
+      {project.source_submission_id && can('submission.view') && (
+        <Panel className="border-emerald-500/25 bg-emerald-500/[0.03] p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3"><FileInput className="mt-0.5 h-4 w-4 text-emerald-400" /><div><p className="text-sm font-semibold text-fg">Created from a form submission</p><p className="mt-1 text-xs text-text-tertiary">Original reference and submitted answers are preserved in the Submission Inbox.</p></div></div>
+            <Link href={`/submissions?submission=${project.source_submission_id}`} className={secondaryButtonClassName}>View source submission</Link>
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Overall progress" description={`${project.progress}% complete`}><div className="p-5"><div className="h-2 overflow-hidden rounded-full bg-border"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${project.progress}%` }} /></div></div></Panel>
 

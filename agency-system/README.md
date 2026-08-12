@@ -17,6 +17,7 @@ The application contains no seeded users or placeholder business records. All da
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
 - **Submission Review Workflow & Inbox** at `/submissions`: the operational review workflow for every public form response with stage pipeline metrics, search, status & reviewer filters, sorting, complete answer & file review, internal review notes feed, reviewer notifications, and tamper-evident audit history tracking who performed each action with timestamps
+- **Controlled Submission → Project Conversion**: Admins deliberately convert only Qualified/Approved submissions through client selection/creation, project configuration, owner/manager/team assignment, and a final confirmation; the database keeps immutable submission provenance and rejects duplicate/concurrent conversions
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates
@@ -80,8 +81,11 @@ npm run dev
    every employee, manager, custom internal role, or additional Admin. Give the generated
    e-mail/initial-password credentials to that person securely.
 
-Public form submissions create CRM client records and projects as configured; they do not
-create Auth users. Password reset remains available from `/auth` for existing accounts.
+Public form submissions may match/create CRM client records, but projects are **not** created
+by default. Normally an Admin qualifies/approves the submission and deliberately converts it
+from `/submissions`. Submit-time project automation is an exceptional Admin-only form setting
+that requires an explicit warning confirmation. Public submitters never create Auth users.
+Password reset remains available from `/auth` for existing accounts.
 
 ## Dynamic forms (no-code form builder)
 
@@ -135,6 +139,34 @@ widens the `form_submissions.status` CHECK constraint and migrates any legacy
 snapshots, attachments) is unchanged. Permissions: `submission.view` (read),
 `submission.edit` (status), `submission.assign` (ownership) — all granted to Admin and
 Manager by default.
+
+## Controlled submission-to-project conversion
+
+The normal lifecycle is **Submission → Qualified / Approved → Convert to Project →
+Select/Create Client → Configure Project → Assign Owner/Manager → Assign Team → Confirm →
+Create Project**.
+
+1. Sign in as an Admin and open `/submissions`.
+2. Review the frozen answers/files and mark the response **Qualified** or **Approved**.
+3. Click **Convert to Project**.
+4. Select the linked/existing CRM client or create a new one; set project name, type,
+   priority, initial status/phase, start date/deadline, optional budget, owner, manager,
+   and initial team.
+5. Review the final confirmation and click **Confirm & Create Project**.
+
+Conversion is an atomic, Admin-only database RPC. It locks the submission, rejects a
+second or concurrent conversion, creates/selects the client, creates the project and team
+assignments, marks the submission Converted, and writes an audit event in one transaction.
+`projects.source_submission_id` is immutable, while answers and attachments stay on the
+original submission and remain reachable from the project detail page.
+
+Public submissions do not create projects by default. An Admin can opt a specific form into
+legacy submit-time automation from **Administration → Forms → Form details**, but enabling
+it shows a warning and records which Admin configured it. Non-Admins cannot enable that
+setting. Keep it disabled for the controlled workflow above.
+
+Apply `supabase/migrations/20260827000000_controlled_submission_project_conversion.sql`
+(or the regenerated `supabase/schema.sql` on a fresh database) before using this UI.
 
 ## Public company portfolio
 

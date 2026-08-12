@@ -14,6 +14,7 @@ import {
   ExternalLink,
   FileText,
   Filter,
+  FolderPlus,
   History,
   Inbox,
   MessageSquare,
@@ -33,6 +34,7 @@ import {
   assignFormSubmissionReviewer,
   deleteFormSubmissionNote,
   getAdminInboxSubmissions,
+  getClients,
   getFormFileUrl,
   getFormSubmissionDetails,
   getFormTemplates,
@@ -45,10 +47,13 @@ import type {
   FormSubmissionAttachment,
   FormSubmissionEvent,
   FormSubmissionNote,
+  Client,
   Profile,
+  Project,
   SubmissionStatus,
 } from '@/lib/supabase/types'
 import { formatAnswer } from '@/lib/forms/question-types'
+import { SubmissionConversionModal } from '@/components/submissions/submission-conversion-modal'
 import {
   SUBMISSION_STATUS_DESCRIPTIONS,
   SUBMISSION_STATUS_LABELS,
@@ -102,10 +107,12 @@ export default function SubmissionsPage() {
   const allowed = can('submission.view')
   const canEdit = can('submission.edit')
   const canAssign = can('submission.assign')
+  const canConvert = can('admin.manage')
   const canOpenForm = can('form.manage') || can('form.view')
 
   const [rows, setRows] = useState<AdminSubmissionRow[]>([])
   const [team, setTeam] = useState<Profile[]>([])
+  const [clients, setClients] = useState<Client[]>([])
   const [forms, setForms] = useState<{ id: string; title: string }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -133,6 +140,9 @@ export default function SubmissionsPage() {
   const [statusNote, setStatusNote] = useState('')
   const [updatingStatus, setUpdatingStatus] = useState(false)
 
+  // Deliberate Admin-only conversion workflow.
+  const [conversionSubmission, setConversionSubmission] = useState<AdminSubmissionRow | null>(null)
+
   const loadDetails = useCallback(async (submissionId: string) => {
     setDetailsLoading(true)
     const result = await getFormSubmissionDetails(submissionId)
@@ -146,15 +156,17 @@ export default function SubmissionsPage() {
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [submissionResult, teamResult, formResult] = await Promise.all([
+    const [submissionResult, teamResult, clientResult, formResult] = await Promise.all([
       getAdminInboxSubmissions(),
       getTeamMembers(),
+      getClients(),
       getFormTemplates(),
     ])
     setRows(submissionResult.data)
     setTeam(teamResult.data)
+    setClients(clientResult.data)
     setForms(formResult.data.map((form) => ({ id: form.id, title: form.title })))
-    setError(submissionResult.error || teamResult.error || formResult.error || '')
+    setError(submissionResult.error || teamResult.error || clientResult.error || formResult.error || '')
     setLoading(false)
   }, [])
 
@@ -269,6 +281,30 @@ export default function SubmissionsPage() {
     if (expandedId === submission.id) {
       await loadDetails(submission.id)
     }
+  }
+
+  const openConversion = async (submission: AdminSubmissionRow) => {
+    setError('')
+    if (!detailsCache[submission.id]) await loadDetails(submission.id)
+    setConversionSubmission(submission)
+  }
+
+  const handleConverted = async (project: Project) => {
+    if (!conversionSubmission) return
+    const convertedSubmissionId = conversionSubmission.id
+    setConversionSubmission(null)
+    setRows((items) => items.map((item) => item.id === convertedSubmissionId
+      ? {
+          ...item,
+          status: 'converted',
+          project_id: project.id,
+          client_id: project.client_id,
+          converted_at: new Date().toISOString(),
+          converted_by: user?.id || null,
+        }
+      : item))
+    setMessage(`Project “${project.name}” created. The submission, answers, and files remain linked as its source.`)
+    await Promise.all([loadDetails(convertedSubmissionId), load()])
   }
 
   const handleAddNote = async (submissionId: string) => {
@@ -787,7 +823,7 @@ export default function SubmissionsPage() {
                                   )}
 
                                   {/* Direct Status Selector */}
-                                  {canEdit && (
+                                  {canEdit && submission.status !== 'converted' && (
                                     <label className="flex flex-col gap-1 text-xs text-text-secondary">
                                       <span className="font-medium">Workflow Status</span>
                                       <select
@@ -795,7 +831,7 @@ export default function SubmissionsPage() {
                                         value={submission.status}
                                         onChange={(event) => void directChangeStatus(submission, event.target.value as SubmissionStatus)}
                                       >
-                                        {SUBMISSION_STATUSES.map((status) => (
+                                        {SUBMISSION_STATUSES.filter((status) => status !== 'converted').map((status) => (
                                           <option key={status} value={status}>
                                             {SUBMISSION_STATUS_LABELS[status]}
                                           </option>
@@ -806,7 +842,7 @@ export default function SubmissionsPage() {
                                 </div>
 
                                 {/* Quick Qualification Buttons */}
-                                {canEdit && (
+                                {canEdit && submission.status !== 'converted' && (
                                   <div className="flex flex-wrap items-center gap-2">
                                     {submission.status === 'new' && (
                                       <button
@@ -838,6 +874,17 @@ export default function SubmissionsPage() {
                                       >
                                         <CheckCircle2 className="h-3.5 w-3.5" />
                                         <span>Approve</span>
+                                      </button>
+                                    )}
+
+                                    {canConvert && (submission.status === 'qualified' || submission.status === 'approved') && !submission.project_id && (
+                                      <button
+                                        type="button"
+                                        onClick={() => void openConversion(submission)}
+                                        className="inline-flex items-center gap-1.5 rounded-md border border-emerald-500/50 bg-emerald-500/15 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:bg-emerald-500/25"
+                                      >
+                                        <FolderPlus className="h-3.5 w-3.5" />
+                                        <span>Convert to Project</span>
                                       </button>
                                     )}
 
@@ -889,6 +936,21 @@ export default function SubmissionsPage() {
                                         href={`/admin/forms/${submission.form_id}?tab=submissions&submission=${submission.id}`}
                                         className={secondaryButtonClassName}
                                       >
+                                        <ExternalLink className="h-3.5 w-3.5" />
+                                        <span>Form editor</span>
+                                      </Link>
+                                    )}
+                                  </div>
+                                )}
+
+                                {submission.status === 'converted' && submission.project_id && (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Link href={`/projects/${submission.project_id}`} className={primaryButtonClassName}>
+                                      <FolderPlus className="h-3.5 w-3.5" />
+                                      <span>Open Created Project</span>
+                                    </Link>
+                                    {canOpenForm && (
+                                      <Link href={`/admin/forms/${submission.form_id}?tab=submissions&submission=${submission.id}`} className={secondaryButtonClassName}>
                                         <ExternalLink className="h-3.5 w-3.5" />
                                         <span>Form editor</span>
                                       </Link>
@@ -1183,6 +1245,19 @@ export default function SubmissionsPage() {
           </div>
         )}
       </Panel>
+
+      {conversionSubmission && (
+        <SubmissionConversionModal
+          submission={conversionSubmission}
+          clients={clients}
+          team={team}
+          currentUserId={user?.id || null}
+          answerCount={detailsCache[conversionSubmission.id]?.answers.length || 0}
+          attachmentCount={detailsCache[conversionSubmission.id]?.attachments.length || 0}
+          onClose={() => setConversionSubmission(null)}
+          onConverted={(project) => void handleConverted(project)}
+        />
+      )}
 
       {/* Quick Action Status Modal with Optional Reason/Note */}
       <Modal

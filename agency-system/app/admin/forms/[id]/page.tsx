@@ -103,6 +103,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const router = useRouter()
   const { can } = useAuth()
   const canManage = can('form.manage')
+  const canConfigureAutomation = can('admin.manage')
   const canViewForm = canManage || can('form.view')
   const canViewSubmissions = can('submission.view')
   const allowed = canViewForm || canViewSubmissions
@@ -410,10 +411,27 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
           <Panel title="Form details" description="Shown to respondents at the top of the public form.">
             <div className="grid gap-4 p-5 sm:grid-cols-2">
               <label className="text-xs text-text-secondary">Title<input className={`${inputClassName} mt-2`} value={details.title} onChange={(e) => setDetails({ ...details, title: e.target.value })} /></label>
-              <label className="flex items-end gap-2 pb-0.5 text-xs text-text-secondary">
-                <input type="checkbox" checked={details.create_project_on_submit} onChange={(e) => setDetails({ ...details, create_project_on_submit: e.target.checked })} className="h-4 w-4 accent-[hsl(var(--accent))]" />
-                Auto-create a project when someone submits (needs a mapped e-mail question)
-              </label>
+              {canConfigureAutomation ? (
+                <label className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-text-secondary">
+                  <span className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={details.create_project_on_submit}
+                      onChange={(e) => {
+                        const enabled = e.target.checked
+                        if (enabled && !window.confirm('Enable automatic project creation for every public submission? This bypasses the normal qualification, configuration, and confirmation workflow. Use only when this automation is intentional.')) return
+                        setDetails({ ...details, create_project_on_submit: enabled })
+                      }}
+                      className="mt-0.5 h-4 w-4 accent-[hsl(var(--accent))]"
+                    />
+                    <span><strong className="text-amber-300">Admin automation:</strong> auto-create a project on public submit (requires a mapped e-mail). Leave off for the normal Qualified / Approved → Convert to Project workflow.</span>
+                  </span>
+                </label>
+              ) : (
+                <div className="rounded-md border border-border bg-surface-raised p-3 text-xs text-text-tertiary">
+                  Automatic project creation is Admin-only and is currently {details.create_project_on_submit ? 'enabled' : 'disabled'}.
+                </div>
+              )}
               <label className="text-xs text-text-secondary sm:col-span-2">Description<textarea className={`${inputClassName} mt-2 min-h-20`} value={details.description} onChange={(e) => setDetails({ ...details, description: e.target.value })} /></label>
               {canManage && (
                 <div className="flex justify-end sm:col-span-2">
