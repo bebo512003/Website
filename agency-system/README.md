@@ -28,6 +28,7 @@ The application contains no seeded users or placeholder business records. All da
 - **Database-enforced task assignment**: tasks can only be assigned to active team accounts that belong to the project, or to staff the permission model explicitly grants project-wide access (`project.view_all`); assigning to other people requires `task.assign`, and removing a project member releases their open tasks back to unassigned while completed work keeps its attribution
 - Private file upload and download through Supabase Storage
 - Assignment and project update notifications
+- **Deadline & escalation reminders** (Session 20): a daily server job (not the browser) notifies assignees of tasks due soon / today / overdue, escalates overdue tasks to the project manager and owner, and reminds owner/manager when a project deadline is approaching or overdue. Deliveries are recorded in `reminder_events` and never duplicated.
 - Reports calculated from authorized live records
 - Dark/light themes and a responsive desktop/mobile shell
 
@@ -56,7 +57,10 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key # server only; never NEXT_PUBLIC
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
+CRON_SECRET=generate-a-long-random-string
 ```
+
+Deadline reminders run on the server. After deploy, set `CRON_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` in the host environment. Vercel Cron hits `GET /api/cron/reminders` every day at 07:00 UTC and sends `Authorization: Bearer $CRON_SECRET` automatically when `CRON_SECRET` is set. Apply `supabase/migrations/20260905000000_deadline_escalation_reminders.sql` (or regenerate `schema.sql`) first. You can also trigger the same route from any external scheduler.
 
 For a new Supabase project, apply the generated `supabase/schema.sql` snapshot in the SQL Editor. For an existing project, apply every unapplied file in `supabase/migrations/` in filename order (or use the Supabase CLI migration workflow). The ordered migration directory is authoritative; `schema.sql` is generated from it and can be verified with `npm run db:schema:check`.
 

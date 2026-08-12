@@ -2799,6 +2799,143 @@ async function runClientFeedbackSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runDeadlineReminderSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  await asUser(db, alice)
+  const clientId = (await db.query(`select id from public.clients order by created_at limit 1`)).rows[0].id
+  const proj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id, due_date)
+     values ('Deadline Scan', $1, 'active', $2, $3, current_date + 5) returning id`,
+    [clientId, alice, erin],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [proj.id, bob, alice])
+
+  const soonTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Soon task', $1, $2, current_date + 2) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const todayTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Today task', $1, $2, current_date) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const overdueTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Late task', $1, $2, current_date - 3) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const doneTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date, status) values ('Done late', $1, $2, current_date - 1, 'done') returning id`,
+    [proj.id, bob],
+  )).rows[0]
+
+  const overdueProj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id, due_date)
+     values ('Overdue Brand', $1, 'active', $2, $3, current_date - 4) returning id`,
+    [clientId, alice, erin],
+  )).rows[0]
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id in ($1, $2, $3)`, [alice, bob, erin])
+  await db.query(`delete from public.reminder_events`)
+
+  const first = (await scalar(db, `select public.run_deadline_reminders(current_date) r`)).r
+  ok(`${label}: reminder job reports sent > 0`, first?.ok === true && Number(first.sent) >= 5, JSON.stringify(first))
+
+  const bobSoon = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.due_soon'`,
+    [bob, soonTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is due soon`, bobSoon.length === 1 && bobSoon[0].type === 'deadline_reminder')
+
+  const bobToday = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.due_today'`,
+    [bob, todayTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is due today`, bobToday.length === 1)
+
+  const bobOverdue = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [bob, overdueTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is overdue`, bobOverdue.length === 1)
+
+  const erinEscalation = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [erin, overdueTask.id],
+  )).rows
+  ok(`${label}: overdue task escalates to the project manager`,
+    erinEscalation.length === 1 && erinEscalation[0].metadata?.escalation === true)
+
+  const aliceEscalation = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [alice, overdueTask.id],
+  )).rows
+  ok(`${label}: overdue task also escalates to the project owner`, aliceEscalation.length === 1)
+
+  const doneNotifs = (await db.query(
+    `select * from public.notifications where task_id = $1 and type = 'deadline_reminder'`,
+    [doneTask.id],
+  )).rows
+  ok(`${label}: completed tasks do not receive deadline reminders`, doneNotifs.length === 0)
+
+  const approaching = (await db.query(
+    `select recipient_id from public.notifications where project_id = $1 and event = 'project.deadline_approaching'`,
+    [proj.id],
+  )).rows.map((r) => r.recipient_id)
+  ok(`${label}: approaching project deadline notifies owner and manager`,
+    approaching.includes(alice) && approaching.includes(erin))
+
+  const overdueProjectNotifs = (await db.query(
+    `select recipient_id from public.notifications where project_id = $1 and event = 'project.overdue'`,
+    [overdueProj.id],
+  )).rows.map((r) => r.recipient_id)
+  ok(`${label}: overdue project notifies owner and manager`,
+    overdueProjectNotifs.includes(alice) && overdueProjectNotifs.includes(erin))
+
+  const logCount = (await scalar(db, `select count(*)::int n from public.reminder_events`)).n
+  ok(`${label}: reminder events are recorded for each delivery`, logCount >= 5)
+
+  const second = (await scalar(db, `select public.run_deadline_reminders(current_date) r`)).r
+  const notifCount = (await scalar(db,
+    `select count(*)::int n from public.notifications where type = 'deadline_reminder' and (
+      task_id in ($1, $2, $3) or project_id in ($4, $5)
+    )`,
+    [soonTask.id, todayTask.id, overdueTask.id, proj.id, overdueProj.id],
+  )).n
+  const logCountAfter = (await scalar(db, `select count(*)::int n from public.reminder_events`)).n
+  ok(`${label}: a second run does not duplicate reminders`,
+    Number(second.sent) === 0 && notifCount === logCountAfter || (Number(second.sent) === 0 && logCountAfter === logCount),
+    JSON.stringify({ second, notifCount, logCount, logCountAfter }))
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [bob])
+  await superUser(db)
+  await db.query(`delete from public.reminder_events`)
+  await db.query(`delete from public.notifications where recipient_id = $1 and type = 'deadline_reminder'`, [bob])
+  await scalar(db, `select public.run_deadline_reminders(current_date)`)
+  const inactiveBob = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'deadline_reminder'`,
+    [bob],
+  )).rows
+  ok(`${label}: inactive assignees are not notified`, inactiveBob.length === 0)
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [bob])
+  await asUser(db, bob)
+  const employeeInsertsLog = await expectError(db, () => db.query(
+    `insert into public.reminder_events (kind, entity_type, entity_id, recipient_id, due_date, dedupe_key)
+     values ('task.due_today', 'task', $1, $2, current_date, 'forged')`,
+    [todayTask.id, bob],
+  ))
+  ok(`${label}: reminder_events cannot be forged by authenticated users`, employeeInsertsLog)
+
+  await asUser(db, bob)
+  const employeeRunsJob = await expectError(db, () => db.query(`select public.run_deadline_reminders(current_date)`))
+  ok(`${label}: authenticated users cannot execute the reminder job`, employeeRunsJob)
+
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2820,6 +2957,7 @@ async function main() {
   await runSubmissionTrackingSuite(dbA, idsA, 'upgrade')
   await runClientPortalSuite(dbA, idsA, 'upgrade')
   await runClientFeedbackSuite(dbA, idsA, 'upgrade')
+  await runDeadlineReminderSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -2921,6 +3059,10 @@ async function main() {
   const collabFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'get_client_portal_collaboration'`)).n
   const approvalsTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'client_approvals'`)).n
   ok('fresh: client collaboration RPCs and tables are installed', collabFn === 1 && approvalsTable === 1)
+
+  const reminderFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'run_deadline_reminders'`)).n
+  const reminderTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'reminder_events'`)).n
+  ok('fresh: deadline reminder job and event log are installed', reminderFn === 1 && reminderTable === 1)
 
   await dbB.close()
 

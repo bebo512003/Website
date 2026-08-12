@@ -534,6 +534,11 @@ export type NotificationEvent =
   | 'client.revision'
   | 'file.shared'
   | 'delivery.ready'
+  | 'task.due_soon'
+  | 'task.due_today'
+  | 'task.overdue'
+  | 'project.deadline_approaching'
+  | 'project.overdue'
 
 export type NotificationType =
   | 'info'
@@ -548,6 +553,7 @@ export type NotificationType =
   | 'client_revision'
   | 'file_shared'
   | 'delivery_ready'
+  | 'deadline_reminder'
 
 export type NotificationMetadata = {
   submission_id?: string
@@ -574,6 +580,27 @@ export type NotificationMetadata = {
   submitted_at?: string | null
   assigned_at?: string | null
   [key: string]: unknown
+}
+
+export type ReminderKind =
+  | 'task.due_soon'
+  | 'task.due_today'
+  | 'task.overdue'
+  | 'task.overdue.escalation'
+  | 'project.deadline_approaching'
+  | 'project.overdue'
+
+export type ReminderEventRow = {
+  id: string
+  kind: ReminderKind
+  entity_type: 'task' | 'project'
+  entity_id: string
+  recipient_id: string | null
+  notification_id: string | null
+  due_date: string
+  dedupe_key: string
+  role: 'assignee' | 'manager' | 'owner'
+  created_at: string
 }
 
 export type NotificationRow = {
@@ -776,6 +803,12 @@ export interface Database {
       }, Partial<FormSubmissionEventRow>, [
         { foreignKeyName: 'form_submission_events_submission_id_fkey'; columns: ['submission_id']; isOneToOne: false; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
         { foreignKeyName: 'form_submission_events_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      reminder_events: TableDefinition<ReminderEventRow, {
+        id?: string; kind: ReminderKind; entity_type: 'task' | 'project'; entity_id: string; recipient_id?: string | null; notification_id?: string | null; due_date: string; dedupe_key: string; role?: ReminderEventRow['role']; created_at?: string
+      }, Partial<ReminderEventRow>, [
+        { foreignKeyName: 'reminder_events_recipient_id_fkey'; columns: ['recipient_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'reminder_events_notification_id_fkey'; columns: ['notification_id']; isOneToOne: false; referencedRelation: 'notifications'; referencedColumns: ['id'] },
       ]>
       notifications: TableDefinition<NotificationRow, {
         id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; event?: NotificationEvent | null; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; dedupe_key?: string | null; read_at?: string | null; created_at?: string
