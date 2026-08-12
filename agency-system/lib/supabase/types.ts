@@ -732,6 +732,17 @@ export interface Database {
       can_user_access_project: { Args: { p_user_id: string; p_project_id: string }; Returns: boolean }
       add_task_note: { Args: { p_task_id: string; p_note: string }; Returns: TaskActivityRow }
       list_task_assignees: { Args: { p_project_id: string }; Returns: TaskAssigneeRow[] }
+      prepare_project_delivery: { Args: { p_project_id: string; p_notes?: string | null }; Returns: ProjectDeliveryRow }
+      add_project_delivery_file: { Args: { p_project_id: string; p_file_id: string }; Returns: ProjectDeliveryRow }
+      remove_project_delivery_file: { Args: { p_project_id: string; p_file_id: string }; Returns: boolean }
+      mark_delivery_ready: { Args: { p_project_id: string }; Returns: ProjectRow }
+      mark_project_delivered: { Args: { p_project_id: string; p_note?: string | null }; Returns: ProjectRow }
+      request_project_revision: { Args: { p_project_id: string; p_note: string }; Returns: ProjectDeliveryRow }
+      record_internal_client_approval: { Args: { p_project_id: string; p_note: string; p_state?: ProjectDeliveryApprovalState }; Returns: ProjectDeliveryRow }
+      complete_project: { Args: { p_project_id: string }; Returns: ProjectRow }
+      archive_project: { Args: { p_project_id: string }; Returns: ProjectRow }
+      unarchive_project: { Args: { p_project_id: string }; Returns: ProjectRow }
+      project_completion_blockers: { Args: { p_project_id: string }; Returns: string[] }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
