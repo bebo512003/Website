@@ -1090,7 +1090,7 @@ async function runCapabilityEnforcementSuite(db, ids, label) {
 }
 
 async function runNotificationSuite(db, ids, label) {
-  const { anonVisitor, alice, bob, erin } = ids
+  const { anonVisitor, alice, bob } = ids
 
   // 1. Dynamic Form Submission -> Admin receives notification
   await asUser(db, alice)

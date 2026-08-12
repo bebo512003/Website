@@ -555,6 +555,12 @@ export type FormTemplateWithCounts = FormTemplate & {
   form_questions: { count: number }[]
   form_submissions: { count: number }[]
 }
+/** Minimal published-form contract used by public pages. Submission counts and
+ * admin-only lifecycle fields are deliberately not part of the public payload. */
+export type PublicFormTemplate = Pick<FormTemplate, 'id' | 'slug' | 'title' | 'description' | 'status'>
+export type PublicFormTemplateSummary = PublicFormTemplate & {
+  form_questions: { count: number }[]
+}
 export type ClientFormSubmission = FormSubmission & {
   form_templates?: { title: string; slug: string } | null
 }

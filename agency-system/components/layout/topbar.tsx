@@ -39,6 +39,8 @@ export function TopBar() {
         <div className="hidden text-right sm:block"><div className="max-w-40 truncate text-xs font-semibold text-fg">{profile?.full_name || profile?.email}</div><div className="mt-0.5 font-mono-tech text-[8px] text-text-tertiary">{profile?.role || 'employee'}</div></div>
         {profile?.avatar_url ? (
           <button type="button" onClick={() => router.push('/profile')} className="rounded-md border border-border bg-surface p-1 transition hover:text-fg hover:border-accent" aria-label="Open profile">
+            {/* Avatar URLs are user-configured and may use any external host. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={profile.avatar_url} alt={profile.full_name || 'Profile'} className="h-7 w-7 rounded-full object-cover" />
           </button>
         ) : (

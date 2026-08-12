@@ -9,13 +9,9 @@ import {
   CheckCheck,
   CheckSquare,
   ChevronRight,
-  Clock,
-  ExternalLink,
   FileText,
   FolderKanban,
-  Info,
   LoaderCircle,
-  Sparkles,
   Trash2,
 } from 'lucide-react'
 import {
@@ -236,7 +232,7 @@ export function NotificationDropdown() {
               </div>
             ) : (
               notifications.slice(0, 10).map((notification) => {
-                const { icon: Icon, color, label: typeLabel } = getNotificationTypeIcon(notification.type)
+                const { icon: Icon, color } = getNotificationTypeIcon(notification.type)
                 const meta = getMetadata(notification)
                 const isUnread = !notification.read_at
                 const isBusy = busyActionId === notification.id

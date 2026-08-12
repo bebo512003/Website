@@ -1,14 +1,15 @@
 'use client'
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { CheckCircle2, FileWarning, Globe, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
+import Link from 'next/link'
+import { ArrowLeft, CheckCircle2, FileWarning, Globe, Home, Layers3, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   getFormQuestions,
-  getFormTemplateBySlug,
+  getPublishedFormTemplateBySlug,
   uploadFormFile,
 } from '@/lib/supabase/database'
-import type { FormQuestion, FormTemplate } from '@/lib/supabase/types'
+import type { FormQuestion, PublicFormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
 import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
@@ -57,6 +58,13 @@ const t = (lang: Lang) => ({
   unavailableTitle: lang === 'ar' ? 'هذا النموذج غير متاح' : 'This form is unavailable',
   unavailableDesc: lang === 'ar' ? 'الرابط غير صحيح أو النموذج لم يعد يستقبل الردود.' : 'The link is incorrect or the form is no longer accepting responses.',
   fileNeedsSession: lang === 'ar' ? 'رفع الملفات غير متاح حالياً. فعّل Anonymous sign-ins في Supabase أو أجب بدون ملفات.' : 'File upload is unavailable right now. Enable Anonymous sign-ins in Supabase or answer without files.',
+  sessionPreparing: lang === 'ar' ? 'جارٍ تجهيز جلسة إرسال آمنة…' : 'Preparing a secure submission session…',
+  sessionUnavailable: lang === 'ar'
+    ? 'لا تحتاج إلى حساب، لكن جلسة الإرسال العامة غير متاحة حالياً. يرجى تحديث الصفحة. على مالك الموقع تفعيل Anonymous Sign-ins في Supabase.'
+    : 'You do not need an account, but the public submission session is unavailable. Refresh the page and try again. Site owner: enable Anonymous Sign-ins in Supabase.',
+  sessionUnavailableShort: lang === 'ar' ? 'الإرسال غير متاح حالياً' : 'Submission unavailable',
+  backToForms: lang === 'ar' ? 'العودة إلى النماذج المتاحة' : 'Back to available forms',
+  noAccount: lang === 'ar' ? 'لا تحتاج إلى حساب. اختر إجاباتك ثم أرسل الطلب.' : 'No account required. Complete the questions, then submit your request.',
   badNumber: lang === 'ar' ? 'أدخل رقماً صحيحاً' : 'Enter a valid number',
   cooldown: lang === 'ar'
     ? 'يمكنك إرسال رد آخر بعد {seconds} ثانية.'
@@ -69,10 +77,10 @@ const t = (lang: Lang) => ({
 export default function PublicFormPage({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = use(params)
   const { user, configured, signInAnonymously, loading: authLoading } = useAuth()
-  const [lang, setLang] = useState<Lang>('ar')
+  const [lang, setLang] = useState<Lang>('en')
   const i18n = useMemo(() => t(lang), [lang])
 
-  const [template, setTemplate] = useState<FormTemplate | null>(null)
+  const [template, setTemplate] = useState<PublicFormTemplate | null>(null)
   const [questions, setQuestions] = useState<FormQuestion[]>([])
   const [values, setValues] = useState<AnswerMap>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
@@ -82,6 +90,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [uploadingQuestionId, setUploadingQuestionId] = useState<string | null>(null)
+  const [sessionError, setSessionError] = useState('')
 
   // Session 05 — security state
   const [honeypot, setHoneypot] = useState('') // must stay empty
@@ -90,17 +99,22 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const submitTimeRef = useRef<number>(0)
 
-  // Anonymous session: gives the respondent ownership
-  // of their submission and the ability to upload files. The form still works
-  // read-and-submit without it, only file uploads require the session.
+  // Anonymous authentication is created silently: the client never registers,
+  // chooses credentials, or receives a portal account. It gives the submission
+  // a rate-limit identity and makes private file uploads possible.
   useEffect(() => {
     if (!configured || authLoading || user) return
-    void signInAnonymously()
+    let active = true
+    void signInAnonymously().then((result) => {
+      if (!active) return
+      setSessionError(result.error ? result.error.message : '')
+    })
+    return () => { active = false }
   }, [configured, authLoading, user, signInAnonymously])
 
   const load = useCallback(async () => {
     setLoading(true)
-    const templateResult = await getFormTemplateBySlug(slug)
+    const templateResult = await getPublishedFormTemplateBySlug(slug)
     if (templateResult.error || !templateResult.data) {
       setUnavailable(true)
       setLoading(false)
@@ -197,7 +211,15 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
       }
     }
     setErrors(nextErrors)
-    return Object.keys(nextErrors).length === 0
+    const firstInvalidQuestionId = Object.keys(nextErrors)[0]
+    if (firstInvalidQuestionId) {
+      requestAnimationFrame(() => {
+        const field = document.getElementById(`question-${firstInvalidQuestionId}`)
+        field?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        field?.querySelector<HTMLElement>('input, textarea, select, button')?.focus({ preventScroll: true })
+      })
+    }
+    return !firstInvalidQuestionId
   }
 
   const submit = async () => {
@@ -208,6 +230,14 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
     if (honeypot.trim() !== '') {
       // Bot detected — silently pretend success.
       setDone(true)
+      return
+    }
+
+    // ── Submission identity ──────────────────────────────────────────────
+    // The API and database use a silent anonymous session for abuse controls.
+    // This is not a client account and requires no sign-up or credentials.
+    if (authLoading || !user) {
+      setError(sessionError ? i18n.sessionUnavailable : i18n.sessionPreparing)
       return
     }
 
@@ -293,6 +323,14 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
           </div>
           <h1 className="text-xl font-semibold text-fg">{i18n.unavailableTitle}</h1>
           <p className="mt-3 text-sm text-text-secondary">{i18n.unavailableDesc}</p>
+          <div className="mt-7 grid gap-3 sm:grid-cols-2">
+            <Link href="/forms" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
+              <ArrowLeft className="h-4 w-4" /> {i18n.backToForms}
+            </Link>
+            <Link href="/" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-4 py-2.5 text-sm font-medium text-fg">
+              <Home className="h-4 w-4" /> {lang === 'ar' ? 'الصفحة الرئيسية' : 'Home'}
+            </Link>
+          </div>
         </div>
       </main>
     )
@@ -315,6 +353,17 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
           ) : (
             <button onClick={reset} className={`${primaryButtonClassName} mt-6`}>{i18n.another}</button>
           )}
+          <div className="mt-7 grid gap-3 border-t border-border pt-6 sm:grid-cols-3">
+            <Link href="/" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
+              <Home className="h-4 w-4" /> {lang === 'ar' ? 'الرئيسية' : 'Home'}
+            </Link>
+            <Link href="/forms" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
+              <ArrowLeft className="h-4 w-4" /> {lang === 'ar' ? 'النماذج' : 'Forms'}
+            </Link>
+            <Link href="/portfolio" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
+              <Layers3 className="h-4 w-4" /> {lang === 'ar' ? 'الأعمال' : 'Portfolio'}
+            </Link>
+          </div>
         </div>
       </main>
     )
@@ -324,30 +373,56 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   return (
     <main className="relative min-h-screen bg-bg">
       <div className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-3">
-          <div className="flex items-center gap-4">
-            <Sparkles className="h-5 w-5 text-accent" />
-            <span className="font-mono-tech text-[10px] text-text-tertiary">{HEADING}</span>
+        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-3 sm:px-5">
+          <Link href="/" className="flex min-h-10 items-center gap-3 text-fg" aria-label="Agency OS home">
+            <span className="flex h-9 w-9 items-center justify-center rounded border border-border bg-surface text-accent">
+              <Sparkles className="h-4 w-4" />
+            </span>
+            <span className="hidden font-mono-tech text-[10px] text-text-tertiary sm:inline">{HEADING}</span>
+          </Link>
+          <div className="flex items-center gap-2">
+            <Link href="/forms" className="hidden min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg sm:inline-flex">
+              <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
+            </Link>
+            <button type="button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="flex min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg">
+              <Globe className="h-3.5 w-3.5" /> {lang === 'ar' ? 'English' : 'العربية'}
+            </button>
           </div>
-          <button onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="flex items-center gap-1.5 rounded border border-border px-2.5 py-1.5 text-xs text-text-secondary hover:border-line-light hover:text-fg">
-            <Globe className="h-3.5 w-3.5" /> {lang === 'ar' ? 'English' : 'العربية'}
-          </button>
         </div>
       </div>
 
-      <div className="mx-auto max-w-3xl px-5 py-8" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+      <div className="mx-auto max-w-3xl px-4 py-7 sm:px-5 sm:py-9" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
+        <Link href="/forms" className="inline-flex min-h-10 items-center gap-2 text-xs text-text-secondary transition hover:text-fg sm:hidden">
+          <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
+        </Link>
+
+        <ol className="mb-8 mt-3 grid grid-cols-3 gap-2" aria-label={lang === 'ar' ? 'خطوات إرسال الطلب' : 'Request steps'}>
+          {[
+            lang === 'ar' ? 'اختيار النموذج' : 'Select form',
+            lang === 'ar' ? 'تعبئة النموذج' : 'Fill form',
+            lang === 'ar' ? 'إرسال الطلب' : 'Submit',
+          ].map((label, index) => (
+            <li key={label} className={`border-t-2 pt-2 text-[10px] sm:text-xs ${index === 1 ? 'border-accent font-semibold text-fg' : 'border-border text-text-tertiary'}`}>
+              <span className="me-1 font-mono-tech">0{index + 1}</span> {label}
+            </li>
+          ))}
+        </ol>
+
         <div className="mb-8">
-          <h1 className="font-display text-4xl leading-none tracking-tight text-fg sm:text-5xl">{template.title}</h1>
+          <h1 className="break-words font-display text-[clamp(2.5rem,12vw,3.5rem)] leading-none tracking-tight text-fg">{template.title}</h1>
           {template.description && <p className="mt-3 text-sm leading-6 text-text-secondary">{template.description}</p>}
+          <p className="mt-4 flex items-start gap-2 rounded-md border border-border bg-surface px-4 py-3 text-xs leading-5 text-text-secondary">
+            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent" /> {i18n.noAccount}
+          </p>
         </div>
 
-        {error && <div className="mb-6"><InlineAlert>{error}</InlineAlert></div>}
+        {(error || sessionError) && <div className="mb-6"><InlineAlert>{error || i18n.sessionUnavailable}</InlineAlert></div>}
 
-        <section className="rounded-md border border-border bg-surface">
-          <div className="border-b border-border p-5">
+        <form className="rounded-md border border-border bg-surface" onSubmit={(event) => { event.preventDefault(); void submit() }}>
+          <div className="border-b border-border p-4 sm:p-5">
             <p className="text-xs text-text-tertiary">{i18n.requiredHint}</p>
           </div>
-          <div className="p-5">
+          <div className="p-4 sm:p-5">
             {/* ── Session 05: Honeypot field ────────────────────────────────
                 Hidden from human view via CSS. Bots that auto-fill every
                 <input> will populate this, allowing us to silently reject
@@ -391,28 +466,28 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
               errors={errors}
             />
           </div>
-          <div className="flex flex-col items-end gap-3 border-t border-border p-5">
+          <div className="flex flex-col items-stretch gap-3 border-t border-border p-4 sm:items-end sm:p-5">
             {/* ── Session 05: Turnstile widget (invisible when configured) ─ */}
             <TurnstileWidget onVerify={setTurnstileToken} className="mb-1" />
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
               {process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY && (
-                <span className="flex items-center gap-1 text-[10px] text-text-tertiary">
+                <span className="flex items-center justify-center gap-1 text-[10px] text-text-tertiary">
                   <ShieldCheck className="h-3 w-3" />
                   Protected
                 </span>
               )}
               <button
-                onClick={() => void submit()}
-                disabled={submitting || cooldownRemaining > 0}
-                className={primaryButtonClassName}
+                type="submit"
+                disabled={submitting || cooldownRemaining > 0 || authLoading || !user}
+                className={`${primaryButtonClassName} min-h-11 w-full justify-center sm:w-auto`}
               >
-                {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {submitting ? i18n.submitting : i18n.submit}
+                {submitting || (!user && !sessionError) ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {submitting ? i18n.submitting : !user ? (sessionError ? i18n.sessionUnavailableShort : i18n.sessionPreparing) : i18n.submit}
               </button>
             </div>
           </div>
-        </section>
+        </form>
       </div>
     </main>
   )

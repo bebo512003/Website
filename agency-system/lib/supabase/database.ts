@@ -602,15 +602,38 @@ export async function getFormTemplates(): Promise<Result<import('./types').FormT
   return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormTemplateWithCounts[])
 }
 
+/**
+ * Public form inventory. Keep this separate from the admin inventory even
+ * though RLS also filters rows: a signed-in form manager visiting a public page
+ * must never make drafts, disabled forms, or archived forms appear there.
+ */
+export async function getPublishedFormTemplates(): Promise<Result<import('./types').PublicFormTemplateSummary[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_templates')
+    .select('id, slug, title, description, status, form_questions(count)')
+    .eq('status', 'published')
+    .order('updated_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').PublicFormTemplateSummary[])
+}
+
 export async function getFormTemplateById(id: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_templates').select('*').eq('id', id).maybeSingle()
   return error ? fail(null, error.message) : ok(data)
 }
 
-export async function getFormTemplateBySlug(slug: string): Promise<Result<import('./types').FormTemplate | null>> {
+/** Resolve a public form link only while the form is published.
+ * The explicit status predicate is intentional defence-in-depth for staff
+ * sessions, which can otherwise read every lifecycle state through RLS. */
+export async function getPublishedFormTemplateBySlug(slug: string): Promise<Result<import('./types').PublicFormTemplate | null>> {
   if (!supabase) return fail(null)
-  const { data, error } = await supabase.from('form_templates').select('*').eq('slug', slug).maybeSingle()
+  const { data, error } = await supabase
+    .from('form_templates')
+    .select('id, slug, title, description, status')
+    .eq('slug', slug)
+    .eq('status', 'published')
+    .maybeSingle()
   return error ? fail(null, error.message) : ok(data)
 }
 
