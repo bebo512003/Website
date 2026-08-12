@@ -783,6 +783,26 @@ export interface Database {
         { foreignKeyName: 'portfolio_project_images_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'portfolio_projects'; referencedColumns: ['id'] },
         { foreignKeyName: 'portfolio_project_images_uploaded_by_fkey'; columns: ['uploaded_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
       ]>
+      client_shared_files: TableDefinition<ClientSharedFileRow, {
+        id?: string; project_id: string; file_id: string; shared_by?: string | null; note?: string | null; shared_at?: string
+      }, Partial<ClientSharedFileRow>, [
+        { foreignKeyName: 'client_shared_files_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'client_shared_files_file_id_fkey'; columns: ['file_id']; isOneToOne: false; referencedRelation: 'files'; referencedColumns: ['id'] },
+        { foreignKeyName: 'client_shared_files_shared_by_fkey'; columns: ['shared_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      client_messages: TableDefinition<ClientMessageRow, {
+        id?: string; project_id: string; author_id?: string | null; body: string; kind?: ClientMessageKind; created_at?: string
+      }, Partial<ClientMessageRow>, [
+        { foreignKeyName: 'client_messages_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'client_messages_author_id_fkey'; columns: ['author_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      client_approvals: TableDefinition<ClientApprovalRow, {
+        id?: string; project_id: string; delivery_id?: string | null; action: ClientApprovalAction; message?: string | null; created_by?: string | null; created_at?: string
+      }, Partial<ClientApprovalRow>, [
+        { foreignKeyName: 'client_approvals_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'client_approvals_delivery_id_fkey'; columns: ['delivery_id']; isOneToOne: false; referencedRelation: 'project_deliveries'; referencedColumns: ['id'] },
+        { foreignKeyName: 'client_approvals_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
     }
     Views: { [_ in never]: never }
     Functions: {
@@ -845,6 +865,13 @@ export interface Database {
       admin_create_client_account: { Args: { p_client_id: string; p_email: string; p_full_name?: string | null; p_status?: string }; Returns: ProfileRow }
       admin_update_client_account: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_client_id?: string | null }; Returns: ProfileRow }
       admin_delete_client_account: { Args: { p_user_id: string }; Returns: boolean }
+      share_project_file_with_client: { Args: { p_project_id: string; p_file_id: string; p_note?: string | null }; Returns: ClientSharedFileRow }
+      unshare_project_file_with_client: { Args: { p_project_id: string; p_file_id: string }; Returns: boolean }
+      add_client_visible_message: { Args: { p_project_id: string; p_body: string }; Returns: ClientMessageRow }
+      get_client_portal_collaboration: { Args: { p_project_id: string }; Returns: Json }
+      add_client_portal_feedback: { Args: { p_project_id: string; p_body: string }; Returns: ClientMessageRow }
+      approve_client_portal_delivery: { Args: { p_project_id: string; p_note?: string | null }; Returns: ClientApprovalRow }
+      request_client_portal_revision: { Args: { p_project_id: string; p_note: string }; Returns: ClientApprovalRow }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
