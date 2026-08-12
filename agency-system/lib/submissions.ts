@@ -66,6 +66,7 @@ export const SUBMISSION_EVENT_LABELS: Record<string, string> = {
   note_deleted: 'Review Note Deleted',
   archived: 'Archived',
   restored: 'Restored',
+  converted_to_project: 'Converted to Project',
 }
 
 export function submissionEventLabel(eventType: string): string {

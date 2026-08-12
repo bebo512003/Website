@@ -29,6 +29,8 @@ import type {
   Project,
   ProjectInsert,
   ProjectMember,
+  ProjectPriority,
+  ProjectStatus,
   ProjectUpdate,
   ProjectWithClient,
   Task,
@@ -175,14 +177,16 @@ export async function deleteClient(id: string): Promise<Result<boolean>> {
   const { error } = await supabase.from('clients').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
+const projectWithClientSelect = '*, clients(id, name), owner:profiles!projects_owner_id_fkey(id, full_name, email), manager:profiles!projects_manager_id_fkey(id, full_name, email)'
+
 export async function getProjects(): Promise<Result<ProjectWithClient[]>> {
   if (!supabase) return fail([])
-  const { data, error } = await supabase.from('projects').select('*, clients(id, name)').order('created_at', { ascending: false })
+  const { data, error } = await supabase.from('projects').select(projectWithClientSelect).order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as ProjectWithClient[])
 }
 export async function getProjectById(id: string): Promise<Result<ProjectWithClient | null>> {
   if (!supabase) return fail(null)
-  const { data, error } = await supabase.from('projects').select('*, clients(id, name)').eq('id', id).maybeSingle()
+  const { data, error } = await supabase.from('projects').select(projectWithClientSelect).eq('id', id).maybeSingle()
   return error ? fail(null, error.message) : ok(data as unknown as ProjectWithClient | null)
 }
 export async function getProjectsByClientId(clientId: string): Promise<Result<Project[]>> {
@@ -809,6 +813,58 @@ export async function getFormSubmissionEvents(submissionId: string): Promise<Res
     .eq('submission_id', submissionId)
     .order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormSubmissionEvent[])
+}
+
+export type SubmissionProjectConversionInput = {
+  submissionId: string
+  clientId: string | null
+  newClient: {
+    name: string
+    type: Client['type']
+    contact_person: string | null
+    email: string | null
+    phone: string | null
+  } | null
+  projectName: string
+  description: string | null
+  projectType: string
+  priority: ProjectPriority
+  status: ProjectStatus
+  phase: number
+  phaseName: string | null
+  startDate: string | null
+  dueDate: string | null
+  budget: number | null
+  currency: string
+  ownerId: string
+  managerId: string | null
+  teamMemberIds: string[]
+}
+
+export async function convertSubmissionToProject(
+  input: SubmissionProjectConversionInput
+): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('convert_submission_to_project', {
+    p_submission_id: input.submissionId,
+    p_client_id: input.clientId,
+    p_new_client: input.newClient as import('./types').Json | null,
+    p_project_name: input.projectName,
+    p_description: input.description,
+    p_project_type: input.projectType,
+    p_priority: input.priority,
+    p_status: input.status,
+    p_phase: input.phase,
+    p_phase_name: input.phaseName,
+    p_start_date: input.startDate,
+    p_due_date: input.dueDate,
+    p_budget: input.budget,
+    p_currency: input.currency,
+    p_owner_id: input.ownerId,
+    p_manager_id: input.managerId,
+    p_team_member_ids: input.teamMemberIds,
+  })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
 }
 
 export async function updateFormSubmissionStatus(

@@ -2,6 +2,7 @@ export type Json = string | number | boolean | null | { [key: string]: Json | un
 export type AppRole = 'admin' | 'manager' | 'employee' | 'client'
 export type ProfileStatus = 'active' | 'inactive'
 export type ProjectStatus = 'active' | 'review' | 'completed' | 'on-hold' | 'cancelled'
+export type ProjectPriority = 'low' | 'medium' | 'high' | 'urgent'
 export type TaskStatus = 'todo' | 'inprogress' | 'review' | 'done'
 export type TaskPriority = 'high' | 'medium' | 'low'
 
@@ -112,6 +113,7 @@ export type ProjectRow = {
   description: string | null
   client_id: string
   type: string
+  priority: ProjectPriority
   status: ProjectStatus
   phase: number
   phase_name: string | null
@@ -121,6 +123,9 @@ export type ProjectRow = {
   start_date: string | null
   due_date: string | null
   completed_date: string | null
+  owner_id: string | null
+  manager_id: string | null
+  source_submission_id: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -240,6 +245,8 @@ export type FormSubmissionRow = {
   project_id: string | null
   reviewer_id: string | null
   reviewed_at: string | null
+  converted_at: string | null
+  converted_by: string | null
   created_by: string | null
   submitted_at: string
   created_at: string
@@ -286,6 +293,7 @@ export type FormSubmissionEventType =
   | 'note_deleted'
   | 'archived'
   | 'restored'
+  | 'converted_to_project'
 
 export type FormSubmissionEventRow = {
   id: string
@@ -448,9 +456,12 @@ export interface Database {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] }]>
       projects: TableDefinition<ProjectRow, {
-        id?: string; name: string; description?: string | null; client_id: string; type?: string; status?: ProjectStatus; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
+        id?: string; name: string; description?: string | null; client_id: string; type?: string; priority?: ProjectPriority; status?: ProjectStatus; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; owner_id?: string | null; manager_id?: string | null; source_submission_id?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ProjectRow>, [
         { foreignKeyName: 'projects_client_id_fkey'; columns: ['client_id']; isOneToOne: false; referencedRelation: 'clients'; referencedColumns: ['id'] },
+        { foreignKeyName: 'projects_owner_id_fkey'; columns: ['owner_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'projects_manager_id_fkey'; columns: ['manager_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'projects_source_submission_id_fkey'; columns: ['source_submission_id']; isOneToOne: true; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] },
       ]>
       project_members: TableDefinition<ProjectMemberRow, {
@@ -484,7 +495,7 @@ export interface Database {
         id?: string; form_id: string; question_type: FormQuestionType; label: string; help_text?: string | null; placeholder?: string | null; required?: boolean; options?: Json; config?: Json; map_to?: FormQuestionMapTo | null; position?: number; created_at?: string; updated_at?: string
       }, Partial<FormQuestionRow>>
       form_submissions: TableDefinition<FormSubmissionRow, {
-        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; reviewer_id?: string | null; reviewed_at?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
+        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; reviewer_id?: string | null; reviewed_at?: string | null; converted_at?: string | null; converted_by?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
       }, Partial<FormSubmissionRow>>
       form_submission_answers: TableDefinition<FormSubmissionAnswerRow, {
         id?: string; submission_id: string; question_id?: string | null; question_snapshot: Json; value?: Json; created_at?: string
@@ -548,6 +559,7 @@ export interface Database {
       admin_update_team_member: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string | null }; Returns: ProfileRow }
       admin_delete_team_member: { Args: { p_user_id: string }; Returns: boolean }
       submit_dynamic_form: { Args: { p_form_id: string; p_answers: Json }; Returns: FormSubmissionRow }
+      convert_submission_to_project: { Args: { p_submission_id: string; p_client_id: string | null; p_new_client: Json | null; p_project_name: string; p_description: string | null; p_project_type: string; p_priority: ProjectPriority; p_status: ProjectStatus; p_phase: number; p_phase_name: string | null; p_start_date: string | null; p_due_date: string | null; p_budget: number | null; p_currency: string; p_owner_id: string; p_manager_id: string | null; p_team_member_ids: string[] }; Returns: ProjectRow }
       update_form_submission_status: { Args: { p_submission_id: string; p_status: string; p_note?: string | null }; Returns: boolean }
       assign_form_submission_reviewer: { Args: { p_submission_id: string; p_reviewer_id: string | null; p_note?: string | null }; Returns: boolean }
       add_form_submission_note: { Args: { p_submission_id: string; p_note: string }; Returns: FormSubmissionNoteRow }
@@ -644,7 +656,11 @@ export type PortfolioProjectWithRelations = PortfolioProject & {
   portfolio_project_images: PortfolioImageWithUrl[]
 }
 
-export type ProjectWithClient = Project & { clients: Pick<Client, 'id' | 'name'> | null }
+export type ProjectWithClient = Project & {
+  clients: Pick<Client, 'id' | 'name'> | null
+  owner?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
+  manager?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
+}
 export type TaskWithRelations = Task & {
   projects: Pick<Project, 'id' | 'name'> | null
   profiles: Pick<Profile, 'id' | 'full_name' | 'email'> | null
