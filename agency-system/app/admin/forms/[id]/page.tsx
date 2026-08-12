@@ -53,6 +53,7 @@ import type {
   Json,
 } from '@/lib/supabase/types'
 import { QUESTION_TYPES, QUESTION_TYPE_MAP, formatAnswer, questionSection, ratingMax, showIfRule } from '@/lib/forms/question-types'
+import { submissionStatusLabel, submissionStatusStyle } from '@/lib/submissions'
 import { DynamicFormRenderer, type RendererLang } from '@/components/forms/dynamic-form-renderer'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -601,7 +602,9 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                         </div>
                       </div>
                       <div className="flex items-center gap-3 ps-7 sm:ps-0">
-                        {submission.status === 'archived' && <span className="rounded border border-border px-1.5 py-0.5 text-[10px] text-text-tertiary">archived</span>}
+                        <span className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold ${submissionStatusStyle(submission.status)}`}>
+                          {submissionStatusLabel(submission.status)}
+                        </span>
                         <span className="font-mono-tech text-[10px] text-text-tertiary">v{submission.form_version} · {new Date(submission.submitted_at).toLocaleString()}</span>
                       </div>
                     </button>
@@ -642,15 +645,24 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                                 )
                               })}
                             </dl>
-                            {can('submission.edit') && (
-                              <div className="flex justify-end border-t border-border pt-3">
-                                {submission.status === 'archived' ? (
-                                  <button onClick={() => void setSubmissionStatus(submission, 'new')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
-                                ) : (
-                                  <button onClick={() => void setSubmissionStatus(submission, 'archived')} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive response</button>
-                                )}
-                              </div>
-                            )}
+                            <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-3">
+                              <Link
+                                href={`/submissions?submission=${submission.id}`}
+                                className="inline-flex items-center gap-1.5 text-xs font-medium text-accent hover:underline"
+                              >
+                                <ExternalLink className="h-3.5 w-3.5" />
+                                <span>Open in Review Workflow (Notes & Timeline)</span>
+                              </Link>
+                              {can('submission.edit') && (
+                                <div className="flex gap-2">
+                                  {submission.status === 'archived' ? (
+                                    <button onClick={() => void setSubmissionStatus(submission, 'new')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
+                                  ) : (
+                                    <button onClick={() => void setSubmissionStatus(submission, 'archived')} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive response</button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </>
                         )}
                       </div>

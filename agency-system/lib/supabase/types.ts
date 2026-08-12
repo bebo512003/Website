@@ -267,6 +267,38 @@ export type FormSubmissionAttachmentRow = {
   created_at: string
 }
 
+export type FormSubmissionNoteRow = {
+  id: string
+  submission_id: string
+  author_id: string
+  note: string
+  created_at: string
+  updated_at: string
+}
+
+export type FormSubmissionEventType =
+  | 'created'
+  | 'status_changed'
+  | 'reviewer_assigned'
+  | 'reviewer_unassigned'
+  | 'reviewer_reassigned'
+  | 'note_added'
+  | 'note_deleted'
+  | 'archived'
+  | 'restored'
+
+export type FormSubmissionEventRow = {
+  id: string
+  submission_id: string
+  actor_id: string | null
+  event_type: FormSubmissionEventType
+  old_value: string | null
+  new_value: string | null
+  note: string | null
+  metadata: Json
+  created_at: string
+}
+
 export type NotificationType =
   | 'info'
   | 'assignment'
@@ -460,6 +492,18 @@ export interface Database {
       form_submission_attachments: TableDefinition<FormSubmissionAttachmentRow, {
         id?: string; submission_id: string; question_id?: string | null; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
       }, Partial<FormSubmissionAttachmentRow>>
+      form_submission_notes: TableDefinition<FormSubmissionNoteRow, {
+        id?: string; submission_id: string; author_id: string; note: string; created_at?: string; updated_at?: string
+      }, Partial<FormSubmissionNoteRow>, [
+        { foreignKeyName: 'form_submission_notes_submission_id_fkey'; columns: ['submission_id']; isOneToOne: false; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
+        { foreignKeyName: 'form_submission_notes_author_id_fkey'; columns: ['author_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      form_submission_events: TableDefinition<FormSubmissionEventRow, {
+        id?: string; submission_id: string; actor_id?: string | null; event_type: FormSubmissionEventType; old_value?: string | null; new_value?: string | null; note?: string | null; metadata?: Json; created_at?: string
+      }, Partial<FormSubmissionEventRow>, [
+        { foreignKeyName: 'form_submission_events_submission_id_fkey'; columns: ['submission_id']; isOneToOne: false; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
+        { foreignKeyName: 'form_submission_events_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
       notifications: TableDefinition<NotificationRow, {
         id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
@@ -504,8 +548,10 @@ export interface Database {
       admin_update_team_member: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string | null }; Returns: ProfileRow }
       admin_delete_team_member: { Args: { p_user_id: string }; Returns: boolean }
       submit_dynamic_form: { Args: { p_form_id: string; p_answers: Json }; Returns: FormSubmissionRow }
-      update_form_submission_status: { Args: { p_submission_id: string; p_status: string }; Returns: boolean }
-      assign_form_submission_reviewer: { Args: { p_submission_id: string; p_reviewer_id: string | null }; Returns: boolean }
+      update_form_submission_status: { Args: { p_submission_id: string; p_status: string; p_note?: string | null }; Returns: boolean }
+      assign_form_submission_reviewer: { Args: { p_submission_id: string; p_reviewer_id: string | null; p_note?: string | null }; Returns: boolean }
+      add_form_submission_note: { Args: { p_submission_id: string; p_note: string }; Returns: FormSubmissionNoteRow }
+      delete_form_submission_note: { Args: { p_note_id: string }; Returns: boolean }
       duplicate_form_template: { Args: { p_form_id: string }; Returns: FormTemplateRow }
       reorder_form_questions: { Args: { p_form_id: string; p_question_ids: string[] }; Returns: number }
       get_user_permissions: { Args: Record<string, never>; Returns: string[] }
@@ -557,6 +603,14 @@ export type FormQuestionUpdate = Database['public']['Tables']['form_questions'][
 export type FormSubmission = FormSubmissionRow
 export type FormSubmissionAnswer = FormSubmissionAnswerRow
 export type FormSubmissionAttachment = FormSubmissionAttachmentRow
+export type FormSubmissionNote = FormSubmissionNoteRow & {
+  author?: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
+export type FormSubmissionEvent = FormSubmissionEventRow & {
+  actor?: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
+export type FormSubmissionNoteInsert = Database['public']['Tables']['form_submission_notes']['Insert']
+export type FormSubmissionEventInsert = Database['public']['Tables']['form_submission_events']['Insert']
 /** Template row plus aggregate counts returned by the admin list query. */
 export type FormTemplateWithCounts = FormTemplate & {
   form_questions: { count: number }[]

@@ -45,6 +45,33 @@ export function submissionStatusStyle(status: string): string {
   return SUBMISSION_STATUS_STYLES[status as SubmissionStatus] || 'border-border bg-surface-raised text-text-tertiary'
 }
 
+export const SUBMISSION_STATUS_DESCRIPTIONS: Record<SubmissionStatus, string> = {
+  new: 'Fresh response received and awaiting initial review or reviewer assignment.',
+  reviewing: 'Under active evaluation and qualification by the assigned reviewer.',
+  need_information: 'Awaiting further clarification or supplementary materials from submitter.',
+  qualified: 'Successfully qualified and meets criteria for engagement.',
+  approved: 'Reviewed and approved by team leadership.',
+  converted: 'Converted to an active project.',
+  rejected: 'Does not meet qualification criteria or declined.',
+  archived: 'Archived for record-keeping and excluded from active workflow.',
+}
+
+export const SUBMISSION_EVENT_LABELS: Record<string, string> = {
+  created: 'Submission Received',
+  status_changed: 'Status Changed',
+  reviewer_assigned: 'Reviewer Assigned',
+  reviewer_reassigned: 'Reviewer Reassigned',
+  reviewer_unassigned: 'Reviewer Unassigned',
+  note_added: 'Review Note Added',
+  note_deleted: 'Review Note Deleted',
+  archived: 'Archived',
+  restored: 'Restored',
+}
+
+export function submissionEventLabel(eventType: string): string {
+  return SUBMISSION_EVENT_LABELS[eventType] || eventType.replace(/_/g, ' ')
+}
+
 /** Sort order: active workflow items first (new → reviewing → need info), then
  * outcome items (qualified/approved/converted), then rejected/archived. */
 const STATUS_RANK: Record<string, number> = {
