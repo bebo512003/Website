@@ -603,6 +603,50 @@ export type ReminderEventRow = {
   created_at: string
 }
 
+// ── Transactional email (Session 21) ────────────────────────────────────────
+// Server-side outbox flushed by GET /api/cron/emails and updated by the
+// provider webhook. Rows are written only by SECURITY DEFINER triggers and
+// the service role — never by browser code.
+export type EmailTemplateKey =
+  | 'submission-received'
+  | 'client-invitation'
+  | 'delivery-ready'
+  | 'revision-approval-update'
+  | 'new-submission'
+  | 'task-assigned'
+  | 'project-assigned'
+  | 'project-update'
+
+export type EmailOutboxStatus = 'queued' | 'sending' | 'sent' | 'delivered' | 'failed' | 'skipped'
+
+export type EmailOutboxRow = {
+  id: string
+  template_key: EmailTemplateKey
+  recipient_email: string
+  recipient_user_id: string | null
+  payload: Json
+  dedupe_key: string
+  status: EmailOutboxStatus
+  attempts: number
+  provider: string | null
+  provider_message_id: string | null
+  last_error: string | null
+  next_attempt_at: string
+  sent_at: string | null
+  delivered_at: string | null
+  created_at: string
+}
+
+export type EmailDeliveryEventRow = {
+  id: string
+  provider: string
+  provider_message_id: string | null
+  event_type: string
+  recipient_email: string | null
+  payload: Json
+  received_at: string
+}
+
 export type NotificationRow = {
   id: string
   recipient_id: string
@@ -810,6 +854,14 @@ export interface Database {
         { foreignKeyName: 'reminder_events_recipient_id_fkey'; columns: ['recipient_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'reminder_events_notification_id_fkey'; columns: ['notification_id']; isOneToOne: false; referencedRelation: 'notifications'; referencedColumns: ['id'] },
       ]>
+      email_outbox: TableDefinition<EmailOutboxRow, {
+        id?: string; template_key: EmailTemplateKey; recipient_email: string; recipient_user_id?: string | null; payload?: Json; dedupe_key: string; status?: EmailOutboxStatus; attempts?: number; provider?: string | null; provider_message_id?: string | null; last_error?: string | null; next_attempt_at?: string; sent_at?: string | null; delivered_at?: string | null; created_at?: string
+      }, Partial<EmailOutboxRow>, [
+        { foreignKeyName: 'email_outbox_recipient_user_id_fkey'; columns: ['recipient_user_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      email_delivery_events: TableDefinition<EmailDeliveryEventRow, {
+        id?: string; provider?: string; provider_message_id?: string | null; event_type: string; recipient_email?: string | null; payload?: Json; received_at?: string
+      }, Partial<EmailDeliveryEventRow>>
       notifications: TableDefinition<NotificationRow, {
         id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; event?: NotificationEvent | null; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; dedupe_key?: string | null; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
@@ -924,6 +976,8 @@ export interface Database {
       add_client_portal_feedback: { Args: { p_project_id: string; p_body: string }; Returns: ClientMessageRow }
       approve_client_portal_delivery: { Args: { p_project_id: string; p_note?: string | null }; Returns: ClientApprovalRow }
       request_client_portal_revision: { Args: { p_project_id: string; p_note: string }; Returns: ClientApprovalRow }
+      run_deadline_reminders: { Args: Record<string, never>; Returns: Json }
+      enqueue_email: { Args: { p_template_key: EmailTemplateKey; p_recipient_email: string; p_recipient_user_id?: string | null; p_payload?: Json; p_dedupe_key?: string | null }; Returns: string | null }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }

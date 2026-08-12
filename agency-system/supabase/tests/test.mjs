@@ -3064,6 +3064,126 @@ async function main() {
   const reminderTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'reminder_events'`)).n
   ok('fresh: deadline reminder job and event log are installed', reminderFn === 1 && reminderTable === 1)
 
+  // ── Transactional email outbox (Session 21) ─────────────────────────────
+  // The database only ENQUEUES; the server-side job sends. These checks pin
+  // down the enqueue rules: event coverage, dedupe, eligibility, and RLS.
+
+  // freshSubmission (visitor@fresh.test) was inserted above → the trigger must
+  // have enqueued the client receipt and the staff new-submission email.
+  await superUser(dbB)
+  ok('fresh: submission insert enqueues transactional emails',
+    (await scalar(dbB, 'select count(*)::int n from public.email_outbox')).n >= 2)
+  const receiptRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'submission-received'`)
+  ok('fresh: respondent receipt carries the reference + public tracking link',
+    receiptRow?.recipient_email === 'visitor@fresh.test'
+      && receiptRow?.payload?.reference_number === freshSubmission.reference_number
+      && receiptRow?.payload?.tracking_path === `/track/${freshSubmission.reference_number}`)
+  const staffSubRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'new-submission' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: new-submission email goes to staff with submission.view',
+    staffSubRow?.recipient_email === 'admin@fresh.test')
+  ok('fresh: staff submission email does not leak the respondent email address',
+    staffSubRow !== undefined && !JSON.stringify(staffSubRow.payload).includes('visitor@fresh.test'))
+
+  // Dedupe + normalization on the enqueue helper.
+  await dbB.query(`select public.enqueue_email('client-invitation', 'Dedupe@Fresh.test', null, '{}'::jsonb, 'test.dedupe.1')`)
+  await dbB.query(`select public.enqueue_email('client-invitation', 'dedupe@fresh.test', null, '{}'::jsonb, 'test.dedupe.1')`)
+  ok('fresh: enqueue_email dedupes on (template_key, dedupe_key)',
+    (await scalar(dbB, `select count(*)::int n from public.email_outbox where dedupe_key = 'test.dedupe.1'`)).n === 1)
+  ok('fresh: recipient email is normalized to lowercase',
+    (await scalar(dbB, `select recipient_email e from public.email_outbox where dedupe_key = 'test.dedupe.1'`)).e === 'dedupe@fresh.test')
+
+  // Browser roles can neither call the enqueue helper nor touch the queue.
+  await asUser(dbB, aliceB)
+  ok('fresh: authenticated users cannot execute enqueue_email',
+    await expectError(dbB, () => dbB.query(`select public.enqueue_email('client-invitation', 'x@fresh.test', null, '{}'::jsonb, 'test.forbidden')`)))
+  // The outbox revokes table privileges from browser roles outright (RLS
+  // deny-all policies sit on top as defense in depth) → permission denied.
+  ok('fresh: authenticated users cannot read the outbox',
+    await expectError(dbB, () => dbB.query('select count(*) from public.email_outbox')))
+  ok('fresh: authenticated users cannot write the outbox',
+    await expectError(dbB, () => dbB.query(`insert into public.email_outbox (template_key, recipient_email, dedupe_key) values ('task-assigned', 'x@fresh.test', 'test.rls')`)))
+
+  // Assignment emails: team member → project-assigned; task → task-assigned;
+  // self-assignment never emails the actor.
+  await asUser(dbB, employeeB)
+  await dbB.query(`select public.mark_password_changed($1)`, [employeeB])
+  await asUser(dbB, aliceB)
+  const emailProject = (await dbB.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('Email Brand', $1, 'in-review', $2) returning id`,
+    [carolClient, aliceB],
+  )).rows[0]
+  await dbB.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [emailProject.id, employeeB])
+  await dbB.query(`insert into public.tasks (title, project_id, assignee_id, priority, due_date)
+    values ('Email Test Task', $1, $2, 'high', current_date + 2)`, [emailProject.id, employeeB])
+  await dbB.query(`insert into public.tasks (title, project_id, assignee_id) values ('Self Task', $1, $2)`, [emailProject.id, aliceB])
+  await superUser(dbB)
+  const memberEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-assigned' and recipient_user_id = $1 and dedupe_key like 'team.member.assigned:%'`, [employeeB])
+  ok('fresh: adding a team member enqueues a project-assigned email',
+    memberEmail?.recipient_email === 'employee@fresh.test')
+  const taskEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'task-assigned' and recipient_user_id = $1`, [employeeB])
+  ok('fresh: task assignment enqueues an email to the assignee',
+    taskEmail?.recipient_email === 'employee@fresh.test'
+      && taskEmail?.payload?.task_title === 'Email Test Task'
+      && taskEmail?.payload?.project_name === 'Email Brand')
+  ok('fresh: self-assignment never emails the actor',
+    (await scalar(dbB, `select count(*)::int n from public.email_outbox where template_key = 'task-assigned' and recipient_user_id = $1`, [aliceB])).n === 0)
+
+  // Delivery → delivery-ready email to client portal accounts.
+  await asUser(dbB, aliceB)
+  const carolPlaceholder = (await dbB.query(
+    `select * from public.admin_create_client_account($1, 'carol@beta.test', 'Carol Beta')`, [carolClient])).rows[0]
+  ok('fresh: portal invitation placeholder provisions a client account', carolPlaceholder?.client_id === carolClient)
+  await superUser(dbB)
+  const carolUser = await addUser(dbB, 'carol@beta.test', { adminProvisioned: true, fullName: 'Carol Beta' })
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.mark_password_changed($1)`, [carolUser])
+  await asUser(dbB, aliceB)
+  await dbB.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('email-brand-final.pdf', 'pdf', 900, $1, $2, $3)`, [`${emailProject.id}/email-brand-final.pdf`, emailProject.id, aliceB])
+  const emailFileId = (await dbB.query(`select id from public.files where project_id = $1`, [emailProject.id])).rows[0].id
+  await dbB.query(`select public.add_project_delivery_file($1, $2)`, [emailProject.id, emailFileId])
+  await dbB.query(`select public.mark_project_delivered($1, 'Handoff for the email test')`, [emailProject.id])
+  await superUser(dbB)
+  const deliveryEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'delivery-ready' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: delivering a package enqueues a delivery-ready email to the client',
+    deliveryEmail?.recipient_email === 'carol@beta.test' && deliveryEmail?.payload?.version === 1)
+
+  // Approval → confirmation to the client + project-update to owner/manager.
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.approve_client_portal_delivery($1, 'Approved via email test.')`, [emailProject.id])
+  await superUser(dbB)
+  const approvalEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'revision-approval-update' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: client approval enqueues a confirmation email to the client',
+    approvalEmail?.recipient_email === 'carol@beta.test' && approvalEmail?.payload?.action === 'approved')
+  const ownerUpdateEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-update' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: client approval enqueues a project-update email to the owner',
+    ownerUpdateEmail?.recipient_email === 'admin@fresh.test' && ownerUpdateEmail?.payload?.label === 'Client approval')
+
+  // Revision request → confirmation to the client + project-update to owner.
+  await asUser(dbB, aliceB)
+  const revEmailProject = (await dbB.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('Email Revision Brand', $1, 'in-review', $2) returning id`,
+    [carolClient, aliceB],
+  )).rows[0]
+  await dbB.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('rev-email.pdf', 'pdf', 900, $1, $2, $3)`, [`${revEmailProject.id}/rev-email.pdf`, revEmailProject.id, aliceB])
+  const revEmailFileId = (await dbB.query(`select id from public.files where project_id = $1`, [revEmailProject.id])).rows[0].id
+  await dbB.query(`select public.add_project_delivery_file($1, $2)`, [revEmailProject.id, revEmailFileId])
+  await dbB.query(`select public.mark_project_delivered($1, 'First pass')`, [revEmailProject.id])
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.request_client_portal_revision($1, 'Please change the font.')`, [revEmailProject.id])
+  await superUser(dbB)
+  const revisionEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'revision-approval-update' and payload->>'action' = 'revision_requested' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: client revision request enqueues a confirmation email to the client',
+    revisionEmail?.recipient_email === 'carol@beta.test')
+  const revisionOwnerEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-update' and payload->>'label' = 'Revision request' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: client revision request enqueues a project-update email to the owner',
+    revisionOwnerEmail?.recipient_email === 'admin@fresh.test')
+
+  // The unique index makes double-delivery structurally impossible.
+  ok('fresh: every outbox row is unique per (template_key, dedupe_key)',
+    (await scalar(dbB, `select count(*)::int n from (select 1 from public.email_outbox group by template_key, dedupe_key having count(*) > 1) d`)).n === 0)
+
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

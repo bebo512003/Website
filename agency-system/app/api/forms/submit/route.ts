@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import { type NextRequest, NextResponse } from 'next/server'
+import { flushEmailQueue } from '@/lib/email/flush'
 
 // ── POST /api/forms/submit ───────────────────────────────────────────────────
 // Server-side gateway for public form submissions. Performs:
@@ -218,6 +219,14 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({ error: friendly }, { status: 400 })
     }
+
+    // Transactional emails (submission receipt to the respondent + new
+    // submission to staff) were enqueued by the database trigger inside the
+    // same transaction. Flush them right away as a best effort — the
+    // scheduled /api/cron/emails job is the guarantee.
+    void flushEmailQueue().catch((error) => {
+      console.error('[email] immediate flush failed:', error)
+    })
 
     return NextResponse.json({ data, error: null })
   } catch {
