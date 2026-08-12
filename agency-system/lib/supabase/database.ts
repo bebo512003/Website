@@ -721,14 +721,14 @@ export async function getAllFormSubmissions(): Promise<Result<(import('./types')
  * current reviewer/owner (internal team member). */
 export type AdminSubmissionRow = import('./types').FormSubmission & {
   form_templates?: { title: string; slug: string } | null
-  reviewer?: Pick<import('./types').Profile, 'id' | 'full_name' | 'email'> | null
+  reviewer?: Pick<import('./types').Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
 }
 
 export async function getAdminInboxSubmissions(): Promise<Result<AdminSubmissionRow[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase
     .from('form_submissions')
-    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email)')
+    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email, avatar_url, job_title)')
     .order('submitted_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as AdminSubmissionRow[])
 }
@@ -737,32 +737,105 @@ export async function getAdminInboxSubmission(id: string): Promise<Result<AdminS
   if (!supabase) return fail(null)
   const { data, error } = await supabase
     .from('form_submissions')
-    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email)')
+    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email, avatar_url, job_title)')
     .eq('id', id)
     .maybeSingle()
   return error ? fail(null, error.message) : ok(data as unknown as AdminSubmissionRow | null)
 }
 
-export async function getFormSubmissionDetails(submissionId: string): Promise<Result<{ answers: import('./types').FormSubmissionAnswer[]; attachments: import('./types').FormSubmissionAttachment[] }>> {
-  if (!supabase) return fail({ answers: [], attachments: [] })
-  const [answersResult, attachmentsResult] = await Promise.all([
+export async function getFormSubmissionDetails(submissionId: string): Promise<Result<{
+  answers: import('./types').FormSubmissionAnswer[]
+  attachments: import('./types').FormSubmissionAttachment[]
+  notes: import('./types').FormSubmissionNote[]
+  events: import('./types').FormSubmissionEvent[]
+}>> {
+  if (!supabase) return fail({ answers: [], attachments: [], notes: [], events: [] })
+  const [answersResult, attachmentsResult, notesResult, eventsResult] = await Promise.all([
     supabase.from('form_submission_answers').select('*').eq('submission_id', submissionId).order('created_at'),
     supabase.from('form_submission_attachments').select('*').eq('submission_id', submissionId).order('created_at'),
+    supabase
+      .from('form_submission_notes')
+      .select('*, author:profiles!form_submission_notes_author_id_fkey(id, full_name, email, avatar_url, job_title)')
+      .eq('submission_id', submissionId)
+      .order('created_at', { ascending: false }),
+    supabase
+      .from('form_submission_events')
+      .select('*, actor:profiles!form_submission_events_actor_id_fkey(id, full_name, email, avatar_url, job_title)')
+      .eq('submission_id', submissionId)
+      .order('created_at', { ascending: false }),
   ])
-  if (answersResult.error) return fail({ answers: [], attachments: [] }, answersResult.error.message)
-  if (attachmentsResult.error) return fail({ answers: [], attachments: [] }, attachmentsResult.error.message)
-  return ok({ answers: answersResult.data || [], attachments: attachmentsResult.data || [] })
+  if (answersResult.error) return fail({ answers: [], attachments: [], notes: [], events: [] }, answersResult.error.message)
+  if (attachmentsResult.error) return fail({ answers: [], attachments: [], notes: [], events: [] }, attachmentsResult.error.message)
+  return ok({
+    answers: answersResult.data || [],
+    attachments: attachmentsResult.data || [],
+    notes: (notesResult.data || []) as unknown as import('./types').FormSubmissionNote[],
+    events: (eventsResult.data || []) as unknown as import('./types').FormSubmissionEvent[],
+  })
 }
 
-export async function updateFormSubmissionStatus(id: string, status: import('./types').SubmissionStatus): Promise<Result<boolean>> {
+export async function getFormSubmissionNotes(submissionId: string): Promise<Result<import('./types').FormSubmissionNote[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_submission_notes')
+    .select('*, author:profiles!form_submission_notes_author_id_fkey(id, full_name, email, avatar_url, job_title)')
+    .eq('submission_id', submissionId)
+    .order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormSubmissionNote[])
+}
+
+export async function addFormSubmissionNote(submissionId: string, note: string): Promise<Result<import('./types').FormSubmissionNote | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('add_form_submission_note', {
+    p_submission_id: submissionId,
+    p_note: note,
+  })
+  return error ? fail(null, error.message) : ok(data as unknown as import('./types').FormSubmissionNote)
+}
+
+export async function deleteFormSubmissionNote(noteId: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
-  const { error } = await supabase.rpc('update_form_submission_status', { p_submission_id: id, p_status: status })
+  const { error } = await supabase.rpc('delete_form_submission_note', {
+    p_note_id: noteId,
+  })
   return error ? fail(false, error.message) : ok(true)
 }
 
-export async function assignFormSubmissionReviewer(id: string, reviewerId: string | null): Promise<Result<boolean>> {
+export async function getFormSubmissionEvents(submissionId: string): Promise<Result<import('./types').FormSubmissionEvent[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_submission_events')
+    .select('*, actor:profiles!form_submission_events_actor_id_fkey(id, full_name, email, avatar_url, job_title)')
+    .eq('submission_id', submissionId)
+    .order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormSubmissionEvent[])
+}
+
+export async function updateFormSubmissionStatus(
+  id: string,
+  status: import('./types').SubmissionStatus,
+  note?: string
+): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
-  const { error } = await supabase.rpc('assign_form_submission_reviewer', { p_submission_id: id, p_reviewer_id: reviewerId })
+  const { error } = await supabase.rpc('update_form_submission_status', {
+    p_submission_id: id,
+    p_status: status,
+    p_note: note?.trim() || null,
+  })
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function assignFormSubmissionReviewer(
+  id: string,
+  reviewerId: string | null,
+  note?: string
+): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.rpc('assign_form_submission_reviewer', {
+    p_submission_id: id,
+    p_reviewer_id: reviewerId,
+    p_note: note?.trim() || null,
+  })
   return error ? fail(false, error.message) : ok(true)
 }
 

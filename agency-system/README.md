@@ -16,7 +16,7 @@ The application contains no seeded users or placeholder business records. All da
 - Admin-only creation of employee, manager, and additional Admin login accounts from Team Management
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
-- **Admin Submission Inbox** at `/submissions`: the operational inbox for every public form response with search, status/form filters, sorting, full answer & file review, a status workflow, and reviewer/owner assignment
+- **Submission Review Workflow & Inbox** at `/submissions`: the operational review workflow for every public form response with stage pipeline metrics, search, status & reviewer filters, sorting, complete answer & file review, internal review notes feed, reviewer notifications, and tamper-evident audit history tracking who performed each action with timestamps
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates

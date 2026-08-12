@@ -1192,6 +1192,265 @@ async function runNotificationSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runSubmissionReviewWorkflowSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  // 1. Dynamic form submission creates a response and records initial 'created' event
+  await asUser(db, alice)
+  const wfFormRes = await db.query(
+    `insert into public.form_templates (slug, title, status) values ('qualification-workflow-form', 'Qualification Workflow Form', 'published') returning id`
+  )
+  const wfFormId = wfFormRes.rows[0].id
+  const qName = (
+    await db.query(
+      `insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'Lead Name', true, 'name', 1) returning id`,
+      [wfFormId]
+    )
+  ).rows[0].id
+  const qEmail = (
+    await db.query(
+      `insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'Lead Email', true, 'email', 2) returning id`,
+      [wfFormId]
+    )
+  ).rows[0].id
+
+  await asUser(db, anonVisitor, 'anon')
+  const submitted = (
+    await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [
+      wfFormId,
+      JSON.stringify({ [qName]: 'Maya Founder', [qEmail]: 'maya@growth.test' }),
+    ])
+  ).rows[0]
+
+  ok(`${label}: workflow submission starts with status 'new'`, submitted?.status === 'new')
+
+  // Verify initial submission created event
+  await asUser(db, alice)
+  const initialEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 order by created_at asc`,
+      [submitted.id]
+    )
+  ).rows
+  ok(
+    `${label}: submission creation records initial event in timeline`,
+    initialEvents.length >= 1 && initialEvents[0].event_type === 'created' && initialEvents[0].new_value === 'new'
+  )
+
+  // 2. Assign reviewer (Admin -> Erin Manager) with assignment note
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id = $1`, [erin])
+
+  await asUser(db, alice)
+  await scalar(
+    db,
+    `select public.assign_form_submission_reviewer($1, $2, 'Assigned to Erin for qualification review')`,
+    [submitted.id, erin]
+  )
+  const assignedRow = (
+    await db.query(`select reviewer_id, reviewed_at from public.form_submissions where id = $1`, [submitted.id])
+  ).rows[0]
+  ok(
+    `${label}: admin assigns submission to authorized reviewer`,
+    assignedRow?.reviewer_id === erin && assignedRow?.reviewed_at !== null
+  )
+
+  // Verify notification was sent to Erin
+  await asUser(db, erin)
+  const erinNotifs = (
+    await db.query(
+      `select * from public.notifications where recipient_id = $1 and submission_id = $2 and type = 'assignment'`,
+      [erin, submitted.id]
+    )
+  ).rows
+  ok(`${label}: assigned reviewer receives notification on assignment`, erinNotifs.length === 1)
+  ok(
+    `${label}: reviewer notification contains form name and assigner`,
+    erinNotifs[0]?.title?.includes('review a submission') &&
+      erinNotifs[0]?.message?.includes('Qualification Workflow Form')
+  )
+  ok(
+    `${label}: reviewer notification contains direct action_url`,
+    erinNotifs[0]?.action_url === `/submissions?submission=${submitted.id}`
+  )
+
+  // Verify assignment event recorded in audit trail
+  const assignEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 and event_type = 'reviewer_assigned'`,
+      [submitted.id]
+    )
+  ).rows
+  ok(
+    `${label}: assignment records event with actor_id and timestamp`,
+    assignEvents.length === 1 && assignEvents[0]?.actor_id === alice && assignEvents[0]?.created_at !== null
+  )
+
+  // Verify assignment note was also persisted
+  const assignNotes = (
+    await db.query(`select * from public.form_submission_notes where submission_id = $1`, [submitted.id])
+  ).rows
+  ok(
+    `${label}: assignment note saved in form_submission_notes`,
+    assignNotes.length === 1 &&
+      assignNotes[0]?.note === 'Assigned to Erin for qualification review' &&
+      assignNotes[0]?.author_id === alice
+  )
+
+  // 3. Prevent assigning an unauthorized reviewer (e.g. client profile or non-existent user)
+  await superUser(db)
+  const clientFixtureId = crypto.randomUUID()
+  const clientRoleId = (await db.query(`select id from public.app_roles where key = 'client'`)).rows[0].id
+  await db.query(
+    `insert into public.profiles (id, email, full_name, role, role_id) values ($1, 'client.fixture@test.local', 'Client Fixture', 'client', $2)`,
+    [clientFixtureId, clientRoleId]
+  )
+
+  await asUser(db, alice)
+  const assignClientFails = await expectError(db, () =>
+    scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submitted.id, clientFixtureId])
+  )
+  ok(`${label}: assigning a client account as reviewer is rejected`, assignClientFails)
+
+  // 4. Erin (Reviewer/Manager) adds internal review notes
+  await asUser(db, erin)
+  const newNote = (
+    await db.query(
+      `select * from public.add_form_submission_note($1, 'Qualified lead. Budget confirmed over $25k.')`,
+      [submitted.id]
+    )
+  ).rows[0]
+  ok(
+    `${label}: authorized staff adds internal review note`,
+    newNote?.note?.includes('Qualified lead') && newNote?.author_id === erin
+  )
+
+  // Verify note recorded in form_submission_events
+  const noteEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 and event_type = 'note_added'`,
+      [submitted.id]
+    )
+  ).rows
+  ok(`${label}: adding review note records note_added event in audit log`, noteEvents.length >= 1)
+
+  // 5. Change status (Reviewing -> Qualified) with a qualification note
+  await scalar(
+    db,
+    `select public.update_form_submission_status($1, 'qualified', 'Meets all client qualification criteria.')`,
+    [submitted.id]
+  )
+  const qualifiedRow = (
+    await db.query(`select status from public.form_submissions where id = $1`, [submitted.id])
+  ).rows[0]
+  ok(`${label}: reviewer updates submission status to qualified`, qualifiedRow?.status === 'qualified')
+
+  // Verify status change event in audit log
+  const statusEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 and event_type = 'status_changed'`,
+      [submitted.id]
+    )
+  ).rows
+  ok(
+    `${label}: status change records event with old_value and new_value`,
+    statusEvents.some(
+      (e) => e.old_value === 'new' && e.new_value === 'qualified' && e.actor_id === erin
+    )
+  )
+
+  // 6. Admin reassigns reviewer
+  await asUser(db, alice)
+  await scalar(
+    db,
+    `select public.assign_form_submission_reviewer($1, $2, 'Reassigning to Alice for executive review')`,
+    [submitted.id, alice]
+  )
+  const reassignedRow = (
+    await db.query(`select reviewer_id from public.form_submissions where id = $1`, [submitted.id])
+  ).rows[0]
+  ok(`${label}: admin can reassign submission reviewer`, reassignedRow?.reviewer_id === alice)
+
+  const reassignEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 and event_type = 'reviewer_reassigned'`,
+      [submitted.id]
+    )
+  ).rows
+  ok(`${label}: reassignment records reviewer_reassigned event`, reassignEvents.length === 1)
+
+  // 7. Note deletion (author or admin can delete; others cannot)
+  const noteToDelete = newNote.id
+  const deleteNoteResult = await scalar(db, `select public.delete_form_submission_note($1)`, [noteToDelete])
+  ok(`${label}: admin can delete review note`, deleteNoteResult?.delete_form_submission_note === true)
+  ok(
+    `${label}: deleted note is removed from notes table`,
+    (await scalar(db, `select count(*)::int n from public.form_submission_notes where id = $1`, [noteToDelete]))
+      .n === 0
+  )
+
+  const noteDeleteEvents = (
+    await db.query(
+      `select * from public.form_submission_events where submission_id = $1 and event_type = 'note_deleted'`,
+      [submitted.id]
+    )
+  ).rows
+  ok(`${label}: deleting note records note_deleted audit event`, noteDeleteEvents.length === 1)
+
+  // 8. Unauthorized users access prevention (RLS & RPCs)
+  // Bob (regular employee without submission.view)
+  await asUser(db, bob)
+  ok(
+    `${label}: employee without submission.view cannot read review notes (RLS)`,
+    (
+      await scalar(
+        db,
+        `select count(*)::int n from public.form_submission_notes where submission_id = $1`,
+        [submitted.id]
+      )
+    ).n === 0
+  )
+  ok(
+    `${label}: employee without submission.view cannot read audit events (RLS)`,
+    (
+      await scalar(
+        db,
+        `select count(*)::int n from public.form_submission_events where submission_id = $1`,
+        [submitted.id]
+      )
+    ).n === 0
+  )
+  const bobAddNoteFails = await expectError(db, () =>
+    scalar(db, `select public.add_form_submission_note($1, 'Unauthorized note')`, [submitted.id])
+  )
+  ok(`${label}: employee without submission.edit cannot add review note via RPC`, bobAddNoteFails)
+
+  // Client Account (clientFixtureId)
+  await asUser(db, clientFixtureId, 'authenticated')
+  ok(
+    `${label}: client cannot read internal review notes (RLS)`,
+    (await scalar(db, `select count(*)::int n from public.form_submission_notes`)).n === 0
+  )
+  ok(
+    `${label}: client cannot read audit events (RLS)`,
+    (await scalar(db, `select count(*)::int n from public.form_submission_events`)).n === 0
+  )
+  const clientAddNoteFails = await expectError(db, () =>
+    scalar(db, `select public.add_form_submission_note($1, 'Client note')`, [submitted.id])
+  )
+  ok(`${label}: client cannot add review note via RPC`, clientAddNoteFails)
+  const clientAssignFails = await expectError(db, () =>
+    scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submitted.id, erin])
+  )
+  ok(`${label}: client cannot assign reviewer via RPC`, clientAssignFails)
+  const clientStatusFails = await expectError(db, () =>
+    scalar(db, `select public.update_form_submission_status($1, 'approved')`, [submitted.id])
+  )
+  ok(`${label}: client cannot update submission status via RPC`, clientStatusFails)
+
+  await superUser(db)
+}
+
 async function runStorageSecuritySuite(db, ids, label) {
   const { anonVisitor, alice, bob, carol } = ids
 
@@ -1300,6 +1559,7 @@ async function main() {
   await runCapabilityEnforcementSuite(dbA, idsA, 'upgrade')
   await runNotificationSuite(dbA, idsA, 'upgrade')
   await runStorageSecuritySuite(dbA, idsA, 'upgrade')
+  await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -1345,6 +1605,17 @@ async function main() {
   ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
   const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows
   ok('fresh: admin receives notification on submission', freshAdminNotifs.length >= 1 && freshAdminNotifs[0].type === 'form_submission')
+
+  // Fresh install review workflow check: assign reviewer + internal notes + qualification
+  await dbB.query(`select public.assign_form_submission_reviewer($1, $2, 'Fresh assignment note')`, [freshSubmission.id, employeeB])
+  const freshAssignedSub = (await dbB.query(`select reviewer_id from public.form_submissions where id = $1`, [freshSubmission.id])).rows[0]
+  ok('fresh: admin assigns reviewer on fresh schema', freshAssignedSub?.reviewer_id === employeeB)
+  const freshNotes = (await dbB.query(`select * from public.form_submission_notes where submission_id = $1`, [freshSubmission.id])).rows
+  ok('fresh: assignment note recorded on fresh schema', freshNotes.length === 1 && freshNotes[0].note === 'Fresh assignment note')
+  await dbB.query(`select public.update_form_submission_status($1, 'qualified', 'Fresh qualification note')`, [freshSubmission.id])
+  const freshEvents = (await dbB.query(`select * from public.form_submission_events where submission_id = $1 order by created_at asc`, [freshSubmission.id])).rows
+  ok('fresh: full event audit log recorded on fresh schema', freshEvents.length === 3 && freshEvents.map((e) => e.event_type).includes('status_changed'))
+
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)
