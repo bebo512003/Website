@@ -1,16 +1,16 @@
 'use client'
 
-import { use, useCallback, useEffect, useMemo, useState } from 'react'
-import { CheckCircle2, FileWarning, Globe, LoaderCircle, Send, Sparkles } from 'lucide-react'
+import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CheckCircle2, FileWarning, Globe, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   getFormQuestions,
   getFormTemplateBySlug,
-  submitDynamicForm,
   uploadFormFile,
 } from '@/lib/supabase/database'
 import type { FormQuestion, FormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
+import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
 import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
 
@@ -18,9 +18,30 @@ import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
 // Renders any published form straight from the database. An admin can create a
 // brand-new form in the builder and this page serves it immediately — no code
 // change, no redeploy.
+//
+// Security hardening (Session 05):
+//   • Honeypot field (hidden from humans, traps bots)
+//   • Cloudflare Turnstile integration (optional, when configured)
+//   • Client-side 30-second cooldown after each successful submit
+//   • Text-length pre-validation (10 000 chars per answer)
+//   • Submission routed through POST /api/forms/submit which adds IP rate
+//     limiting, Turnstile server-side verification, and proxy to the hardened
+//     submit_dynamic_form RPC
+//   • Duplicate submission protection (same email → same form within 5 min)
 
 type Lang = 'ar' | 'en'
 const HEADING = 'AGENCY OS / FORM'
+
+// Honeypot field name — looks real to bots but is hidden via CSS.
+// Bots that fill every field will populate this, causing silent rejection.
+const HONEYPOT_FIELD_NAME = 'company_website_url'
+const HONEYPOT_FIELD_NAME_AR = 'url_website_company'
+
+// Client-side cooldown after a successful submission (milliseconds).
+const SUBMIT_COOLDOWN_MS = 30_000
+
+// Maximum characters per text answer (client-side pre-check).
+const MAX_TEXT_LENGTH = 10_000
 
 const t = (lang: Lang) => ({
   requiredHint: lang === 'ar' ? 'الحقول بعلامة * إلزامية.' : 'Fields marked * are required.',
@@ -36,6 +57,12 @@ const t = (lang: Lang) => ({
   unavailableDesc: lang === 'ar' ? 'الرابط غير صحيح أو النموذج لم يعد يستقبل الردود.' : 'The link is incorrect or the form is no longer accepting responses.',
   fileNeedsSession: lang === 'ar' ? 'رفع الملفات غير متاح حالياً. فعّل Anonymous sign-ins في Supabase أو أجب بدون ملفات.' : 'File upload is unavailable right now. Enable Anonymous sign-ins in Supabase or answer without files.',
   badNumber: lang === 'ar' ? 'أدخل رقماً صحيحاً' : 'Enter a valid number',
+  cooldown: lang === 'ar'
+    ? 'يمكنك إرسال رد آخر بعد {seconds} ثانية.'
+    : 'You can submit another response in {seconds} seconds.',
+  answerTooLong: lang === 'ar'
+    ? 'أحد إجاباتك طويلة جداً. الحد الأقصى هو 10,000 حرف.'
+    : 'One of your answers is too long. Maximum is 10,000 characters.',
 })
 
 export default function PublicFormPage({ params }: { params: Promise<{ slug: string }> }) {
@@ -54,6 +81,13 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [uploadingQuestionId, setUploadingQuestionId] = useState<string | null>(null)
+
+  // Session 05 — security state
+  const [honeypot, setHoneypot] = useState('') // must stay empty
+  const [turnstileToken, setTurnstileToken] = useState<string | null>(null)
+  const [cooldownRemaining, setCooldownRemaining] = useState(0)
+  const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const submitTimeRef = useRef<number>(0)
 
   // Anonymous session (same pattern as /intake): gives the respondent ownership
   // of their submission and the ability to upload files. The form still works
@@ -83,6 +117,26 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   }, [slug])
 
   useEffect(() => { void load() }, [load])
+
+  // Cooldown timer — counts down from SUBMIT_COOLDOWN_MS to 0.
+  useEffect(() => {
+    if (cooldownRemaining <= 0) return
+    cooldownTimerRef.current = setInterval(() => {
+      const elapsed = Date.now() - submitTimeRef.current
+      const remaining = Math.max(0, Math.ceil((SUBMIT_COOLDOWN_MS - elapsed) / 1000))
+      setCooldownRemaining(remaining)
+      if (remaining <= 0 && cooldownTimerRef.current) {
+        clearInterval(cooldownTimerRef.current)
+        cooldownTimerRef.current = null
+      }
+    }, 1000)
+    return () => {
+      if (cooldownTimerRef.current) {
+        clearInterval(cooldownTimerRef.current)
+        cooldownTimerRef.current = null
+      }
+    }
+  }, [cooldownRemaining > 0]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const answer = (questionId: string, value: AnswerValue) => {
     setValues((current) => ({ ...current, [questionId]: value }))
@@ -131,6 +185,10 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
         const score = Number(value)
         if (!Number.isInteger(score) || score < 1 || score > ratingMax(question.config)) nextErrors[question.id] = i18n.requiredQuestion
       }
+      // Session 05: client-side text length pre-check
+      if (!isAnswerEmpty(value) && typeof value === 'string' && value.length > MAX_TEXT_LENGTH) {
+        nextErrors[question.id] = i18n.answerTooLong
+      }
     }
     setErrors(nextErrors)
     return Object.keys(nextErrors).length === 0
@@ -139,18 +197,66 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const submit = async () => {
     if (!template) return
     setError('')
+
+    // ── Session 05: Honeypot check ───────────────────────────────────────
+    if (honeypot.trim() !== '') {
+      // Bot detected — silently pretend success.
+      setDone(true)
+      return
+    }
+
+    // ── Session 05: Cooldown check ───────────────────────────────────────
+    if (cooldownRemaining > 0) {
+      setError(i18n.cooldown.replace('{seconds}', String(cooldownRemaining)))
+      return
+    }
+
+    // ── Standard validation ──────────────────────────────────────────────
     if (!validate()) {
       setError(i18n.fillRequired)
       return
     }
+
     setSubmitting(true)
-    const result = await submitDynamicForm(template.id, values)
-    setSubmitting(false)
-    if (result.error || !result.data) {
-      setError(result.error || 'Submission failed.')
-      return
+
+    try {
+      // Get the current access token for the API route.
+      const { supabase } = await import('@/lib/supabase/client')
+      let accessToken = ''
+      if (supabase) {
+        const { data: sessionData } = await supabase.auth.getSession()
+        accessToken = sessionData.session?.access_token || ''
+      }
+
+      // ── Session 05: Submit through the hardened API route ──────────────
+      const response = await fetch('/api/forms/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formId: template.id,
+          answers: values,
+          turnstileToken,
+          accessToken,
+        }),
+      })
+
+      const result = (await response.json()) as { data?: unknown; error?: string }
+
+      if (!response.ok || result.error) {
+        setError(result.error || 'Submission failed.')
+        setSubmitting(false)
+        return
+      }
+
+      // Success — start cooldown.
+      submitTimeRef.current = Date.now()
+      setCooldownRemaining(Math.ceil(SUBMIT_COOLDOWN_MS / 1000))
+      setDone(true)
+    } catch {
+      setError('An unexpected error occurred. Please try again.')
+    } finally {
+      setSubmitting(false)
     }
-    setDone(true)
   }
 
   const reset = () => {
@@ -158,6 +264,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
     setErrors({})
     setError('')
     setDone(false)
+    setTurnstileToken(null)
   }
 
   // ── Loading ──────────────────────────────────────────────────────────────
@@ -195,7 +302,13 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
           </div>
           <h1 className="text-xl font-semibold text-fg">{i18n.submittedTitle}</h1>
           <p className="mt-3 text-sm text-text-secondary">{i18n.submittedDesc}</p>
-          <button onClick={reset} className={`${primaryButtonClassName} mt-6`}>{i18n.another}</button>
+          {cooldownRemaining > 0 ? (
+            <p className="mt-4 text-xs text-text-tertiary">
+              {i18n.cooldown.replace('{seconds}', String(cooldownRemaining))}
+            </p>
+          ) : (
+            <button onClick={reset} className={`${primaryButtonClassName} mt-6`}>{i18n.another}</button>
+          )}
         </div>
       </main>
     )
@@ -229,6 +342,38 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
             <p className="text-xs text-text-tertiary">{i18n.requiredHint}</p>
           </div>
           <div className="p-5">
+            {/* ── Session 05: Honeypot field ────────────────────────────────
+                Hidden from human view via CSS. Bots that auto-fill every
+                <input> will populate this, allowing us to silently reject
+                the submission without tipping off the bot operator. */}
+            <div
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: '-9999px',
+                width: '1px',
+                height: '1px',
+                overflow: 'hidden',
+                opacity: 0,
+                pointerEvents: 'none',
+              }}
+              tabIndex={-1}
+            >
+              <label>
+                {/* Label text looks plausible to automated scrapers */}
+                {lang === 'ar' ? 'موقع الشركة' : 'Company website'}
+                <input
+                  type="text"
+                  name={lang === 'ar' ? HONEYPOT_FIELD_NAME_AR : HONEYPOT_FIELD_NAME}
+                  autoComplete="off"
+                  tabIndex={-1}
+                  value={honeypot}
+                  onChange={(e) => setHoneypot(e.target.value)}
+                  aria-label="Leave this field empty"
+                />
+              </label>
+            </div>
+
             <DynamicFormRenderer
               questions={questions}
               values={values}
@@ -240,11 +385,26 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
               errors={errors}
             />
           </div>
-          <div className="flex justify-end border-t border-border p-5">
-            <button onClick={() => void submit()} disabled={submitting} className={primaryButtonClassName}>
-              {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-              {submitting ? i18n.submitting : i18n.submit}
-            </button>
+          <div className="flex flex-col items-end gap-3 border-t border-border p-5">
+            {/* ── Session 05: Turnstile widget (invisible when configured) ─ */}
+            <TurnstileWidget onVerify={setTurnstileToken} className="mb-1" />
+
+            <div className="flex items-center gap-3">
+              {process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY && (
+                <span className="flex items-center gap-1 text-[10px] text-text-tertiary">
+                  <ShieldCheck className="h-3 w-3" />
+                  Protected
+                </span>
+              )}
+              <button
+                onClick={() => void submit()}
+                disabled={submitting || cooldownRemaining > 0}
+                className={primaryButtonClassName}
+              >
+                {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {submitting ? i18n.submitting : i18n.submit}
+              </button>
+            </div>
           </div>
         </section>
       </div>
