@@ -2,9 +2,10 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Briefcase, Building2, CalendarDays, Globe, Link2, Mail, MapPin, MessageCircle, Pencil, Phone, ShieldOff, UsersRound } from 'lucide-react'
+import { ArrowLeft, Award, Briefcase, Building2, CalendarDays, GitBranch, Globe, Link2, Mail, MapPin, MessageCircle, Pencil, Phone, ShieldOff, UsersRound } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { getAppRoles, getEmployeeRoles, getTeamMemberById } from '@/lib/supabase/database'
+import { collectSocialLinks, getAppRoles, getEmployeeRoles, getTeamMemberById } from '@/lib/supabase/database'
+import { linkKeyLabel } from '@/lib/profile-validation'
 import type { AppRoleRow, EmployeeRole, Profile } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -21,6 +22,9 @@ const SOCIAL_LABELS: Record<string, string> = {
   behance: 'Behance',
   dribbble: 'Dribbble',
   website: 'Website',
+  instagram: 'Instagram',
+  facebook: 'Facebook',
+  personal_website: 'Personal Website',
 }
 
 function DetailRow({ label, children }: { label: string; children: React.ReactNode }) {
@@ -28,6 +32,21 @@ function DetailRow({ label, children }: { label: string; children: React.ReactNo
     <div className="grid grid-cols-[110px_minmax(0,1fr)] gap-3 text-sm">
       <span className="text-text-tertiary">{label}</span>
       <span className="min-w-0 text-fg">{children}</span>
+    </div>
+  )
+}
+
+function SkillChips({ skills }: { skills: string }) {
+  const items = skills.split(',').map((skill) => skill.trim()).filter(Boolean)
+  if (items.length === 0) return null
+  return (
+    <div className="mt-4">
+      <p className="text-xs font-semibold text-text-secondary">Skills</p>
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {items.map((skill) => (
+          <span key={skill} className="inline-flex rounded border border-border bg-surface-raised px-2 py-0.5 text-xs text-text-secondary">{skill}</span>
+        ))}
+      </div>
     </div>
   )
 }
@@ -73,10 +92,10 @@ export function MemberProfile({ memberId }: { memberId: string }) {
   }, [member, employeeRoles])
 
   const socialLinks = useMemo(() => {
-    if (!member || !member.social_links || typeof member.social_links !== 'object') return []
-    return Object.entries(member.social_links as Record<string, unknown>)
-      .filter(([, value]) => typeof value === 'string' && (value as string).trim() !== '')
-      .map(([key, value]) => ({ key, label: SOCIAL_LABELS[key] || key, url: value as string }))
+    if (!member) return []
+    return Object.entries(collectSocialLinks(member))
+      .map(([key, url]) => ({ key, label: SOCIAL_LABELS[key] || linkKeyLabel(key), url }))
+      .sort((a, b) => a.label.localeCompare(b.label))
   }, [member])
 
   if (!loaded) {
@@ -174,9 +193,12 @@ export function MemberProfile({ memberId }: { memberId: string }) {
       <div className="grid gap-5 lg:grid-cols-2">
         {/* About */}
         <Panel title="About">
-          <p className="p-5 text-sm leading-relaxed text-text-secondary">
-            {member.bio || 'No bio added yet.'}
-          </p>
+          <div className="p-5">
+            <p className="text-sm leading-relaxed text-text-secondary">
+              {member.bio || 'No bio added yet.'}
+            </p>
+            {member.skills && <SkillChips skills={member.skills} />}
+          </div>
         </Panel>
 
         {/* Contact */}
@@ -210,6 +232,33 @@ export function MemberProfile({ memberId }: { memberId: string }) {
               <DetailRow label="Member since">
                 <span className="inline-flex items-center gap-1.5"><CalendarDays className="h-3.5 w-3.5" />{memberSince}</span>
               </DetailRow>
+            )}
+          </div>
+        </Panel>
+
+        {/* Professional background */}
+        <Panel title="Professional Background">
+          <div className="space-y-4 p-5">
+            {member.experience && (
+              <div>
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary"><Briefcase className="h-3.5 w-3.5" /> Experience</p>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{member.experience}</p>
+              </div>
+            )}
+            {member.certifications && (
+              <div>
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary"><Award className="h-3.5 w-3.5" /> Certifications</p>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{member.certifications}</p>
+              </div>
+            )}
+            {member.previous_projects && (
+              <div>
+                <p className="flex items-center gap-1.5 text-xs font-semibold text-text-secondary"><GitBranch className="h-3.5 w-3.5" /> Previous Projects</p>
+                <p className="mt-1.5 whitespace-pre-wrap text-sm leading-relaxed text-text-secondary">{member.previous_projects}</p>
+              </div>
+            )}
+            {!member.experience && !member.certifications && !member.previous_projects && (
+              <p className="text-sm text-text-secondary">No professional background details added yet.</p>
             )}
           </div>
         </Panel>

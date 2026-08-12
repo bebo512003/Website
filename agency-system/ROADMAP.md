@@ -14,6 +14,7 @@
 - Dynamic admin-managed form builder (templates, questions, options, publish/archive, public /f/<slug> rendering, per-question answer snapshots, public submissions with client automation)
 - Team Management (Admin-created Auth accounts with initial credentials, dynamic roles, extended profiles, job/department/specialization fields, and avatar storage)
 - Team Directory (permission-guarded /team page with member cards, full member profiles, search + role/department/status filters; clients excluded, inactive members hidden from regular staff)
+- Self-service profile editing (per-user /profile: personal & professional fields, social links, avatar upload/replace/remove, independent password changes, owner-only RPC with admin-protected role/status fields, full validation and inline loading/success/error states)
 
 ## Next priorities
 
