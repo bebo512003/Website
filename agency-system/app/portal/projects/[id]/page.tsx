@@ -1,37 +1,48 @@
 'use client'
 
-import { use, useEffect, useState } from 'react'
+import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, CalendarDays, FolderKanban, Hash, Layers, Type } from 'lucide-react'
-import { getClientPortalProject } from '@/lib/supabase/database'
-import type { ClientPortalProject } from '@/lib/supabase/types'
+import { getClientPortalCollaboration, getClientPortalProject } from '@/lib/supabase/database'
+import type { ClientPortalCollaboration, ClientPortalProject } from '@/lib/supabase/types'
+import { PortalProjectCollaboration } from '@/components/portal/portal-project-collaboration'
 import { EmptyState, InlineAlert, LoadingState, Panel, secondaryButtonClassName } from '@/components/ui/page'
 import { Progress } from '@/components/ui/progress'
 import { PROJECT_STATUS_LABELS, projectStatusBadgeClass } from '@/lib/project-lifecycle'
 
 /**
- * Client-facing project detail. Everything shown here comes from the sanitized
- * `get_client_portal_project` RPC, which only ever returns the caller's own
- * project. Internal notes, tasks, team, activity, files and delivery data are
- * never available on this page.
+ * Client-facing project detail. Project fields come from the sanitized
+ * `get_client_portal_project` RPC. Files, messages, and approval actions come
+ * from `get_client_portal_collaboration` — only selected/delivered files and
+ * client-visible messages. Internal comments, tasks, team, and activity never
+ * reach this page.
  */
 export default function ClientPortalProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const [project, setProject] = useState<ClientPortalProject | null>(null)
+  const [collaboration, setCollaboration] = useState<ClientPortalCollaboration | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
+  const load = useCallback(async () => {
+    const [projectResult, collabResult] = await Promise.all([
+      getClientPortalProject(id),
+      getClientPortalCollaboration(id),
+    ])
+    setProject(projectResult.data)
+    setCollaboration(collabResult.data)
+    setError(projectResult.error || collabResult.error || '')
+    setLoading(false)
+  }, [id])
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
-      const result = await getClientPortalProject(id)
+      await load()
       if (cancelled) return
-      setProject(result.data)
-      setError(result.error || '')
-      setLoading(false)
     })()
     return () => { cancelled = true }
-  }, [id])
+  }, [load])
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-5 py-8">

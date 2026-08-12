@@ -91,6 +91,16 @@ Covered guarantees:
 - The portal RPCs return only the client's own projects and only sanitized fields (no owner, manager, team, budget, health, or priority); another client's project returns nothing, staff get nothing, and anonymous visitors cannot call the RPCs.
 - Clients still cannot read the raw `projects`/`clients` tables (RLS unchanged); suspending a client removes portal data immediately; revoking access deletes both profile and Auth account atomically.
 
+**Client feedback, shared files & approval** (migration `20260903000000_client_feedback_shared_files.sql`):
+
+- Unshared working files, preparing delivery files, internal `comments`, raw `files` / `project_deliveries` / `project_activity`, and another client's storage objects are invisible to the portal client.
+- Sharing a selected file makes that object (and only that object) readable; unsharing hides a working file again while delivered files stay visible.
+- Client feedback writes `client_messages` + notifies the project owner (and manager); the internal staff comment never appears in the client thread.
+- Staff cannot call the client-owned approval RPC; client B cannot approve client A's delivery.
+- Client approval stamps `approved_by_client` and clears completion blockers; a second approval is rejected.
+- A client revision request is a `client_revision_requested` operational event, returns the project to In review, and opens a new preparing package.
+- Suspended clients and anonymous visitors lose collaboration access.
+
 **Project delivery & closure** (migration `20260831000000_project_delivery_closure.sql`):
 
 - Ready for delivery and Delivered require at least one final delivery file on an

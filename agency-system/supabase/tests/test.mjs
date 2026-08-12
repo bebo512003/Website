@@ -2393,6 +2393,321 @@ async function runClientPortalSuite(db, ids, label) {
   await superUser(db)
 }
 
+// ── Session 18: client feedback, shared files & approval ─────────────────────
+// Isolation is the point of this suite. Clients see only the files staff
+// selected (or delivered), never internal comments, never another client's
+// data, and never write `project_deliveries` directly.
+async function runClientFeedbackSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  await asUser(db, alice)
+  const clientAId = (await db.query(
+    `insert into public.clients (name, email) values ('Feedback Co', 'feedback@client.test') returning id`,
+  )).rows[0].id
+  const clientBId = (await db.query(
+    `insert into public.clients (name, email) values ('Other Feedback Co', 'other-feedback@client.test') returning id`,
+  )).rows[0].id
+  const projectA = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id)
+     values ('Feedback Brand', $1, 'active', $2, $3) returning id`,
+    [clientAId, alice, erin],
+  )).rows[0]
+  const projectB = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id)
+     values ('Secret Other Brand', $1, 'active', $2) returning id`,
+    [clientBId, alice],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [projectA.id, bob, alice])
+
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('working-draft.ai', 'other', 800, $1, $2, $3)`, [`${projectA.id}/working-draft.ai`, projectA.id, alice])
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('final-logo.pdf', 'pdf', 1200, $1, $2, $3)`, [`${projectA.id}/final-logo.pdf`, projectA.id, alice])
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('other-secret.pdf', 'pdf', 400, $1, $2, $3)`, [`${projectB.id}/other-secret.pdf`, projectB.id, alice])
+  const workingId = (await db.query(`select id from public.files where project_id = $1 and name = 'working-draft.ai'`, [projectA.id])).rows[0].id
+  const finalId = (await db.query(`select id from public.files where project_id = $1 and name = 'final-logo.pdf'`, [projectA.id])).rows[0].id
+  const otherFileId = (await db.query(`select id from public.files where project_id = $1 and name = 'other-secret.pdf'`, [projectB.id])).rows[0].id
+
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values
+    ('project-files', $1, $2), ('project-files', $3, $2), ('project-files', $4, $2)`,
+    [`${projectA.id}/working-draft.ai`, alice, `${projectA.id}/final-logo.pdf`, `${projectB.id}/other-secret.pdf`])
+
+  // Internal staff comment — must stay invisible to the client.
+  await db.query(`insert into public.comments (content, entity_type, entity_id, author_id)
+    values ('Do not show the client this internal note.', 'project', $1, $2)`, [projectA.id, alice])
+
+  // Invite two portal clients and claim them.
+  const placeholderA = (await db.query(
+    `select * from public.admin_create_client_account($1, 'feedback@client.test', 'Feedback Client')`,
+    [clientAId],
+  )).rows[0]
+  const placeholderB = (await db.query(
+    `select * from public.admin_create_client_account($1, 'other-feedback@client.test', 'Other Client')`,
+    [clientBId],
+  )).rows[0]
+  ok(`${label}: admin provisions two isolated portal accounts`,
+    placeholderA?.client_id === clientAId && placeholderB?.client_id === clientBId)
+
+  await superUser(db)
+  const clientUserA = await addUser(db, 'feedback@client.test', { fullName: 'Feedback Client', adminProvisioned: true })
+  const clientUserB = await addUser(db, 'other-feedback@client.test', { fullName: 'Other Client', adminProvisioned: true })
+  await asUser(db, clientUserA)
+  await db.query(`select public.mark_password_changed($1)`, [clientUserA])
+  await asUser(db, clientUserB)
+  await db.query(`select public.mark_password_changed($1)`, [clientUserB])
+
+  // ── Unshared working files stay private ────────────────────────────────
+  await asUser(db, clientUserA)
+  const emptyCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees no files before anything is shared or delivered`,
+    Array.isArray(emptyCollab?.files) && emptyCollab.files.length === 0)
+  ok(`${label}: client cannot read the raw files table`,
+    (await scalar(db, `select count(*)::int n from public.files`)).n === 0)
+  ok(`${label}: client cannot read internal comments`,
+    (await scalar(db, `select count(*)::int n from public.comments`)).n === 0)
+  ok(`${label}: client cannot read internal delivery packages`,
+    (await scalar(db, `select count(*)::int n from public.project_deliveries`)).n === 0)
+  ok(`${label}: client cannot read the project activity audit feed`,
+    (await scalar(db, `select count(*)::int n from public.project_activity`)).n === 0)
+  ok(`${label}: client cannot read unshared storage objects`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 0)
+  const clientInsertsComment = await expectError(db, () => db.query(
+    `insert into public.comments (content, entity_type, entity_id) values ('sneaky', 'project', $1)`, [projectA.id]))
+  ok(`${label}: client cannot insert an internal comment`, clientInsertsComment)
+  const clientSharesFails = await expectError(db, () => db.query(
+    `select public.share_project_file_with_client($1, $2)`, [projectA.id, finalId]))
+  ok(`${label}: client cannot call the staff share RPC`, clientSharesFails)
+
+  // ── Staff share a selected file ────────────────────────────────────────
+  await asUser(db, alice)
+  await db.query(`select public.share_project_file_with_client($1, $2, 'Please review the draft.')`, [projectA.id, workingId])
+  const shareEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'file_shared'`, [projectA.id])).rows
+  ok(`${label}: sharing a file records a file_shared operational event`,
+    shareEvent.length === 1 && shareEvent[0].new_value === 'working-draft.ai')
+
+  await asUser(db, clientUserA)
+  const afterShare = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees only the explicitly shared file`,
+    afterShare.files.length === 1 && afterShare.files[0].id === workingId && afterShare.files[0].source === 'shared')
+  ok(`${label}: client can read the shared storage object and only that object`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 1
+      && (await scalar(db, `select name from storage.objects where bucket_id = 'project-files'`)).name === `${projectA.id}/working-draft.ai`)
+
+  // ── Other client's project is invisible ────────────────────────────────
+  const otherProjectBlocked = await expectError(db, () =>
+    scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectB.id]))
+  ok(`${label}: client A cannot open client B's collaboration payload`, otherProjectBlocked)
+  await asUser(db, clientUserB)
+  const clientBSeesNothing = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectB.id])).c
+  ok(`${label}: client B does not see client A's shared files`,
+    Array.isArray(clientBSeesNothing?.files) && clientBSeesNothing.files.length === 0)
+  ok(`${label}: client B cannot read client A's storage objects`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 0)
+
+  // ── Feedback notifies the project owner ────────────────────────────────
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1`, [projectA.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.add_client_portal_feedback($1, 'The blue is too dark on the draft.')`, [projectA.id])
+  const feedbackCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client feedback appears in the client-visible thread`,
+    feedbackCollab.messages.some((m) => m.kind === 'feedback' && m.mine === true && m.body.includes('blue is too dark')))
+
+  await superUser(db)
+  const ownerNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_feedback' and project_id = $2`,
+    [alice, projectA.id],
+  )).rows
+  ok(`${label}: client feedback notifies the project owner`,
+    ownerNotifs.length === 1 && ownerNotifs[0].action_url === `/projects/${projectA.id}`)
+  const managerNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_feedback' and project_id = $2`,
+    [erin, projectA.id],
+  )).rows
+  ok(`${label}: client feedback also notifies the project manager`, managerNotifs.length === 1)
+  const feedbackEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_feedback'`, [projectA.id])).rows
+  ok(`${label}: client feedback is recorded as a project activity event`, feedbackEvent.length === 1)
+
+  // Internal comments stay out of the client payload.
+  await asUser(db, clientUserA)
+  ok(`${label}: client-visible thread does not include the internal staff comment`,
+    !feedbackCollab.messages.some((m) => String(m.body).includes('Do not show')))
+  ok(`${label}: client still cannot read the comments table after leaving feedback`,
+    (await scalar(db, `select count(*)::int n from public.comments`)).n === 0)
+
+  // Staff can read the client thread and post a client-visible reply.
+  await asUser(db, alice)
+  ok(`${label}: staff can read client messages through RLS`,
+    (await scalar(db, `select count(*)::int n from public.client_messages where project_id = $1`, [projectA.id])).n >= 1)
+  await db.query(`select public.add_client_visible_message($1, 'We will lighten the blue in the next round.')`, [projectA.id])
+  const staffCommentStillPrivate = (await scalar(db,
+    `select count(*)::int n from public.comments where entity_id = $1 and content like 'Do not show%'`, [projectA.id])).n
+  ok(`${label}: staff internal comment remains stored separately from the client thread`, staffCommentStillPrivate === 1)
+
+  await asUser(db, clientUserA)
+  const afterReply = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees the staff reply and never the internal note`,
+    afterReply.messages.some((m) => m.from_client === false && String(m.body).includes('lighten the blue'))
+      && !afterReply.messages.some((m) => String(m.body).includes('Do not show')))
+
+  // ── Deliverables become visible only after delivery ────────────────────
+  await asUser(db, alice)
+  await db.query(`update public.projects set status = 'in-review' where id = $1`, [projectA.id])
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [projectA.id, finalId])
+  const preparingCollab = await (async () => {
+    await asUser(db, clientUserA)
+    return (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  })()
+  ok(`${label}: a preparing delivery file is not visible until the package is delivered`,
+    !preparingCollab.files.some((f) => f.id === finalId))
+
+  await asUser(db, alice)
+  await db.query(`select public.mark_project_delivered($1, 'Handoff for client review')`, [projectA.id])
+
+  await asUser(db, clientUserA)
+  const deliveredCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: delivered package files become visible to the client`,
+    deliveredCollab.files.some((f) => f.id === finalId)
+      && deliveredCollab.delivery?.status === 'delivered'
+      && deliveredCollab.can_approve === true
+      && deliveredCollab.can_request_revision === true)
+  ok(`${label}: client can now read the delivered storage object`,
+    (await scalar(db, `select count(*)::int n from storage.objects where name = $1`, [`${projectA.id}/final-logo.pdf`])).n === 1)
+
+  // Staff cannot use the client-owned approval RPC.
+  await asUser(db, alice)
+  const staffApproveFails = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'I am staff')`, [projectA.id]))
+  ok(`${label}: staff cannot record a client-portal approval`, staffApproveFails)
+
+  // ── Client approval updates delivery state ─────────────────────────────
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1 and type = 'client_approval'`, [projectA.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.approve_client_portal_delivery($1, 'Looks great — approved.')`, [projectA.id])
+
+  await asUser(db, alice)
+  const approvedPkg = (await db.query(
+    `select status, approval_state, approval_recorded_by from public.project_deliveries
+     where project_id = $1 order by version desc limit 1`, [projectA.id])).rows[0]
+  ok(`${label}: client approval stamps the delivery as approved_by_client`,
+    approvedPkg?.status === 'approved' && approvedPkg?.approval_state === 'approved_by_client' && approvedPkg?.approval_recorded_by === clientUserA)
+  const blockersAfterClient = (await scalar(db, `select public.project_completion_blockers($1) blockers`, [projectA.id])).blockers
+  ok(`${label}: client approval satisfies the completion blockers`,
+    Array.isArray(blockersAfterClient) && blockersAfterClient.length === 0, JSON.stringify(blockersAfterClient))
+  const approvalNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_approval' and project_id = $2`,
+    [alice, projectA.id],
+  )).rows
+  ok(`${label}: client approval notifies the project owner`, approvalNotifs.length === 1)
+  const clientApprovedEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_approved'`, [projectA.id])).rows
+  ok(`${label}: client approval is a distinct operational event (not the internal placeholder)`,
+    clientApprovedEvent.length === 1 && clientApprovedEvent[0].metadata?.client_facing === true)
+
+  await asUser(db, clientUserA)
+  const alreadyApproved = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'again')`, [projectA.id]))
+  ok(`${label}: a second approval of the same package is rejected`, alreadyApproved)
+
+  // Client B still cannot approve project A.
+  await asUser(db, clientUserB)
+  const crossApproveFails = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'not mine')`, [projectA.id]))
+  ok(`${label}: client B cannot approve client A's delivery`, crossApproveFails)
+
+  // ── Client revision request is an operational event ────────────────────
+  await asUser(db, alice)
+  // Re-open a delivered package on a fresh project so we can request a revision.
+  const revProject = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id)
+     values ('Revision Brand', $1, 'in-review', $2) returning id`,
+    [clientAId, alice],
+  )).rows[0]
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('rev-v1.pdf', 'pdf', 900, $1, $2, $3)`, [`${revProject.id}/rev-v1.pdf`, revProject.id, alice])
+  const revFileId = (await db.query(`select id from public.files where project_id = $1`, [revProject.id])).rows[0].id
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [revProject.id, revFileId])
+  await db.query(`select public.mark_project_delivered($1, 'First pass')`, [revProject.id])
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1`, [revProject.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.request_client_portal_revision($1, 'Please enlarge the wordmark and lighten the blue.')`, [revProject.id])
+
+  await asUser(db, alice)
+  const afterClientRev = await scalar(db, `
+    select
+      (select status from public.projects where id = $1) project_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 1) v1_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 2) v2_status,
+      (select approval_state from public.project_deliveries where project_id = $1 and version = 1) v1_approval,
+      (select revision_note from public.project_deliveries where project_id = $1 and version = 1) v1_note
+  `, [revProject.id])
+  ok(`${label}: client revision returns the project to In review and opens a new package`,
+    afterClientRev?.project_status === 'in-review'
+      && afterClientRev?.v1_status === 'revision_requested'
+      && afterClientRev?.v2_status === 'preparing'
+      && afterClientRev?.v1_approval === 'revision_required'
+      && String(afterClientRev?.v1_note || '').includes('enlarge the wordmark'))
+  const revEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_revision_requested'`,
+    [revProject.id],
+  )).rows
+  ok(`${label}: client revision request is a clear operational event`,
+    revEvent.length === 1 && revEvent[0].metadata?.client_facing === true)
+  const revNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_revision' and project_id = $2`,
+    [alice, revProject.id],
+  )).rows
+  ok(`${label}: client revision request notifies the project owner`, revNotifs.length === 1)
+
+  await asUser(db, clientUserA)
+  const afterRevCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [revProject.id])).c
+  ok(`${label}: after a revision the client can no longer approve the superseded package`,
+    afterRevCollab.can_approve === false
+      && afterRevCollab.messages.some((m) => m.kind === 'revision'))
+
+  // Unshare hides a working file that is not on a delivered package.
+  await asUser(db, alice)
+  await db.query(`select public.unshare_project_file_with_client($1, $2)`, [projectA.id, workingId])
+  await asUser(db, clientUserA)
+  const afterUnshare = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: unsharing a working file hides it; delivered files stay visible`,
+    !afterUnshare.files.some((f) => f.id === workingId) && afterUnshare.files.some((f) => f.id === finalId))
+
+  // Suspended client loses collaboration access immediately.
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [clientUserA])
+  await asUser(db, clientUserA)
+  const suspendedBlocked = await expectError(db, () =>
+    scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id]))
+  ok(`${label}: suspended client loses collaboration access`, suspendedBlocked)
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [clientUserA])
+
+  // Anonymous visitors cannot call the collaboration RPCs.
+  await asUser(db, anonVisitor, 'anon')
+  const anonCollabBlocked = await expectError(db, () =>
+    db.query(`select public.get_client_portal_collaboration($1)`, [projectA.id]))
+  ok(`${label}: anonymous visitor cannot read portal collaboration`, anonCollabBlocked)
+
+  // Employee outside the project cannot share its files.
+  await superUser(db)
+  const rania = (await db.query(`select id from public.profiles where email = 'rania@agency.test'`)).rows[0]?.id
+  if (rania) {
+    await asUser(db, rania)
+    const outsiderShareFails = await expectError(db, () =>
+      db.query(`select public.share_project_file_with_client($1, $2)`, [projectA.id, otherFileId]))
+    ok(`${label}: non-member employee cannot share files on another project`, outsiderShareFails)
+  }
+
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2413,6 +2728,7 @@ async function main() {
   await runProjectDeliveryClosureSuite(dbA, idsA, 'upgrade')
   await runSubmissionTrackingSuite(dbA, idsA, 'upgrade')
   await runClientPortalSuite(dbA, idsA, 'upgrade')
+  await runClientFeedbackSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -2510,6 +2826,10 @@ async function main() {
   const freshClosed = await scalar(dbB, `select status, archived_at from public.projects where id = $1`, [freshProject.id])
   ok('fresh: delivery → internal approval → complete → archive works end to end',
     freshClosed?.status === 'completed' && freshClosed?.archived_at !== null)
+
+  const collabFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'get_client_portal_collaboration'`)).n
+  const approvalsTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'client_approvals'`)).n
+  ok('fresh: client collaboration RPCs and tables are installed', collabFn === 1 && approvalsTable === 1)
 
   await dbB.close()
 
