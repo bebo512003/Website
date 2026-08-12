@@ -2,6 +2,26 @@
 
 Prepared 2026-08-09. Historical review; later migrations override parts of this plan.
 
+> **2026-08-12 — Session 02, employee account lifecycle done:** migration
+> `20260819000000_account_lifecycle_hardening.sql` + Team Management UI/API complete the
+> internal provisioning loop end to end: Admin → Add Team Member → role + profile info →
+> server creates the Auth account → **server-generated temporary password** (crypto-random,
+> never typed by the admin, never persisted, shown once in a one-time credentials modal with
+> copy/reveal controls) → employee first login → **forced password change that genuinely
+> blocks the workspace** (full-screen AppShell gate *and* `has_permission()` /
+> `get_user_permissions()` return nothing while `must_change_password` is pending, so RLS,
+> RPCs and the provisioning Route Handler all agree) → normal access. Deactivation now also
+> syncs a GoTrue sign-in ban through the protected Route Handler (deactivated members cannot
+> log in at all; reactivation lifts it), and deletion already removes profile + Auth account
+> atomically. Duplicate e-mails are rejected by the provisioning RPC (profiles AND
+> `auth.users`), backstopped by a case-insensitive partial unique index; failed creations
+> clean up their placeholder, and the placeholder-claim flow was re-ordered
+> (snapshot assignments → free the e-mail → insert claimed profile → restore assignments)
+> to coexist with the unique index. Password changes everywhere now verify the current
+> password first; the e-mail reset flow clears the temporary-password flag. Regression suite
+> grew from 183 to 202 checks covering the full lifecycle (gate before change, unlock after
+> change, duplicate handling, delete → re-provision, assignment survival across the claim).
+
 > **2026-08-09 — authentication decision completed:** migration
 > `20260815000000_admin_only_account_creation.sql` removes public permanent-account
 > creation. Public forms continue through anonymous Auth and create CRM client records only.

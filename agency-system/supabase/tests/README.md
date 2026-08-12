@@ -27,6 +27,17 @@ Covered guarantees:
 - Public Auth sign-up and anonymous-to-permanent conversion are rejected by the database.
 - A form submitter remains a CRM client without an Auth account and can still submit anonymously.
 - Admin Team Management placeholders are claimed by trusted Auth Admin provisioning, producing a real employee login-linked profile with all enhanced-profile columns and temporary-password enforcement.
+- **Account lifecycle hardening** (`20260819000000_account_lifecycle_hardening.sql`):
+  profile e-mails are unique (case-insensitive, backstopped by a partial unique
+  index); provisioning rejects e-mails already taken by another profile, by a
+  client record, or by an orphaned `auth.users` row; a deleted member's e-mail
+  can be provisioned again; project assignments made against a placeholder
+  survive the claim around the unique index.
+- **Temporary-password gate**: while `must_change_password` is pending the
+  account reports NO effective permissions and RLS hides all workspace data
+  (proven with real assigned projects/tasks); the first-login change
+  (`mark_password_changed`, owner-only) restores access immediately. Inactive
+  accounts likewise report an empty permission set and lose `workspace.access`.
 - The enhanced profile RPC is owner-only; password flags cannot be cleared for another user; team deletion removes the Profile and Auth user atomically while nullable attribution foreign keys preserve business rows.
 - Clients: no projects/tasks/notifications, staff-directory hidden, cannot modify other
   submissions, cannot be assigned to projects (blocked at the database, not only the UI),

@@ -4,13 +4,14 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { updatePasswordAndMarkChanged } from '@/lib/supabase/auth'
 import { InlineAlert, inputClassName, primaryButtonClassName } from '@/components/ui/page'
 
 type AuthMode = 'signin' | 'reset' | 'update-password'
 
 export default function AuthPage() {
   const router = useRouter()
-  const { user, configured, loading: authLoading, signIn, resetPassword, updatePassword } = useAuth()
+  const { user, configured, loading: authLoading, signIn, resetPassword } = useAuth()
   const [mode, setMode] = useState<AuthMode>('signin')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -42,10 +43,12 @@ export default function AuthPage() {
     setError('')
     setMessage('')
 
+    // The reset-link flow lands here with a fresh session; updating the password
+    // also clears any pending temporary-password flag so the account unlocks.
     const result = mode === 'reset'
       ? await resetPassword(email)
       : mode === 'update-password'
-        ? await updatePassword(password)
+        ? await updatePasswordAndMarkChanged(password)
         : await signIn(email, password)
 
     setSubmitting(false)
