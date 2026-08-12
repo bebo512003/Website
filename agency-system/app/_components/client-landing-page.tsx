@@ -126,6 +126,7 @@ export function ClientLandingPage() {
             <a href="#how" className="text-xs text-text-secondary transition hover:text-fg">How it works</a>
             <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="text-xs text-text-secondary transition hover:text-fg">Available forms</Link>
+            <Link href="/track" className="text-xs text-text-secondary transition hover:text-fg">Track request</Link>
           </nav>
           <div className="hidden items-center gap-2 md:flex">
             <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
@@ -152,6 +153,7 @@ export function ClientLandingPage() {
               <a href="#how" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">How it works</a>
               <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
               <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Available forms</Link>
+              <Link href="/track" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Track request</Link>
             </div>
             <div className="mt-3 grid gap-2 border-t border-border pt-3">
               <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
@@ -461,6 +463,7 @@ export function ClientLandingPage() {
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
             <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="hover:text-fg">Request a project</Link>
+            <Link href="/track" className="hover:text-fg">Track request</Link>
             <Link href="/auth" className="hover:text-fg">Login</Link>
           </nav>
           <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>

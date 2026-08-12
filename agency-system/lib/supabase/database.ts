@@ -931,6 +931,16 @@ export async function submitDynamicForm(formId: string, answers: import('@/lib/f
   return error ? fail(null, error.message) : ok(data)
 }
 
+export async function getPublicSubmissionTracking(trackingKey: string): Promise<Result<import('./types').PublicSubmissionTracking | null>> {
+  if (!supabase) return fail(null)
+  const cleanKey = trackingKey.trim()
+  if (!cleanKey) return fail(null, 'Please provide a valid reference number or tracking token.')
+  const { data, error } = await supabase.rpc('get_public_submission_tracking', { p_tracking_key: cleanKey })
+  if (error) return fail(null, error.message)
+  if (!data) return fail(null, 'No submission found matching this reference number or tracking link.')
+  return ok(data as unknown as import('./types').PublicSubmissionTracking)
+}
+
 export async function getFormSubmissions(formId: string): Promise<Result<import('./types').FormSubmission[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('form_submissions').select('*').eq('form_id', formId).order('submitted_at', { ascending: false })
