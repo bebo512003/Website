@@ -8,6 +8,7 @@ import {
   type SubmissionProjectConversionInput,
 } from '@/lib/supabase/database'
 import type { Client, Profile, Project, ProjectPriority, ProjectStatus } from '@/lib/supabase/types'
+import { PROJECT_CREATE_STATUSES } from '@/lib/project-delivery'
 import {
   InlineAlert,
   Modal,
@@ -313,7 +314,7 @@ export function SubmissionConversionModal({
               <label className="text-xs text-text-secondary sm:col-span-2 lg:col-span-3">Project name<input required maxLength={200} className={`${inputClassName} mt-2`} value={draft.projectName} onChange={(e) => setDraft({ ...draft, projectName: e.target.value })} /></label>
               <label className="text-xs text-text-secondary">Project type<select required className={`${inputClassName} mt-2`} value={draft.projectType} onChange={(e) => setDraft({ ...draft, projectType: e.target.value })}>{PROJECT_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}</select></label>
               <label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={draft.priority} onChange={(e) => setDraft({ ...draft, priority: e.target.value as ProjectPriority })}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-              <label className="text-xs text-text-secondary">Initial status<select className={`${inputClassName} mt-2`} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as ProjectStatus })}>{Object.entries(STATUS_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+              <label className="text-xs text-text-secondary">Initial status<select className={`${inputClassName} mt-2`} value={draft.status} onChange={(e) => setDraft({ ...draft, status: e.target.value as ProjectStatus })}>{PROJECT_CREATE_STATUSES.map((value) => <option key={value} value={value}>{STATUS_LABELS[value]}</option>)}</select></label>
               <label className="text-xs text-text-secondary">Phase (1–10)<input required type="number" min="1" max="10" className={`${inputClassName} mt-2`} value={draft.phase} onChange={(e) => setDraft({ ...draft, phase: e.target.value })} /></label>
               <label className="text-xs text-text-secondary">Phase name<input className={`${inputClassName} mt-2`} value={draft.phaseName} onChange={(e) => setDraft({ ...draft, phaseName: e.target.value })} /></label>
               <label className="text-xs text-text-secondary">Start date<input type="date" className={`${inputClassName} mt-2`} value={draft.startDate} onChange={(e) => setDraft({ ...draft, startDate: e.target.value })} /></label>

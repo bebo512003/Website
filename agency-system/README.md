@@ -19,6 +19,7 @@ The application contains no seeded users or placeholder business records. All da
 - **Submission Review Workflow & Inbox** at `/submissions`: the operational review workflow for every public form response with stage pipeline metrics, search, status & reviewer filters, sorting, complete answer & file review, internal review notes feed, reviewer notifications, and tamper-evident audit history tracking who performed each action with timestamps
 - **Controlled Submission → Project Conversion**: Admins deliberately convert only Qualified/Approved submissions through client selection/creation, project configuration, owner/manager/team assignment, and a final confirmation; the database keeps immutable submission provenance and rejects duplicate/concurrent conversions
 - **Project ownership, status & lifecycle** (Session 12): every project carries an Owner, Manager, priority, deadline, health (`On track` / `At risk` / `Off track` / `Blocked`), and an assigned team. Projects move through a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — where only valid transitions are accepted, the owner and manager are always project members, and ownership is shown across the project list, project detail, dashboard, and reports
+- **Project delivery & closure** (Session 15): after Active / In Review, staff assemble a **final delivery package**, mark it Ready / Delivered, record **revision required**, record an **internal client-approval placeholder**, then Complete and Archive. The database rejects Complete unless those delivery conditions are met. Delivery data is internal and kept separate from any future client-facing approval UI
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
 - Project and client create, read, update, and delete workflows
 - **Employee My Work workspace** (Session 13) at `/my-work`: every task assigned to the signed-in user across authorized projects, with live Open / Due today / Upcoming (7 days) / Overdue / High-priority summaries that act as one-click filters, a per-project grouping with completion progress, an inline status control, and a completed-work archive; task-assignment notifications deep-link straight into it
@@ -170,6 +171,21 @@ setting. Keep it disabled for the controlled workflow above.
 
 Apply `supabase/migrations/20260827000000_controlled_submission_project_conversion.sql`
 (or the regenerated `supabase/schema.sql` on a fresh database) before using this UI.
+
+## Project delivery & closure
+
+The project detail page has a **Delivery & closure** panel. This is a staff workflow:
+
+1. Attach at least one **final delivery file** (upload a new file or pick an existing project file). Working files in `/files` do not count until they are added to the package.
+2. Mark the package **Ready**, then **Delivered** (or use the status buttons — the database requires the file).
+3. If the client wants changes, **Request revision**. The current package is marked revision-requested and a new preparing package is opened; the project returns to In review.
+4. Record the **internal client-approval placeholder** (how the client approved — call, email, meeting). This is a staff note, not a client portal action.
+5. **Complete project**. The database rejects this if any checklist item is missing.
+6. **Archive** after Completed or Cancelled. Archived projects leave the default list and cannot change status until restored.
+
+Client accounts cannot read or write delivery packages. Future client-facing approval must use a separate table; do not reuse `project_deliveries`.
+
+Apply `supabase/migrations/20260831000000_project_delivery_closure.sql` (or the regenerated `supabase/schema.sql`) before using this UI.
 
 ## Public company portfolio
 

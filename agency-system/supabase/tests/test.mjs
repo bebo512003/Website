@@ -1577,6 +1577,15 @@ async function runSubmissionConversionSuite(db, ids, label) {
     db.query(`update public.projects set health = 'exploded' where id = $1`, [project.id]))
   ok(`${label}: invalid project health is rejected by the database`, badHealthFails)
 
+  const readyWithoutFilesFails = await expectError(db, () =>
+    db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [project.id]))
+  ok(`${label}: ready-for-delivery is rejected without a final delivery file`, readyWithoutFilesFails)
+
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('handoff.pdf', 'pdf', 2048, $1, $2, $3)`, [`${project.id}/handoff.pdf`, project.id, alice])
+  const handoffId = (await db.query(`select id from public.files where project_id = $1 and name = 'handoff.pdf'`, [project.id])).rows[0].id
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [project.id, handoffId])
+
   await db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [project.id])
   const afterValidMove = await scalar(db, `select status from public.projects where id = $1`, [project.id])
   ok(`${label}: valid lifecycle transition is accepted (in-review → ready-for-delivery)`,
@@ -1589,9 +1598,15 @@ async function runSubmissionConversionSuite(db, ids, label) {
     skippedStageFails && afterInvalidMove?.status === 'ready-for-delivery')
 
   await db.query(`update public.projects set status = 'delivered' where id = $1`, [project.id])
+  const completeWithoutApprovalFails = await expectError(db, () =>
+    db.query(`update public.projects set status = 'completed' where id = $1`, [project.id]))
+  ok(`${label}: delivered → completed is rejected without the internal approval placeholder`,
+    completeWithoutApprovalFails)
+
+  await db.query(`select public.record_internal_client_approval($1, 'Client signed off on the call.', 'approved_internally')`, [project.id])
   await db.query(`update public.projects set status = 'completed' where id = $1`, [project.id])
   const completedRow = await scalar(db, `select status, completed_date from public.projects where id = $1`, [project.id])
-  ok(`${label}: delivered → completed is valid and stamps completed_date`,
+  ok(`${label}: delivered → completed is valid after delivery files + internal approval and stamps completed_date`,
     completedRow?.status === 'completed' && completedRow?.completed_date !== null)
 
   const anyClientId = (await db.query(`select id from public.clients limit 1`)).rows[0]?.id
@@ -1929,6 +1944,159 @@ async function runProjectActivitySuite(db, ids, label) {
   await superUser(db)
 }
 
+// ── Session 15: project delivery & closure ───────────────────────────────────
+// Final delivery files, delivery state, revision, internal approval placeholder,
+// completion guards, and archive. Client-facing approval is out of scope.
+async function runProjectDeliveryClosureSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+  const dina = (await db.query(`select id from public.profiles where email = 'dina@newco.test' and role = 'client'`)).rows[0]?.id
+  const rania = (await db.query(`select id from public.profiles where email = 'rania@agency.test'`)).rows[0]?.id
+
+  await asUser(db, alice)
+  const clientId = (await db.query(`select id from public.clients order by created_at limit 1`)).rows[0]?.id
+  const proj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id)
+     values ('Delivery Closure', $1, 'active', $2, $3) returning id`,
+    [clientId, alice, erin],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [proj.id, bob, alice])
+
+  // New projects cannot start at a delivery stage.
+  const startDeliveredFails = await expectError(db, () => db.query(
+    `insert into public.projects (name, client_id, status) values ('Skip Delivery', $1, 'delivered')`, [clientId]))
+  ok(`${label}: new projects cannot start at Delivered`, startDeliveredFails)
+
+  await db.query(`update public.projects set status = 'in-review' where id = $1`, [proj.id])
+  const readyWithoutFileFails = await expectError(db, () =>
+    db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [proj.id]))
+  ok(`${label}: cannot move to Ready for delivery without a final delivery file`, readyWithoutFileFails)
+
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('working-notes.txt', 'document', 120, $1, $2, $3)`, [`${proj.id}/working-notes.txt`, proj.id, alice])
+  const workingId = (await db.query(`select id from public.files where project_id = $1 and name = 'working-notes.txt'`, [proj.id])).rows[0].id
+  // Working files alone are not enough — they must be attached to the package.
+  const stillBlocked = await expectError(db, () =>
+    db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [proj.id]))
+  ok(`${label}: a working file that is not on the delivery package does not unlock Ready for delivery`, stillBlocked)
+
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [proj.id, workingId])
+  const pkg = (await db.query(`select * from public.current_project_delivery($1)`, [proj.id])).rows[0]
+  ok(`${label}: attaching a file creates a preparing delivery package`, pkg?.status === 'preparing' && pkg?.version === 1)
+
+  await db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [proj.id])
+  const readyPkg = (await db.query(`select status from public.project_deliveries where id = $1`, [pkg.id])).rows[0]
+  ok(`${label}: moving the project to Ready for delivery stamps the package ready`, readyPkg?.status === 'ready')
+
+  const removeLockedFileFails = await expectError(db, () =>
+    db.query(`select public.remove_project_delivery_file($1, $2)`, [proj.id, workingId]))
+  ok(`${label}: final delivery files are locked once the package is ready`, removeLockedFileFails)
+
+  const deleteLockedFileFails = await expectError(db, () =>
+    db.query(`delete from public.files where id = $1`, [workingId]))
+  ok(`${label}: a locked final delivery file cannot be deleted`, deleteLockedFileFails)
+
+  await db.query(`update public.projects set status = 'delivered' where id = $1`, [proj.id])
+  const deliveredPkg = (await db.query(`select status, delivered_at from public.project_deliveries where id = $1`, [pkg.id])).rows[0]
+  ok(`${label}: moving to Delivered stamps the package delivered`, deliveredPkg?.status === 'delivered' && deliveredPkg?.delivered_at !== null)
+
+  const completeBareFails = await expectError(db, () =>
+    db.query(`select public.complete_project($1)`, [proj.id]))
+  ok(`${label}: complete is rejected without the internal approval placeholder`, completeBareFails)
+
+  // Internal approval is a staff placeholder, not a client action.
+  await db.query(`select public.record_internal_client_approval($1, 'Approved on the weekly call.', 'approved_internally')`, [proj.id])
+  const approvedPkg = (await db.query(`select status, approval_state, approval_recorded_by from public.project_deliveries where id = $1`, [pkg.id])).rows[0]
+  ok(`${label}: internal approval placeholder is recorded on the delivery package`,
+    approvedPkg?.approval_state === 'approved_internally' && approvedPkg?.approval_recorded_by === alice && approvedPkg?.status === 'approved')
+
+  const blockers = (await scalar(db, `select public.project_completion_blockers($1) blockers`, [proj.id])).blockers
+  ok(`${label}: completion blockers are empty once files, delivery, and internal approval are in place`,
+    Array.isArray(blockers) && blockers.length === 0, JSON.stringify(blockers))
+
+  await asUser(db, bob)
+  const employeeCompleteFails = await expectError(db, () => db.query(`select public.complete_project($1)`, [proj.id]))
+  ok(`${label}: employee without project.edit cannot complete the project`, employeeCompleteFails)
+
+  await asUser(db, alice)
+  await db.query(`select public.complete_project($1)`, [proj.id])
+  const completed = await scalar(db, `select status, completed_date, progress from public.projects where id = $1`, [proj.id])
+  ok(`${label}: complete succeeds and stamps completed_date + 100% progress`,
+    completed?.status === 'completed' && completed?.completed_date !== null && completed?.progress === 100)
+
+  const archiveEarlyProject = (await db.query(
+    `insert into public.projects (name, client_id, status) values ('Still Active', $1, 'active') returning id`, [clientId]
+  )).rows[0]
+  const archiveActiveFails = await expectError(db, () => db.query(`select public.archive_project($1)`, [archiveEarlyProject.id]))
+  ok(`${label}: active projects cannot be archived`, archiveActiveFails)
+
+  await db.query(`select public.archive_project($1)`, [proj.id])
+  const archived = await scalar(db, `select archived_at, archived_by from public.projects where id = $1`, [proj.id])
+  ok(`${label}: completed projects can be archived`, archived?.archived_at !== null && archived?.archived_by === alice)
+
+  const statusWhileArchivedFails = await expectError(db, () =>
+    db.query(`update public.projects set status = 'in-review' where id = $1`, [proj.id]))
+  ok(`${label}: archived projects cannot change status`, statusWhileArchivedFails)
+
+  const activityTypes = (await db.query(
+    `select event_type from public.project_activity where project_id = $1`, [proj.id]
+  )).rows.map((row) => row.event_type)
+  ok(`${label}: delivery, approval, and archive events appear on the audit timeline`,
+    activityTypes.includes('delivery_prepared')
+      && activityTypes.includes('delivery_file_added')
+      && activityTypes.includes('delivery_sent')
+      && activityTypes.includes('approval_recorded')
+      && activityTypes.includes('archived'))
+
+  await db.query(`select public.unarchive_project($1)`, [proj.id])
+  ok(`${label}: unarchive clears the archive flag`,
+    (await scalar(db, `select archived_at from public.projects where id = $1`, [proj.id])).archived_at === null)
+
+  // Revision path: a second project goes delivered → revision → new package.
+  const rev = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('Revision Path', $1, 'in-review', $2) returning id`,
+    [clientId, alice],
+  )).rows[0]
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('v1.pdf', 'pdf', 500, $1, $2, $3)`, [`${rev.id}/v1.pdf`, rev.id, alice])
+  const v1 = (await db.query(`select id from public.files where project_id = $1 and name = 'v1.pdf'`, [rev.id])).rows[0].id
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [rev.id, v1])
+  await db.query(`select public.mark_project_delivered($1, 'First handoff')`, [rev.id])
+  await db.query(`select public.request_project_revision($1, 'Client wants the logo larger.')`, [rev.id])
+  const afterRev = await scalar(db, `
+    select
+      (select status from public.projects where id = $1) project_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 1) v1_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 2) v2_status,
+      (select approval_state from public.project_deliveries where project_id = $1 and version = 1) v1_approval
+  `, [rev.id])
+  ok(`${label}: revision returns the project to In review and opens a new preparing package`,
+    afterRev?.project_status === 'in-review'
+      && afterRev?.v1_status === 'revision_requested'
+      && afterRev?.v2_status === 'preparing'
+      && afterRev?.v1_approval === 'revision_required')
+
+  // Clients cannot read internal delivery data.
+  if (dina) {
+    await asUser(db, dina)
+    ok(`${label}: client cannot read internal delivery packages`,
+      (await scalar(db, `select count(*)::int n from public.project_deliveries where project_id = $1`, [proj.id])).n === 0)
+    ok(`${label}: client cannot read delivery file links`,
+      (await scalar(db, `select count(*)::int n from public.project_delivery_files`)).n === 0)
+    const clientApproveFails = await expectError(db, () =>
+      db.query(`select public.record_internal_client_approval($1, 'I approve', 'approved_internally')`, [proj.id]))
+    ok(`${label}: client cannot record the internal approval placeholder`, clientApproveFails)
+  }
+
+  // Outsiders cannot read another project's delivery rows.
+  if (rania) {
+    await asUser(db, rania)
+    ok(`${label}: non-member employee sees no delivery packages (RLS)`,
+      (await scalar(db, `select count(*)::int n from public.project_deliveries where project_id = $1`, [rev.id])).n === 0)
+  }
+
+  await superUser(db)
+}
+
 async function runStorageSecuritySuite(db, ids, label) {
   const { anonVisitor, alice, bob, carol } = ids
 
@@ -2041,6 +2209,7 @@ async function main() {
   await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
   await runTaskManagementSuite(dbA, idsA, 'upgrade')
   await runProjectActivitySuite(dbA, idsA, 'upgrade')
+  await runProjectDeliveryClosureSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -2112,6 +2281,23 @@ async function main() {
     `select * from public.convert_submission_to_project($1, $2, null, 'Duplicate', null, 'General', 'medium', 'active', 1, null, null, null, null, 'USD', $3, null, '{}'::uuid[])`,
     [freshSubmission.id, freshSubmission.client_id, aliceB]
   )))
+
+  const freshSkipDeliveryFails = await expectError(dbB, () => dbB.query(
+    `update public.projects set status = 'completed' where id = $1`, [freshProject.id]
+  ))
+  ok('fresh: completion is blocked until delivery conditions are met', freshSkipDeliveryFails)
+  await dbB.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('fresh-final.pdf', 'pdf', 800, $1, $2, $3)`, [`${freshProject.id}/fresh-final.pdf`, freshProject.id, aliceB])
+  const freshFile = (await dbB.query(`select id from public.files where project_id = $1`, [freshProject.id])).rows[0]
+  await dbB.query(`select public.add_project_delivery_file($1, $2)`, [freshProject.id, freshFile.id])
+  await dbB.query(`update public.projects set status = 'in-review' where id = $1`, [freshProject.id])
+  await dbB.query(`select public.mark_project_delivered($1, 'Fresh handoff')`, [freshProject.id])
+  await dbB.query(`select public.record_internal_client_approval($1, 'Signed in person.', 'approved_internally')`, [freshProject.id])
+  await dbB.query(`select public.complete_project($1)`, [freshProject.id])
+  await dbB.query(`select public.archive_project($1)`, [freshProject.id])
+  const freshClosed = await scalar(dbB, `select status, archived_at from public.projects where id = $1`, [freshProject.id])
+  ok('fresh: delivery → internal approval → complete → archive works end to end',
+    freshClosed?.status === 'completed' && freshClosed?.archived_at !== null)
 
   await dbB.close()
 

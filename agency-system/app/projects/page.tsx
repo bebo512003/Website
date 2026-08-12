@@ -10,6 +10,7 @@ import {
   PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS, PROJECT_STATUS_ORDER,
   nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
 } from '@/lib/project-lifecycle'
+import { PROJECT_CREATE_STATUSES } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 const blankForm = {
@@ -63,7 +64,8 @@ export default function ProjectsPage() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [query, setQuery] = useState('')
-  const [status, setStatus] = useState<'all' | ProjectStatus>('all')
+  const [status, setStatus] = useState<'all' | 'delivery' | ProjectStatus>('all')
+  const [showArchived, setShowArchived] = useState(false)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ProjectWithClient | null>(null)
   const [form, setForm] = useState<ProjectForm>(blankForm)
@@ -90,10 +92,13 @@ export default function ProjectsPage() {
   )
 
   const filtered = useMemo(() => projects.filter((project) => {
-    const matchesStatus = status === 'all' || project.status === status
+    const matchesArchive = showArchived ? Boolean(project.archived_at) : !project.archived_at
+    const matchesStatus = status === 'all'
+      || (status === 'delivery' && (project.status === 'ready-for-delivery' || project.status === 'delivered'))
+      || project.status === status
     const search = query.trim().toLowerCase()
-    return matchesStatus && (!search || project.name.toLowerCase().includes(search) || project.clients?.name.toLowerCase().includes(search) || project.type.toLowerCase().includes(search))
-  }), [projects, query, status])
+    return matchesArchive && matchesStatus && (!search || project.name.toLowerCase().includes(search) || project.clients?.name.toLowerCase().includes(search) || project.type.toLowerCase().includes(search))
+  }), [projects, query, status, showArchived])
 
   const openCreate = () => {
     setEditing(null)
@@ -110,7 +115,7 @@ export default function ProjectsPage() {
   }
 
   const statusOptions = useMemo<ProjectStatus[]>(() => {
-    if (!editing) return PROJECT_STATUS_ORDER
+    if (!editing) return PROJECT_CREATE_STATUSES
     return [editing.status, ...nextProjectStatuses(editing.status)]
   }, [editing])
 
@@ -163,13 +168,15 @@ export default function ProjectsPage() {
       : [...current, memberId])
   }
 
+  const live = useMemo(() => projects.filter((item) => !item.archived_at), [projects])
   const counts = useMemo(() => ({
-    all: projects.length,
-    active: projects.filter((item) => item.status === 'active').length,
-    waiting: projects.filter((item) => item.status === 'waiting-for-client').length,
-    review: projects.filter((item) => item.status === 'in-review').length,
-    completed: projects.filter((item) => item.status === 'completed').length,
-  }), [projects])
+    all: live.length,
+    active: live.filter((item) => item.status === 'active').length,
+    review: live.filter((item) => item.status === 'in-review').length,
+    delivery: live.filter((item) => item.status === 'ready-for-delivery' || item.status === 'delivered').length,
+    completed: live.filter((item) => item.status === 'completed').length,
+    archived: projects.filter((item) => Boolean(item.archived_at)).length,
+  }), [live, projects])
 
   return (
     <Page>
@@ -186,9 +193,13 @@ export default function ProjectsPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {([
-          ['all', 'All projects', counts.all], ['active', 'Active', counts.active], ['waiting-for-client', 'Waiting for client', counts.waiting], ['in-review', 'In review', counts.review], ['completed', 'Completed', counts.completed],
+          ['all', 'Open projects', counts.all],
+          ['active', 'Active', counts.active],
+          ['in-review', 'In review', counts.review],
+          ['delivery', 'Delivery', counts.delivery],
+          ['completed', 'Completed', counts.completed],
         ] as const).map(([value, label, count]) => (
-          <button key={value} onClick={() => setStatus(value)} className={`rounded-md border p-4 text-left transition ${status === value ? 'border-accent bg-accent/5' : 'border-border bg-surface hover:border-line-light'}`}>
+          <button key={value} onClick={() => { setShowArchived(false); setStatus(value) }} className={`rounded-md border p-4 text-left transition ${!showArchived && status === value ? 'border-accent bg-accent/5' : 'border-border bg-surface hover:border-line-light'}`}>
             <span className="font-display text-4xl text-fg">{count}</span><span className="mt-1 block text-xs text-text-tertiary">{label}</span>
           </button>
         ))}
@@ -198,10 +209,15 @@ export default function ProjectsPage() {
         <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative w-full max-w-md"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" /><input className={`${inputClassName} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, clients, or project types" /></div>
           <div className="flex items-center gap-3">
-            <select aria-label="Filter by status" className={`${inputClassName} w-52`} value={status} onChange={(event) => setStatus(event.target.value as 'all' | ProjectStatus)}>
+            <select aria-label="Filter by status" className={`${inputClassName} w-52`} value={status} onChange={(event) => setStatus(event.target.value as 'all' | 'delivery' | ProjectStatus)}>
               <option value="all">All statuses</option>
+              <option value="delivery">Ready / Delivered</option>
               {PROJECT_STATUS_ORDER.map((value) => <option key={value} value={value}>{PROJECT_STATUS_LABELS[value]}</option>)}
             </select>
+            <label className="flex items-center gap-2 text-xs text-text-secondary">
+              <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              Archived ({counts.archived})
+            </label>
             <p className="text-xs text-text-tertiary">{filtered.length} result{filtered.length === 1 ? '' : 's'}</p>
           </div>
         </div>
@@ -215,6 +231,7 @@ export default function ProjectsPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className={`rounded border px-2 py-1 font-mono-tech text-[9px] ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]}</span>
+                    {project.archived_at && <span className="rounded border border-orange-500/30 px-2 py-1 font-mono-tech text-[9px] text-orange-300">Archived</span>}
                     <span className={`rounded border px-2 py-1 font-mono-tech text-[9px] ${projectHealthBadgeClass(project.health)}`}>{PROJECT_HEALTH_LABELS[project.health]}</span>
                     <span className="rounded border border-border px-2 py-1 font-mono-tech text-[9px] uppercase text-text-tertiary">{project.priority}</span>
                   </div>
@@ -241,7 +258,7 @@ export default function ProjectsPage() {
           <label className="text-xs text-text-secondary">Project type<input required className={`${inputClassName} mt-2`} value={form.type} onChange={(event) => setForm({ ...form, type: event.target.value })} /></label>
           <label className="text-xs text-text-secondary">Owner<select className={`${inputClassName} mt-2`} value={form.owner_id} onChange={(event) => setForm({ ...form, owner_id: event.target.value })}><option value="">No owner</option>{activeTeam.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}</select></label>
           <label className="text-xs text-text-secondary">Manager<select className={`${inputClassName} mt-2`} value={form.manager_id} onChange={(event) => setForm({ ...form, manager_id: event.target.value })}><option value="">No separate manager</option>{activeTeam.map((member) => <option key={member.id} value={member.id}>{displayName(member)}</option>)}</select></label>
-          <label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as ProjectStatus })}>{statusOptions.map((value) => <option key={value} value={value}>{PROJECT_STATUS_LABELS[value]}</option>)}</select>{editing && <span className="mt-1 block text-[10px] text-text-tertiary">Only valid transitions are listed.</span>}</label>
+          <label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value as ProjectStatus })}>{statusOptions.map((value) => <option key={value} value={value}>{PROJECT_STATUS_LABELS[value]}</option>)}</select><span className="mt-1 block text-[10px] text-text-tertiary">{editing ? 'Only valid transitions are listed. Complete requires the delivery checklist.' : 'New projects start before Ready for delivery.'}</span></label>
           <label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value as ProjectPriority })}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
           <label className="text-xs text-text-secondary">Health<select className={`${inputClassName} mt-2`} value={form.health} onChange={(event) => setForm({ ...form, health: event.target.value as ProjectHealth })}>{PROJECT_HEALTH_ORDER.map((value) => <option key={value} value={value}>{PROJECT_HEALTH_LABELS[value]}</option>)}</select></label>
           <label className="text-xs text-text-secondary">Progress (%)<input type="number" min="0" max="100" required className={`${inputClassName} mt-2`} value={form.progress} onChange={(event) => setForm({ ...form, progress: event.target.value })} /></label>

@@ -84,5 +84,17 @@ Covered guarantees:
   - Manager/Employee attempts to toggle checkboxes are rejected by the RPC guards and
     leave the stored permission set untouched.
 
+**Project delivery & closure** (migration `20260831000000_project_delivery_closure.sql`):
+
+- Ready for delivery and Delivered require at least one final delivery file on an
+  internal package. Working files that are not attached do not count.
+- Complete is rejected until the package is delivered and the internal
+  client-approval placeholder is recorded. The database, not the UI, enforces this.
+- Revision requested returns the project to In review and opens a new package version.
+- Archive is allowed only after Completed or Cancelled; archived projects cannot
+  change status until they are unarchived.
+- Clients cannot read delivery packages or record the internal approval placeholder.
+  Future client-facing approval must not reuse these tables.
+
 Every check runs under `SET ROLE authenticated` / `SET ROLE anon` with a simulated JWT
 uid, so RLS is genuinely enforced by PostgreSQL.

@@ -4,8 +4,8 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addProjectMember, deleteTask, getProfiles, getProjectById, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
-import type { Profile, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import { addProjectMember, completeProject, deleteTask, getFilesByProjectId, getProfiles, getProjectById, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
+import type { FileItem, Profile, ProjectDeliveryWithFiles, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
   nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
@@ -16,6 +16,8 @@ import {
 import { CreateTaskModal } from '@/components/tasks/create-task-modal'
 import { TaskDetailModal } from '@/components/tasks/task-detail-modal'
 import { ProjectActivityTimeline } from '@/components/projects/project-activity-timeline'
+import { ProjectDeliveryPanel } from '@/components/projects/project-delivery-panel'
+import { currentDelivery, deliveryReadiness } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type Member = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
@@ -32,6 +34,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [tasks, setTasks] = useState<TaskWithRelations[]>([])
   const [members, setMembers] = useState<Member[]>([])
   const [team, setTeam] = useState<Profile[]>([])
+  const [deliveries, setDeliveries] = useState<ProjectDeliveryWithFiles[]>([])
+  const [projectFiles, setProjectFiles] = useState<FileItem[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [taskModal, setTaskModal] = useState(false)
@@ -56,13 +60,16 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [projectResult, tasksResult, membersResult, teamResult] = await Promise.all([
+    const [projectResult, tasksResult, membersResult, teamResult, deliveriesResult, filesResult] = await Promise.all([
       getProjectById(id), getTasksByProjectId(id), getProjectMembers(id), getProfiles(),
+      getProjectDeliveries(id), getFilesByProjectId(id),
     ])
     setProject(projectResult.data)
     setTasks(tasksResult.data)
     setMembers(membersResult.data)
     setTeam(teamResult.data)
+    setDeliveries(deliveriesResult.data)
+    setProjectFiles(filesResult.data)
     if (projectResult.data) {
       const p = projectResult.data
       setProjectForm({
@@ -71,7 +78,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         due_date: p.due_date || '', owner_id: p.owner_id || '', manager_id: p.manager_id || '',
       })
     }
-    setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || '')
+    setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || deliveriesResult.error || filesResult.error || '')
     setLoading(false)
     setActivityKey((key) => key + 1)
   }, [id])
@@ -89,6 +96,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   }, [activeTeam, members])
 
   const nextStatuses = useMemo(() => (project ? nextProjectStatuses(project.status) : []), [project])
+  const readiness = useMemo(() => {
+    const delivery = currentDelivery(deliveries)
+    return project ? deliveryReadiness(project, delivery, delivery?.files.length || 0) : null
+  }, [project, deliveries])
 
   const detailTask = detailTaskId ? (tasks.find((task) => task.id === detailTaskId) ?? null) : null
 
@@ -129,9 +140,19 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const changeStatus = async (status: ProjectStatus) => {
+    if (status === 'completed') {
+      if (readiness && !readiness.canComplete) {
+        setError(`Cannot complete this project: ${readiness.blockers.join('; ')}`)
+        return
+      }
+      if (!window.confirm('Complete this project? This is a terminal status and requires the delivery checklist.')) return
+    }
+    if (status === 'in-review' && project && (project.status === 'delivered' || project.status === 'ready-for-delivery')) {
+      if (!window.confirm('Move back to In review? This records a revision and opens a new delivery package.')) return
+    }
     setSaving(true)
     setError('')
-    const result = await updateProject(id, { status })
+    const result = status === 'completed' ? await completeProject(id) : await updateProject(id, { status })
     setSaving(false)
     if (result.error) setError(result.error)
     else { setMessage(`Status moved to ${PROJECT_STATUS_LABELS[status]}.`); await load() }
@@ -167,7 +188,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Panel className="p-5"><Users className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Client</p><p className="mt-1 text-sm font-semibold">{project.clients?.name || 'Unavailable'}</p></Panel>
         <Panel className="p-5"><Calendar className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Deadline</p><p className="mt-1 text-sm font-semibold">{project.due_date ? new Date(`${project.due_date}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : 'Not set'}</p></Panel>
-        <Panel className="p-5"><CheckCircle2 className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Status</p><span className={`mt-2 inline-block rounded border px-2 py-1 text-sm font-semibold ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]}</span></Panel>
+        <Panel className="p-5"><CheckCircle2 className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Status</p><span className={`mt-2 inline-block rounded border px-2 py-1 text-sm font-semibold ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]}</span>{project.archived_at && <span className="mt-2 ml-2 inline-block rounded border border-orange-500/30 px-2 py-1 text-xs font-semibold text-orange-300">Archived</span>}</Panel>
         <Panel className="p-5"><HeartPulse className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Health</p><span className={`mt-2 inline-block rounded border px-2 py-1 text-sm font-semibold ${projectHealthBadgeClass(project.health)}`}>{PROJECT_HEALTH_LABELS[project.health]}</span></Panel>
         <Panel className="p-5"><Flag className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Priority</p><p className="mt-1 text-sm font-semibold capitalize">{PRIORITY_LABELS[project.priority]}</p></Panel>
         <Panel className="p-5"><UserRound className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Owner / Manager</p><p className="mt-1 text-sm font-semibold">{project.owner?.full_name || project.owner?.email || 'No owner'}</p><p className="mt-1 text-xs text-text-tertiary">{project.manager?.full_name || project.manager?.email || 'No separate manager'}</p></Panel>
@@ -209,6 +230,16 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </div>
         </Panel>
       )}
+
+      <ProjectDeliveryPanel
+        project={project}
+        deliveries={deliveries}
+        projectFiles={projectFiles}
+        canEdit={can('project.edit')}
+        canUpload={can('file.upload')}
+        userId={user?.id || null}
+        onChanged={load}
+      />
 
       <Panel title="Overall progress" description={`${project.progress}% complete`}><div className="p-5"><div className="h-2 overflow-hidden rounded-full bg-border"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${project.progress}%` }} /></div></div></Panel>
 
