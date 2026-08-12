@@ -1,4 +1,5 @@
 import { PGlite } from '@electric-sql/pglite'
+import { pgcrypto } from '@electric-sql/pglite/contrib/pgcrypto'
 import { readFileSync, readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -67,8 +68,9 @@ const ok = (name, pass, detail = '') => {
 }
 
 async function makeDb() {
-  const db = new PGlite()
+  const db = new PGlite({ extensions: { pgcrypto } })
   await db.exec(STUBS)
+  await db.exec('create extension if not exists pgcrypto;')
   return db
 }
 const superUser = async (db) => { await db.query('reset role'); await db.query(`select set_config('app.request.uid', '', false)`) }
@@ -1137,6 +1139,101 @@ async function runNotificationSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runStorageSecuritySuite(db, ids, label) {
+  const { anonVisitor, alice, bob, carol } = ids
+
+  // 1. Storage bucket configuration & visibility invariants
+  const avatarBucket = (await db.query(`select public, file_size_limit, allowed_mime_types from storage.buckets where id = 'avatars'`)).rows[0]
+  ok(`${label}: avatars bucket is public with 5 MB limit`, avatarBucket?.public === true && Number(avatarBucket?.file_size_limit) === 5242880)
+
+  const portfolioBucket = (await db.query(`select public, file_size_limit from storage.buckets where id = 'portfolio-images'`)).rows[0]
+  ok(`${label}: portfolio-images bucket is private with 10 MB limit`, portfolioBucket?.public === false && Number(portfolioBucket?.file_size_limit) === 10485760)
+
+  const projectBucket = (await db.query(`select public, file_size_limit from storage.buckets where id = 'project-files'`)).rows[0]
+  ok(`${label}: project-files bucket is private with 50 MB limit`, projectBucket?.public === false && Number(projectBucket?.file_size_limit) === 52428800)
+
+  const formFilesBucket = (await db.query(`select public, file_size_limit from storage.buckets where id = 'form-files'`)).rows[0]
+  ok(`${label}: form-files bucket is private with 20 MB limit`, formFilesBucket?.public === false && Number(formFilesBucket?.file_size_limit) === 20971520)
+
+  // 2. Project files storage isolation
+  await asUser(db, alice)
+  const projRes = await db.query(`insert into public.projects (name, client_id, status) select 'Storage Secured Project', id, 'active' from public.clients limit 1 returning id`)
+  const storageProjId = projRes.rows[0].id
+  await db.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [storageProjId, bob])
+
+  // Alice uploads a file to project-files
+  const storageFilePath = `${storageProjId}/specs.pdf`
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('project-files', $1, $2)`, [storageFilePath, alice])
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by) values ('specs.pdf', 'pdf', 1024, $1, $2, $3)`, [storageFilePath, storageProjId, alice])
+
+  // Bob (assigned, has file.view) can see the storage object
+  await asUser(db, bob)
+  const bobSeesProjFile = (await db.query(`select count(*)::int n from storage.objects where bucket_id = 'project-files' and name = $1`, [storageFilePath])).rows[0]?.n
+  ok(`${label}: assigned employee with file.view can read project storage object`, bobSeesProjFile === 1)
+
+  // Carol (client / not assigned) cannot see the storage object
+  await asUser(db, carol, 'authenticated')
+  const carolSeesProjFile = (await db.query(`select count(*)::int n from storage.objects where bucket_id = 'project-files' and name = $1`, [storageFilePath])).rows[0]?.n
+  ok(`${label}: unassigned client cannot read project storage object`, carolSeesProjFile === 0)
+
+  // 3. Dynamic Form attachment validation and backend security
+  await asUser(db, alice)
+  const uploadFormId = (await db.query(`insert into public.form_templates (slug, title, status) values ('upload-test-form', 'Upload Test Form', 'published') returning id`)).rows[0].id
+  const qAttach = (await db.query(`insert into public.form_questions (form_id, question_type, label, required, position) values ($1, 'file_upload', 'Project Documents', false, 1) returning id`, [uploadFormId])).rows[0].id
+  const qRespondentEmail = (await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values ($1, 'short_text', 'Email Address', true, 'email', 2) returning id`, [uploadFormId])).rows[0].id
+
+  // Anonymous visitor uploads safe file into form-files under their folder
+  await asUser(db, anonVisitor, 'anon')
+  const safeFormFilePath = `${anonVisitor}/brief.pdf`
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('form-files', $1, $2)`, [safeFormFilePath, anonVisitor])
+
+  // Submit dynamic form with safe attachment
+  const validAnswers = {
+    [qRespondentEmail]: 'uploader@secure.test',
+    [qAttach]: [{ name: 'brief.pdf', size: 2048, mime_type: 'application/pdf', storage_path: safeFormFilePath }],
+  }
+  const submitResult = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [uploadFormId, JSON.stringify(validAnswers)])).rows[0]
+  ok(`${label}: valid file attachment is accepted and saved in form submission`, !!submitResult?.id)
+
+  const savedAttach = (await db.query(`select * from public.form_submission_attachments where submission_id = $1`, [submitResult.id])).rows[0]
+  ok(`${label}: attachment metadata is recorded in form_submission_attachments`, savedAttach?.storage_path === safeFormFilePath && savedAttach?.name === 'brief.pdf')
+
+  // Submit dynamic form with dangerous .exe extension -> backend exception
+  const dangerousAnswers = {
+    [qRespondentEmail]: 'malicious@secure.test',
+    [qAttach]: [{ name: 'payload.exe', size: 1024, mime_type: 'application/x-msdownload', storage_path: `${anonVisitor}/payload.exe` }],
+  }
+  const dangerousUploadFails = await expectError(db, () => db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [uploadFormId, JSON.stringify(dangerousAnswers)]))
+  ok(`${label}: submit_dynamic_form rejects dangerous executable file attachment (.exe)`, dangerousUploadFails)
+
+  // Submit dynamic form with oversized file (> 20 MB) -> backend exception
+  const oversizedAnswers = {
+    [qRespondentEmail]: 'oversized@secure.test',
+    [qAttach]: [{ name: 'massive.zip', size: 25000000, mime_type: 'application/zip', storage_path: `${anonVisitor}/massive.zip` }],
+  }
+  const oversizedUploadFails = await expectError(db, () => db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [uploadFormId, JSON.stringify(oversizedAnswers)]))
+  ok(`${label}: submit_dynamic_form rejects file attachment exceeding 20 MB size limit`, oversizedUploadFails)
+
+  // 4. Form files storage read isolation: staff without submission.view cannot read others' uploads
+  await asUser(db, bob)
+  const bobSeesFormFiles = (await db.query(`select count(*)::int n from storage.objects where bucket_id = 'form-files'`)).rows[0]?.n
+  ok(`${label}: employee without submission.view cannot read form-files storage objects`, bobSeesFormFiles === 0)
+
+  await asUser(db, alice)
+  const aliceSeesFormFiles = (await db.query(`select count(*)::int n from storage.objects where bucket_id = 'form-files'`)).rows[0]?.n
+  ok(`${label}: manager with submission.view can read form-files storage objects`, aliceSeesFormFiles > 0)
+
+  // 5. Storage audit & orphan summary RPC
+  const auditSummary = (await scalar(db, `select public.get_storage_audit_summary() summary`)).summary
+  ok(`${label}: get_storage_audit_summary returns accurate metrics`,
+    typeof auditSummary === 'object' &&
+    Number(auditSummary?.project_files_count) >= 1 &&
+    Number(auditSummary?.form_attachments_count) >= 1 &&
+    typeof auditSummary?.storage_objects_total === 'number')
+
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -1149,6 +1246,7 @@ async function main() {
   await runPermissionUiContractSuite(dbA, idsA, 'upgrade')
   await runCapabilityEnforcementSuite(dbA, idsA, 'upgrade')
   await runNotificationSuite(dbA, idsA, 'upgrade')
+  await runStorageSecuritySuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')

@@ -36,6 +36,7 @@ import {
   updatePortfolioProject,
   uploadPortfolioImage,
 } from '@/lib/supabase/database'
+import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
 import type { PortfolioCategory, PortfolioProject, PortfolioProjectWithRelations } from '@/lib/supabase/types'
 import {
   EmptyState,
@@ -189,14 +190,10 @@ export function PortfolioManagement() {
     let firstUploadedPath: string | null = null
     let operationHadError = false
     for (const file of imageFiles) {
-      if (!file.type.startsWith('image/')) {
+      const validation = validateFile(file, 'portfolio-images')
+      if (!validation.valid) {
         operationHadError = true
-        setError(`“${file.name}” is not an image.`)
-        continue
-      }
-      if (file.size > 10 * 1024 * 1024) {
-        operationHadError = true
-        setError(`“${file.name}” is larger than 10 MB.`)
+        setError(validation.error || `“${file.name}” is not a valid image.`)
         continue
       }
       const uploadResult = await uploadPortfolioImage(projectResult.data.id, user.id, file)
@@ -441,7 +438,7 @@ export function PortfolioManagement() {
             <label className="flex cursor-pointer items-center gap-3 rounded border border-border bg-surface-raised p-3 text-sm text-text-secondary"><input type="checkbox" checked={projectForm.featured} onChange={(event) => setProjectForm({ ...projectForm, featured: event.target.checked })} className="h-4 w-4 accent-[hsl(var(--accent))]" /><span><span className="block font-medium text-fg">Featured project</span><span className="text-xs text-text-tertiary">Show in the public featured area.</span></span></label>
             <label className={`flex cursor-pointer items-center gap-3 rounded border border-border bg-surface-raised p-3 text-sm text-text-secondary ${editingProject?.archived ? 'opacity-50' : ''}`}><input type="checkbox" disabled={!!editingProject?.archived} checked={projectForm.published} onChange={(event) => setProjectForm({ ...projectForm, published: event.target.checked })} className="h-4 w-4 accent-[hsl(var(--accent))]" /><span><span className="block font-medium text-fg">Publish project</span><span className="text-xs text-text-tertiary">Make it visible to anyone.</span></span></label>
           </div>
-          <label className="sm:col-span-2"><span className="text-xs text-text-secondary">Project images <span className="text-text-tertiary">(JPG, PNG, WebP · max 10 MB each)</span></span><span className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-line-light bg-surface-raised px-4 py-5 text-sm text-text-secondary transition hover:border-accent hover:text-fg"><Upload className="h-4 w-4" />{imageFiles.length ? `${imageFiles.length} image${imageFiles.length === 1 ? '' : 's'} selected` : 'Choose images to upload'}<input type="file" accept="image/*" multiple className="sr-only" onChange={(event) => setImageFiles(Array.from(event.target.files || []))} /></span></label>
+          <label className="sm:col-span-2"><span className="text-xs text-text-secondary">Project images <span className="text-text-tertiary">(JPG, PNG, WebP, AVIF · max 10 MB each)</span></span><span className="mt-2 flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed border-line-light bg-surface-raised px-4 py-5 text-sm text-text-secondary transition hover:border-accent hover:text-fg"><Upload className="h-4 w-4" />{imageFiles.length ? `${imageFiles.length} image${imageFiles.length === 1 ? '' : 's'} selected` : 'Choose images to upload'}<input type="file" accept={STORAGE_RULES['portfolio-images'].acceptAttribute} multiple className="sr-only" onChange={(event) => { const files = Array.from(event.target.files || []); setImageFiles(files); for (const f of files) { const v = validateFile(f, 'portfolio-images'); if (!v.valid) { setError(v.error || 'Invalid image file.'); break } } }} /></span></label>
 
           {editingProject && editingProject.portfolio_project_images.length > 0 && (
             <div className="sm:col-span-2"><p className="mb-2 text-xs text-text-secondary">Current images <span className="text-text-tertiary">(click an image to make it the cover)</span></p><div className="grid grid-cols-3 gap-2 sm:grid-cols-5">{editingProject.portfolio_project_images.map((image) => <div key={image.id} className={`group relative aspect-square overflow-hidden rounded border ${editingProject.cover_image_path === image.storage_path ? 'border-accent' : 'border-border'}`}>{image.image_url ? <button type="button" onClick={() => void chooseCover(editingProject, image.storage_path)} className="h-full w-full"><img src={image.image_url} alt={image.alt_text || editingProject.title} className="h-full w-full object-cover transition group-hover:scale-105" /></button> : <div className="flex h-full items-center justify-center bg-surface-raised"><ImagePlus className="h-4 w-4 text-text-tertiary" /></div>}<span className="absolute bottom-1 left-1 rounded bg-black/70 px-1.5 py-0.5 text-[9px] text-white">{editingProject.cover_image_path === image.storage_path ? 'Cover' : 'Set cover'}</span><button type="button" onClick={() => void removeImage(editingProject, image.id, image.storage_path)} className="absolute right-1 top-1 rounded bg-black/70 p-1 text-white opacity-0 transition group-hover:opacity-100" aria-label="Delete image"><Trash2 className="h-3 w-3" /></button></div>)}</div></div>

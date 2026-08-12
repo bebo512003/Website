@@ -15,6 +15,7 @@ import {
 } from '@/lib/forms/question-types'
 import { cn } from '@/lib/utils'
 import { inputClassName } from '@/components/ui/page'
+import { STORAGE_RULES } from '@/lib/storage-config'
 
 // ── Dynamic form renderer ────────────────────────────────────────────────────
 // Renders ANY form purely from its database configuration (form_questions rows).
@@ -48,6 +49,8 @@ const dict = (lang: RendererLang) => ({
   no: lang === 'ar' ? 'لا' : 'No',
   upload: lang === 'ar' ? 'ارفع ملفاً' : 'Upload a file',
   uploading: lang === 'ar' ? 'جارٍ الرفع…' : 'Uploading…',
+  fileHint: lang === 'ar' ? 'PDF، الصور، المستندات، الملفات المضغوطة (حتى 20 ميجابايت)' : 'PDF, Images, Documents, Archives (max 20 MB)',
+  maxFilesReached: lang === 'ar' ? 'تم الوصول للحد الأقصى (10 ملفات)' : 'Maximum 10 files reached',
 })
 
 export function DynamicFormRenderer({
@@ -285,17 +288,22 @@ export function DynamicFormRenderer({
         if (question.question_type === 'file_upload') {
           const files = fileValue(question.id)
           const uploading = uploadingQuestionId === question.id
+          const maxReached = files.length >= 10
           return fieldShell(
             question,
             false,
             <div className="mt-2 space-y-2">
-              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent', disabled && 'cursor-not-allowed opacity-60')}>
+              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent', (disabled || maxReached) && 'cursor-not-allowed opacity-60')}>
                 {uploading ? <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> : <CloudUpload className="h-5 w-5 text-accent" />}
-                <span>{uploading ? t.uploading : t.upload}</span>
+                <div className="flex flex-col">
+                  <span>{uploading ? t.uploading : maxReached ? t.maxFilesReached : t.upload}</span>
+                  <span className="text-[11px] text-text-tertiary">{t.fileHint}</span>
+                </div>
                 <input
                   className="hidden"
                   type="file"
-                  disabled={disabled || uploading}
+                  accept={STORAGE_RULES['form-files'].acceptAttribute}
+                  disabled={disabled || uploading || maxReached}
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     if (file && onFileSelect) onFileSelect(question, file)
