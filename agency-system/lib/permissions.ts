@@ -37,7 +37,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'file.edit', name: 'Edit files', category: 'Files', description: 'Update and rename files.' },
   { key: 'file.delete', name: 'Delete files', category: 'Files', description: 'Delete files.' },
 
-  { key: 'submission.view', name: 'View submissions', category: 'Submissions', description: 'View intake/submission records.' },
+  { key: 'submission.view', name: 'View submissions', category: 'Submissions', description: 'View Dynamic Form submission records.' },
   { key: 'submission.edit', name: 'Edit submissions', category: 'Submissions', description: 'Update submission records.' },
   { key: 'submission.assign', name: 'Assign submissions', category: 'Submissions', description: 'Assign submissions to projects or people.' },
 

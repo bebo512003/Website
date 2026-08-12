@@ -188,43 +188,6 @@ export type CommentRow = {
   updated_at: string
 }
 
-export type IntakeFormRow = {
-  id: string
-  service_type: 'logo_design' | 'visual_identity' | 'company_profile' | null
-  service_types: string[]
-  status: 'draft' | 'submitted' | 'archived'
-  contact_name: string | null
-  contact_email: string | null
-  company_name: string | null
-  phone: string | null
-  data: Json
-  client_id: string | null
-  project_id: string | null
-  created_by: string | null
-  submitted_at: string | null
-  created_at: string
-  updated_at: string
-}
-
-export type IntakeProjectRow = {
-  id: string
-  intake_id: string
-  project_id: string
-  service_type: 'logo_design' | 'visual_identity' | 'company_profile'
-  created_at: string
-}
-
-export type IntakeAttachmentRow = {
-  id: string
-  intake_id: string
-  name: string
-  size: number
-  mime_type: string | null
-  storage_path: string
-  uploaded_by: string | null
-  created_at: string
-}
-
 // ── Dynamic form builder (Phase D) ──────────────────────────────────────────
 export type FormStatus = 'draft' | 'published' | 'disabled' | 'archived'
 export type FormQuestionType =
@@ -327,7 +290,6 @@ export type NotificationMetadata = {
   status?: string | null
   progress?: number | null
   phase?: number | null
-  intake_id?: string | null
   contact_email?: string | null
   contact_phone?: string | null
   services?: string[] | null
@@ -478,15 +440,6 @@ export interface Database {
       comments: TableDefinition<CommentRow, {
         id?: string; content: string; entity_type: CommentRow['entity_type']; entity_id: string; author_id?: string | null; created_at?: string; updated_at?: string
       }, Partial<CommentRow>, [{ foreignKeyName: 'comments_author_id_fkey'; columns: ['author_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
-      intake_forms: TableDefinition<IntakeFormRow, {
-        id?: string; service_type?: IntakeFormRow['service_type']; service_types?: string[]; status?: IntakeFormRow['status']; contact_name?: string | null; contact_email?: string | null; company_name?: string | null; phone?: string | null; data?: Json; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string | null; created_at?: string; updated_at?: string
-      }, Partial<IntakeFormRow>>
-      intake_projects: TableDefinition<IntakeProjectRow, {
-        id?: string; intake_id: string; project_id: string; service_type: IntakeProjectRow['service_type']; created_at?: string
-      }, Partial<IntakeProjectRow>>
-      intake_attachments: TableDefinition<IntakeAttachmentRow, {
-        id?: string; intake_id: string; name: string; size?: number; mime_type?: string | null; storage_path: string; uploaded_by?: string | null; created_at?: string
-      }, Partial<IntakeAttachmentRow>>
       form_templates: TableDefinition<FormTemplateRow, {
         id?: string; slug: string; title: string; description?: string | null; status?: FormStatus; version?: number; settings?: Json; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<FormTemplateRow>>
@@ -545,7 +498,6 @@ export interface Database {
       admin_create_team_member: { Args: { p_email: string; p_full_name: string; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string }; Returns: ProfileRow }
       admin_update_team_member: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string | null }; Returns: ProfileRow }
       admin_delete_team_member: { Args: { p_user_id: string }; Returns: boolean }
-      submit_intake_form: { Args: { target_intake_id: string }; Returns: IntakeFormRow }
       submit_dynamic_form: { Args: { p_form_id: string; p_answers: Json }; Returns: FormSubmissionRow }
       duplicate_form_template: { Args: { p_form_id: string }; Returns: FormTemplateRow }
       reorder_form_questions: { Args: { p_form_id: string; p_question_ids: string[] }; Returns: number }
@@ -589,11 +541,6 @@ export type Interaction = InteractionRow
 export type InteractionInsert = Database['public']['Tables']['interactions']['Insert']
 export type Comment = CommentRow
 export type CommentInsert = Database['public']['Tables']['comments']['Insert']
-export type IntakeForm = IntakeFormRow
-export type IntakeFormInsert = Database['public']['Tables']['intake_forms']['Insert']
-export type IntakeFormUpdate = Database['public']['Tables']['intake_forms']['Update']
-export type IntakeProject = IntakeProjectRow
-export type IntakeAttachment = IntakeAttachmentRow
 export type FormTemplate = FormTemplateRow
 export type FormTemplateInsert = Database['public']['Tables']['form_templates']['Insert']
 export type FormTemplateUpdate = Database['public']['Tables']['form_templates']['Update']
@@ -607,6 +554,9 @@ export type FormSubmissionAttachment = FormSubmissionAttachmentRow
 export type FormTemplateWithCounts = FormTemplate & {
   form_questions: { count: number }[]
   form_submissions: { count: number }[]
+}
+export type ClientFormSubmission = FormSubmission & {
+  form_templates?: { title: string; slug: string } | null
 }
 export type Notification = NotificationRow
 export type Permission = PermissionRow

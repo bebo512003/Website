@@ -67,7 +67,7 @@ npm run dev
 2. In **Supabase Dashboard → Authentication → Providers → Email**, turn **Allow new users
    to sign up** OFF. The database trigger also rejects public sign-up if this dashboard
    setting is accidentally re-enabled.
-3. Keep **Anonymous Sign-ins** ON so public `/intake` and `/f/<slug>` submissions continue
+3. Keep **Anonymous Sign-ins** ON so public `/forms` and `/f/<slug>` submissions continue
    to work without an account.
 4. Add `SUPABASE_SERVICE_ROLE_KEY` only to the server/deployment environment. Never prefix
    it with `NEXT_PUBLIC`.
@@ -92,7 +92,7 @@ whatever the admin configures — nothing is hardcoded per form.
    dropdown, number, date, file upload, rating), set required/placeholder/help text,
    reorder with the arrows, and edit answer options.
 3. Click **Enable form** to publish. Share the public link `/f/<slug>` — respondents do
-   not need an account (Supabase **Anonymous sign-ins** must be enabled, same as `/intake`,
+   not need an account (Supabase **Anonymous sign-ins** must be enabled
    for file uploads and submission ownership).
 4. **Responses** arrive in the builder's *Responses* tab with a frozen per-question
    snapshot. If a question is mapped to a contact field (name/e-mail/phone/company), the
@@ -131,14 +131,16 @@ npm run build
 npm run lint
 ```
 
-## Public Intake Forms
+## Public project requests
 
-The `/intake` page lets new clients submit service requests without creating an account. It uses **Supabase Anonymous Sign-in**. To enable this feature:
+**Request a New Project** always opens the Dynamic Forms listing at `/forms`. Visitors pick a published form and submit it at `/f/<slug>`. There is no separate `/intake` wizard — that route permanently redirects to `/forms`.
+
+Public submissions use **Supabase Anonymous Sign-in** so respondents can upload files and own their response without creating an account:
 
 1. Go to **Supabase Dashboard → Authentication → Providers**
 2. Scroll to **Anonymous** and toggle **Enable Anonymous Sign-ins** to ON
 
-Without this toggle, anonymous authentication will fail and the intake form will not load for unauthenticated visitors.
+Without this toggle, anonymous authentication will fail and file uploads on public forms will not work.
 
 ## Security notes
 

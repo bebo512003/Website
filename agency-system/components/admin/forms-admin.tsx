@@ -136,7 +136,7 @@ export function FormsAdmin() {
   return (
     <Panel
       title="Form templates"
-      description="Build and publish dynamic intake forms. Respondents answer them at their public link — every form, question, and option below lives in the database, not in code."
+      description="Build and publish Dynamic Forms. Respondents answer them at their public link — every form, question, and option below lives in the database, not in code."
     >
       <div className="flex items-center justify-between gap-3 border-b border-border p-5">
         <p className="text-xs text-text-tertiary">{templates.length} form{templates.length === 1 ? '' : 's'}</p>

@@ -387,23 +387,39 @@ async function runSuite(db, ids, label) {
   ok(`${label}: placeholder project assignments survive the Auth claim`,
     claimedLifecycle.assignments === 1 && claimedLifecycle.profiles === 1 && claimedLifecycle.flag === true)
 
-  // Form submission flow: anonymous submit creates a CLIENT row, never an employee.
-  const anonIntakeId = crypto.randomUUID()
-  await asUser(db, anonVisitor, 'anon')
-  await db.query(`insert into public.intake_forms (id, service_type, service_types, contact_name, contact_email, company_name, data) values ($1, 'logo_design', array['logo_design'], 'Dina Founder', 'dina@newco.test', 'NewCo', '{}'::jsonb)`, [anonIntakeId])
-  await db.query(
-    `insert into public.intake_attachments (intake_id, name, storage_path, uploaded_by)
-     values ($1, 'brief.pdf', $2, $3)`,
-    [anonIntakeId, `${anonVisitor}/${anonIntakeId}/brief.pdf`, anonVisitor],
-  )
-  await db.query(
-    `insert into storage.objects (bucket_id, name, owner_id) values ('intake-files', $1, $2)`,
-    [`${anonVisitor}/${anonIntakeId}/brief.pdf`, anonVisitor],
-  )
-  await db.query(`select public.submit_intake_form($1)`, [anonIntakeId])
+  // Dynamic Form submission: anonymous submit creates a CLIENT row, never an employee.
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, status, settings) values ('newco-request', 'New Project Request', 'published', '{"create_project_on_submit":true}'::jsonb)`)
+  const newcoForm = (await db.query(`select id from public.form_templates where slug = 'newco-request'`)).rows[0]
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Full name', true, 'name', 1),
+    ($1, 'short_text', 'Email', true, 'email', 2),
+    ($1, 'short_text', 'Company', true, 'company', 3),
+    ($1, 'file_upload', 'Brief', false, null, 4)`, [newcoForm.id])
+  const newcoQuestions = (await db.query(`select id from public.form_questions where form_id = $1 order by position`, [newcoForm.id])).rows
+  const [qNewcoName, qNewcoEmail, qNewcoCompany, qNewcoFile] = newcoQuestions.map((row) => row.id)
+
+  await superUser(db)
+  const newcoVisitor = await addUser(db, null, { anon: true })
+  await asUser(db, newcoVisitor, 'anon')
+  const newcoFilePath = `${newcoVisitor}/brief.pdf`
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('form-files', $1, $2)`, [newcoFilePath, newcoVisitor])
+  await db.query(`select public.submit_dynamic_form($1, $2::jsonb)`, [newcoForm.id, JSON.stringify({
+    [qNewcoName]: 'Dina Founder',
+    [qNewcoEmail]: 'dina@newco.test',
+    [qNewcoCompany]: 'NewCo',
+    [qNewcoFile]: [{ name: 'brief.pdf', size: 1024, mime_type: 'application/pdf', storage_path: newcoFilePath }],
+  })])
   await superUser(db)
   const newcoClient = (await db.query(`select id, email from public.clients where email = 'dina@newco.test'`)).rows[0]
-  ok(`${label}: intake submit creates CRM client record + project, no auth account`, !!newcoClient && (await scalar(db, `select count(*)::int n from public.projects where client_id = $1`, [newcoClient.id])).n === 1)
+  ok(`${label}: dynamic form submit creates CRM client record + project, no auth account`, !!newcoClient && (await scalar(db, `select count(*)::int n from public.projects where client_id = $1`, [newcoClient.id])).n === 1)
+
+  const legacyRpcGone = await expectError(db, () => db.query(`select public.submit_intake_form(gen_random_uuid())`))
+  ok(`${label}: legacy submit_intake_form RPC is retired`, legacyRpcGone)
+  await asUser(db, anonVisitor, 'anon')
+  const legacyInsertBlocked = await expectError(db, () => db.query(`insert into public.intake_forms (service_type, service_types, contact_name, company_name, data) values ('logo_design', array['logo_design'], 'X', 'Y', '{}'::jsonb)`))
+  ok(`${label}: legacy intake_forms rejects new writes`, legacyInsertBlocked)
+  await superUser(db)
 
   // Form submitters do not receive accounts, even when they call Auth directly.
   const clientSignupBlocked = await expectError(db, () => addUser(db, 'dina@newco.test', { fullName: 'Dina Founder' }))
@@ -448,11 +464,11 @@ async function runSuite(db, ids, label) {
   ok(`${label}: client sees 0 notifications`, (await scalar(db, 'select count(*)::int n from public.notifications')).n === 0)
   ok(`${label}: client sees only own profile (not the employee directory)`, (await scalar(db, 'select count(*)::int n from public.profiles')).n === 1)
   ok(`${label}: client cannot read CRM client records`, (await scalar(db, 'select count(*)::int n from public.clients')).n === 0)
-  ok(`${label}: client CAN see the intake submission linked to their record`, (await scalar(db, 'select count(*)::int n from public.intake_forms')).n === 1)
-  await db.query(`update public.intake_forms set company_name = 'Changed' where id = $1`, [anonIntakeId]).catch(() => {})
+  ok(`${label}: client CAN see the form submission linked to their record`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 1)
+  await db.query(`update public.form_submissions set company_name = 'Changed' where respondent_email = 'dina@newco.test'`).catch(() => {})
   await superUser(db)
-  const unchanged = (await db.query(`select company_name from public.intake_forms where id = $1`, [anonIntakeId])).rows[0]
-  ok(`${label}: client cannot modify others' intake rows`, unchanged?.company_name === 'NewCo')
+  const unchanged = (await db.query(`select company_name from public.form_submissions where respondent_email = 'dina@newco.test'`)).rows[0]
+  ok(`${label}: client cannot modify linked form submissions`, unchanged?.company_name === 'NewCo')
 
   // Clients cannot be assigned to projects (never treated as employees).
   await asUser(db, alice)
@@ -490,11 +506,11 @@ async function runSuite(db, ids, label) {
   await asUser(db, bob)
   ok(`${label}: active employee sees assigned project`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 1)
   ok(`${label}: active employee sees notifications`, (await scalar(db, 'select count(*)::int n from public.notifications')).n >= 1)
-  ok(`${label}: employee without submission.view cannot read intake attachments`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 0)
-  ok(`${label}: employee without submission.view cannot read intake files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 0)
+  ok(`${label}: employee without submission.view cannot read form attachments`, (await scalar(db, 'select count(*)::int n from public.form_submission_attachments')).n === 0)
+  ok(`${label}: employee without submission.view cannot read form files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'form-files'`)).n === 0)
   await asUser(db, erin)
-  ok(`${label}: manager with submission.view reads legacy intake attachments`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 1)
-  ok(`${label}: manager with submission.view reads legacy intake files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 1)
+  ok(`${label}: manager with submission.view reads form attachments`, (await scalar(db, 'select count(*)::int n from public.form_submission_attachments')).n === 1)
+  ok(`${label}: manager with submission.view reads form files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'form-files'`)).n === 1)
   await asUser(db, bob)
 
   // Forced password change with REAL data: while the temporary password is
@@ -547,13 +563,17 @@ async function runSuite(db, ids, label) {
       (select count(*)::int from public.projects) projects,
       (select count(*)::int from public.clients) clients,
       (select count(*)::int from public.employee_roles) roles,
-      (select count(*)::int from public.intake_forms) intakes`)
-  ok(`${label}: admin retains full access`, counts.profiles >= 4 && counts.projects === 3 && counts.clients === 2 && counts.roles >= 2 && counts.intakes === 1, JSON.stringify(counts))
+      (select count(*)::int from public.form_submissions) submissions`)
+  ok(`${label}: admin retains full access`, counts.profiles >= 4 && counts.projects === 3 && counts.clients === 2 && counts.roles >= 2 && counts.submissions === 1, JSON.stringify(counts))
 
   await asUser(db, erin)
   ok(`${label}: manager keeps full portfolio access`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 3)
   const managerRoleChangeFails = await expectError(db, () => db.query(`select public.set_user_role($1, 'manager'::public.app_role)`, [bob]))
   ok(`${label}: manager cannot change system roles`, managerRoleChangeFails)
+
+  // Archive the fixture form so later suites that count published templates stay isolated.
+  await asUser(db, alice)
+  await db.query(`update public.form_templates set status = 'archived' where slug = 'newco-request'`)
 
   await superUser(db)
 }

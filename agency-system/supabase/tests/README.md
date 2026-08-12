@@ -70,7 +70,7 @@ Covered guarantees:
   (including gaining the ability to delete a project).
 - Guard rails: users without `role.create` / `role.assign_permissions` / `employee.manage`
   are rejected by the RPCs; `workspace.access` alone does not expose the team or RBAC catalogs.
-- Legacy intake attachment rows and storage objects follow `submission.view` / `submission.edit`, matching dynamic-form submission access.
+- Form submission attachments and `form-files` storage objects follow `submission.view` / `submission.edit`. The legacy `/intake` RPC and write policies are retired.
 - **Checkbox UI contract** — the exact sequence the "Roles & permissions" admin UI
   performs, logged in as different roles:
   - `list_permissions()` (the checkbox catalog) returns every group the UI renders.

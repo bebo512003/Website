@@ -2,6 +2,17 @@
 
 Prepared 2026-08-09. Historical review; later migrations override parts of this plan.
 
+> **2026-08-12 — Session 07, legacy intake retired:** Dynamic Forms is the only live
+> request path. `/intake` is a permanent redirect to `/forms`. Client helpers for
+> `intake_forms` / `submit_intake_form` / `intake-files` are gone. The portal reads
+> `form_submissions` linked to the client's CRM record. Migration
+> `20260824000000_retire_legacy_intake.sql` drops the write RPC, insert/update
+> policies, and `notify_intake_submission` trigger. Historical `intake_*` tables and
+> the `intake-files` bucket stay as read-only archives (not dropped — production may
+> still hold older rows/files). Remaining Phase E item: optional one-time backfill of
+> historical `intake_forms.data` into `form_submission_answers` if those rows need to
+> appear in the Submissions inbox.
+>
 > **2026-08-12 — Session 04, permission enforcement done:** management areas
 > (`/admin/forms`, `/admin/portfolio`, `/admin/roles`, `/admin/team`, `/submissions`)
 > are gated by their own capability keys. `admin.manage` is no longer required to
@@ -252,6 +263,6 @@ and after submit nothing freezes the row server-side (RLS still lets the owner u
 
 1. **Resolved:** public clients stay CRM records only and submit forms without accounts. Existing legacy client-role accounts remain supported.
 2. Employee roles: labels only, or full granular permission matrix from day one?
-3. Migrate historical `intake_forms` into the new tables, or leave them read-only/legacy?
+3. **Resolved (Session 07):** historical `intake_forms` stay as read-only archives. The live write path is removed. Optional later backfill into `form_submissions` if old rows must appear in the inbox.
 4. Should submitted forms be strictly frozen, or do we need post-submit amendments with audit?
 5. **Resolved:** no open sign-up; Admin Team Management provisions all internal accounts after one-time bootstrap.
