@@ -17,6 +17,11 @@ export const NOTIFICATION_EVENTS = [
   'client.revision',
   'file.shared',
   'delivery.ready',
+  'task.due_soon',
+  'task.due_today',
+  'task.overdue',
+  'project.deadline_approaching',
+  'project.overdue',
 ] as const
 
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number]
@@ -53,6 +58,8 @@ export function isProjectNotification(notification: Notification): boolean {
   const event = notificationEvent(notification)
   return (
     event.startsWith('project.') ||
+    event === 'project.deadline_approaching' ||
+    event === 'project.overdue' ||
     event === 'team_member.assigned' ||
     event === 'file.shared' ||
     event === 'delivery.ready' ||
@@ -65,7 +72,12 @@ export function isProjectNotification(notification: Notification): boolean {
 
 export function isTaskNotification(notification: Notification): boolean {
   const event = notificationEvent(notification)
-  return event.startsWith('task.') || notification.type === 'task_assignment' || notification.type === 'task_update'
+  return (
+    event.startsWith('task.') ||
+    notification.type === 'task_assignment' ||
+    notification.type === 'task_update' ||
+    notification.type === 'deadline_reminder'
+  )
 }
 
 export function isClientCollaborationNotification(notification: Notification): boolean {
