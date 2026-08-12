@@ -17,8 +17,9 @@ function errorResponse(message: string, status: number) {
 
 function optionalText(value: unknown, maxLength = 500) {
   if (typeof value !== 'string') return null
-  const cleaned = value.trim()
-  return cleaned ? cleaned.slice(0, maxLength) : null
+  // Keep an explicitly submitted empty string: admin_update_team_member uses it
+  // to clear nullable fields via nullif(trim(value), ''). Missing values stay null.
+  return value.trim().slice(0, maxLength)
 }
 
 function optionalUuid(value: unknown) {
@@ -252,5 +253,17 @@ export async function PATCH(request: Request) {
     return errorResponse(profileError?.message || 'Unable to update the team member.', 400)
   }
 
-  return Response.json({ data: profile as Profile }, { status: 200, headers: NO_STORE_HEADERS })
+  let finalProfile = profile
+  if (parsedMember.employeeRoleId === null) {
+    const { data: clearedProfile, error: clearRoleError } = await callerClient.rpc('set_user_employee_role', {
+      target_user_id: userId,
+      new_employee_role_id: null,
+    })
+    if (clearRoleError || !clearedProfile) {
+      return errorResponse(clearRoleError?.message || 'Unable to clear the employee job role.', 400)
+    }
+    finalProfile = clearedProfile
+  }
+
+  return Response.json({ data: finalProfile as Profile }, { status: 200, headers: NO_STORE_HEADERS })
 }
