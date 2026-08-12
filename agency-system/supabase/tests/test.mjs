@@ -185,6 +185,116 @@ async function runSuite(db, ids, label) {
   ok(`${label}: clearing the flag restores the employee's permissions`,
     (await scalar(db, `select public.get_user_permissions() perms`)).perms.length > 0)
 
+  // ── Profile self-service (Session 03) ──────────────────────────────────
+  // Every role edits only its own allowed fields; admin-controlled fields
+  // (role, email, status, role_id) are protected by the RPC whitelist.
+  const bobRoleIdBefore = (await scalar(db, 'select role_id from public.profiles where id = $1', [bob])).role_id
+
+  await asUser(db, bob) // employee
+  await db.query(
+    `select public.update_own_enhanced_profile(
+      $1, 'Bob Self Edited', '+20 100 000 000', '+20 111 111 111', 'Bio edited by Bob',
+      'Senior Designer', 'Figma, React', 'Experience A', 'Project A', 'Cert A',
+      'Cairo, Egypt', 'https://portfolio.example', 'https://linkedin.example/bob', null,
+      null, null, null, null, '{"dribbble":"https://dribbble.example/bob"}'::jsonb,
+      'https://cdn.example/bob-avatar.png'
+    )`, [bob],
+  )
+  const bobAfterEdit = await scalar(db,
+    `select full_name, phone, whatsapp, bio, job_title, skills, location, linkedin, other_social_links, avatar_url,
+            role, status, email, role_id
+     from public.profiles where id = $1`, [bob],
+  )
+  ok(`${label}: employee self-edit persists allowed profile fields`,
+    bobAfterEdit.full_name === 'Bob Self Edited'
+      && bobAfterEdit.phone === '+20 100 000 000'
+      && bobAfterEdit.bio === 'Bio edited by Bob'
+      && bobAfterEdit.skills === 'Figma, React'
+      && bobAfterEdit.other_social_links?.dribbble === 'https://dribbble.example/bob'
+      && bobAfterEdit.avatar_url === 'https://cdn.example/bob-avatar.png')
+  ok(`${label}: employee self-edit cannot change role, status, email or role_id`,
+    bobAfterEdit.role === 'employee'
+      && bobAfterEdit.status === 'active'
+      && bobAfterEdit.email === 'bob@agency.test'
+      && bobAfterEdit.role_id === bobRoleIdBefore)
+
+  await asUser(db, erin) // manager
+  await db.query(
+    `select public.update_own_enhanced_profile(
+      $1, 'Erin Self Edited', '+971 50 000 0000', null, 'Manager bio', 'Account Director',
+      'Strategy, Client Success', null, null, null, 'Dubai, UAE', null,
+      'https://linkedin.example/erin', null, 'https://instagram.example/erin', null, null, null,
+      '{}'::jsonb, null
+    )`, [erin],
+  )
+  const erinAfterEdit = await scalar(db,
+    `select full_name, phone, bio, job_title, skills, linkedin, instagram, role, status, email
+     from public.profiles where id = $1`, [erin],
+  )
+  ok(`${label}: manager self-edit persists allowed profile fields`,
+    erinAfterEdit.full_name === 'Erin Self Edited'
+      && erinAfterEdit.bio === 'Manager bio'
+      && erinAfterEdit.job_title === 'Account Director'
+      && erinAfterEdit.linkedin === 'https://linkedin.example/erin')
+  ok(`${label}: manager self-edit cannot change role, status or email`,
+    erinAfterEdit.role === 'manager' && erinAfterEdit.status === 'active' && erinAfterEdit.email === 'erin@agency.test')
+
+  await asUser(db, alice) // admin
+  await db.query(
+    `select public.update_own_enhanced_profile(
+      $1, 'Alice Admin', null, null, 'Admin bio', null, null, null, null, null,
+      'Cairo', null, null, null, null, null, null, 'https://alice.example', '{}'::jsonb, null
+    )`, [alice],
+  )
+  const aliceAfterEdit = await scalar(db,
+    `select full_name, bio, location, personal_website, role, status, email
+     from public.profiles where id = $1`, [alice],
+  )
+  ok(`${label}: admin self-edit persists allowed profile fields`,
+    aliceAfterEdit.full_name === 'Alice Admin'
+      && aliceAfterEdit.bio === 'Admin bio'
+      && aliceAfterEdit.personal_website === 'https://alice.example')
+  ok(`${label}: admin self-edit keeps the admin role active`,
+    aliceAfterEdit.role === 'admin' && aliceAfterEdit.status === 'active' && aliceAfterEdit.email === 'alice@agency.test')
+
+  // A password change must never touch profile information — only the flag.
+  await asUser(db, bob)
+  const profileBeforePasswordChange = await scalar(db, 'select full_name, bio, phone from public.profiles where id = $1', [bob])
+  await superUser(db)
+  await db.query(`update public.profiles set must_change_password = true where id = $1`, [bob])
+  await asUser(db, bob)
+  await db.query(`select public.mark_password_changed($1)`, [bob])
+  const profileAfterPasswordChange = await scalar(db,
+    'select full_name, bio, phone, must_change_password from public.profiles where id = $1', [bob],
+  )
+  ok(`${label}: password change clears the flag without touching profile fields`,
+    profileAfterPasswordChange.must_change_password === false
+      && profileAfterPasswordChange.full_name === profileBeforePasswordChange.full_name
+      && profileAfterPasswordChange.bio === profileBeforePasswordChange.bio
+      && profileAfterPasswordChange.phone === profileBeforePasswordChange.phone)
+
+  // Avatar storage: users may remove avatars inside their own folder even when
+  // an Administrator performed the upload (owner_id is the admin, path is the
+  // member's id), and must never touch other members' folders.
+  await asUser(db, alice)
+  await db.query(`insert into storage.buckets (id, name, public) values ('avatars', 'avatars', true) on conflict (id) do update set public = true`)
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('avatars', $1, $2)`, [`${bob}/admin-uploaded.png`, alice])
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('avatars', $1, $2)`, [`${alice}/alice-own.png`, alice])
+  await asUser(db, bob)
+  const ownFolderAvatarDeleteBlocked = await expectError(db, () => db.query(
+    `delete from storage.objects where bucket_id = 'avatars' and name = $1`, [`${bob}/admin-uploaded.png`],
+  ))
+  ok(`${label}: a member can delete an admin-uploaded avatar from their own folder`, !ownFolderAvatarDeleteBlocked)
+  // RLS makes the row invisible: the statement succeeds but affects zero rows.
+  const otherFolderAvatarDelete = await db.query(
+    `delete from storage.objects where bucket_id = 'avatars' and name = $1`, [`${alice}/alice-own.png`],
+  )
+  ok(`${label}: a member cannot delete another member's avatar`, (otherFolderAvatarDelete.affectedRows ?? 0) === 0)
+  const otherFolderAvatarStillThere = await scalar(db,
+    `select count(*)::int n from storage.objects where bucket_id = 'avatars' and name = $1`, [`${alice}/alice-own.png`],
+  )
+  ok(`${label}: the other member's avatar object is untouched`, otherFolderAvatarStillThere.n === 1)
+
   await asUser(db, alice)
   const profileOnlyEmailChangeBlocked = await expectError(db, () => db.query(
     `select public.admin_update_team_member($1, p_email := 'drifted@agency.test')`, [bob],

@@ -906,6 +906,32 @@ export async function uploadTeamAvatar(userId: string, file: File): Promise<Resu
   return ok(data.publicUrl)
 }
 
+/**
+ * Resolves the storage path of an avatar stored in the public `avatars` bucket
+ * from its public URL. Returns null for external image URLs, malformed URLs and
+ * empty values, so callers can safely clean up replaced/removed avatars.
+ */
+export function avatarStoragePathFromUrl(url: string | null | undefined): string | null {
+  if (!url) return null
+  try {
+    const parsed = new URL(url)
+    const marker = '/storage/v1/object/public/avatars/'
+    const index = parsed.pathname.indexOf(marker)
+    if (index === -1) return null
+    const path = parsed.pathname.slice(index + marker.length)
+    return path ? decodeURIComponent(path) : null
+  } catch {
+    return null
+  }
+}
+
+/** Removes an avatar object from the public `avatars` bucket. */
+export async function deleteTeamAvatar(storagePath: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.storage.from('avatars').remove([storagePath])
+  return error ? fail(false, error.message) : ok(true)
+}
+
 export async function getAvatarPublicUrl(storagePath: string): Promise<Result<string | null>> {
   if (!supabase) return fail(null)
   if (storagePath.startsWith('http')) return ok(storagePath)
@@ -975,34 +1001,38 @@ export async function markPasswordChanged(userId: string): Promise<Result<boolea
   return error ? fail(false, error.message) : ok(true)
 }
 
-export async function getSocialLinks(profile: Profile): Promise<Record<string, string>> {
+/**
+ * Collects every social link stored on a profile — the admin-managed
+ * `social_links` JSON, the self-service platform columns (linkedin, behance,
+ * instagram, facebook, twitter, personal_website) and the custom
+ * `other_social_links` JSON — into a single key → URL map. Individual columns
+ * win over the same key stored in the JSON maps.
+ */
+export function collectSocialLinks(profile: Profile): Record<string, string> {
   const links: Record<string, string> = {}
-  
-  // From social_links JSON
-  if (profile.social_links && typeof profile.social_links === 'object' && !Array.isArray(profile.social_links)) {
-    Object.entries(profile.social_links).forEach(([key, value]) => {
-      if (typeof value === 'string' && value.trim()) {
-        links[key] = value.trim()
+
+  const absorb = (value: import('./types').Json | null | undefined) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return
+    Object.entries(value).forEach(([key, item]) => {
+      if (typeof item === 'string' && item.trim()) {
+        links[key] = item.trim()
       }
     })
   }
-  
-  // From individual social fields
-  if (profile.linkedin) links.linkedin = profile.linkedin
-  if (profile.behance) links.behance = profile.behance
-  if (profile.instagram) links.instagram = profile.instagram
-  if (profile.facebook) links.facebook = profile.facebook
-  if (profile.twitter) links.twitter = profile.twitter
-  if (profile.personal_website) links.personal_website = profile.personal_website
-  
-  // From other_social_links JSON
-  if (profile.other_social_links && typeof profile.other_social_links === 'object' && !Array.isArray(profile.other_social_links)) {
-    Object.entries(profile.other_social_links).forEach(([key, value]) => {
-      if (typeof value === 'string' && value.trim()) {
-        links[key] = value.trim()
-      }
-    })
+
+  absorb(profile.social_links)
+  absorb(profile.other_social_links)
+
+  // Individual self-service columns win over JSON maps.
+  const columnKeys = ['linkedin', 'behance', 'instagram', 'facebook', 'twitter', 'personal_website'] as const
+  for (const column of columnKeys) {
+    const value = profile[column]
+    if (typeof value === 'string' && value.trim()) links[column] = value.trim()
   }
-  
+
   return links
+}
+
+export async function getSocialLinks(profile: Profile): Promise<Record<string, string>> {
+  return collectSocialLinks(profile)
 }
