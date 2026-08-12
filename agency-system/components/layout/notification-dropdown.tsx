@@ -12,6 +12,9 @@ import {
   FileText,
   FolderKanban,
   LoaderCircle,
+  MessageSquare,
+  Package,
+  Paperclip,
   Trash2,
 } from 'lucide-react'
 import {
@@ -21,7 +24,9 @@ import {
   markNotificationRead,
   markNotificationUnread,
 } from '@/lib/supabase/database'
-import type { Notification, NotificationMetadata } from '@/lib/supabase/types'
+import type { Notification } from '@/lib/supabase/types'
+import { getNotificationMetadata, notificationEvent, resolveNotificationHref } from '@/lib/notifications'
+import { useAuth } from '@/contexts/auth-context'
 
 function formatRelativeTime(dateString: string): string {
   try {
@@ -39,31 +44,29 @@ function formatRelativeTime(dateString: string): string {
   }
 }
 
-function getNotificationTypeIcon(type: Notification['type']) {
-  switch (type) {
-    case 'form_submission':
-    case 'submission':
-      return { icon: FileText, color: 'text-accent border-accent/30 bg-accent/10', label: 'Form Submission' }
-    case 'assignment':
-    case 'project_update':
-      return { icon: FolderKanban, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Project' }
-    case 'task_assignment':
-    case 'task_update':
-      return { icon: CheckSquare, color: 'text-sky-400 border-sky-500/30 bg-sky-500/10', label: 'Task' }
-    default:
-      return { icon: Bell, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10', label: 'Notification' }
+function getNotificationTypeIcon(notification: Notification) {
+  const event = notificationEvent(notification)
+  if (event.startsWith('submission.') || notification.type === 'form_submission' || notification.type === 'submission') {
+    return { icon: FileText, color: 'text-accent border-accent/30 bg-accent/10', label: 'Submission' }
   }
+  if (event.startsWith('task.') || notification.type === 'task_assignment' || notification.type === 'task_update') {
+    return { icon: CheckSquare, color: 'text-sky-400 border-sky-500/30 bg-sky-500/10', label: 'Task' }
+  }
+  if (event.startsWith('client.') || notification.type === 'client_feedback' || notification.type === 'client_approval' || notification.type === 'client_revision') {
+    return { icon: MessageSquare, color: 'text-violet-400 border-violet-500/30 bg-violet-500/10', label: 'Client' }
+  }
+  if (event === 'file.shared' || notification.type === 'file_shared') {
+    return { icon: Paperclip, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10', label: 'File' }
+  }
+  if (event === 'delivery.ready' || notification.type === 'delivery_ready') {
+    return { icon: Package, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Delivery' }
+  }
+  return { icon: FolderKanban, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Project' }
 }
 
-function getMetadata(notification: Notification): NotificationMetadata {
-  if (notification.metadata && typeof notification.metadata === 'object' && !Array.isArray(notification.metadata)) {
-    return notification.metadata as NotificationMetadata
-  }
-  return {}
-}
-
-export function NotificationDropdown() {
+export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewAllHref?: string }) {
   const router = useRouter()
+  const { isClient } = useAuth()
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(false)
@@ -123,11 +126,7 @@ export function NotificationDropdown() {
       window.dispatchEvent(new Event('agency-notifications-changed'))
     }
     setOpen(false)
-    if (notification.action_url) {
-      router.push(notification.action_url)
-    } else {
-      router.push('/notifications')
-    }
+    router.push(resolveNotificationHref(notification, isClient))
   }
 
   const handleToggleRead = async (event: React.MouseEvent, notification: Notification) => {
@@ -232,8 +231,8 @@ export function NotificationDropdown() {
               </div>
             ) : (
               notifications.slice(0, 10).map((notification) => {
-                const { icon: Icon, color } = getNotificationTypeIcon(notification.type)
-                const meta = getMetadata(notification)
+                const { icon: Icon, color } = getNotificationTypeIcon(notification)
+                const meta = getNotificationMetadata(notification)
                 const isUnread = !notification.read_at
                 const isBusy = busyActionId === notification.id
 

@@ -520,6 +520,21 @@ export type FormSubmissionEventRow = {
   created_at: string
 }
 
+export type NotificationEvent =
+  | 'submission.created'
+  | 'submission.assigned'
+  | 'submission.status_changed'
+  | 'project.created'
+  | 'project.assigned'
+  | 'team_member.assigned'
+  | 'task.assigned'
+  | 'task.updated'
+  | 'client.feedback'
+  | 'client.approval'
+  | 'client.revision'
+  | 'file.shared'
+  | 'delivery.ready'
+
 export type NotificationType =
   | 'info'
   | 'assignment'
@@ -531,6 +546,8 @@ export type NotificationType =
   | 'client_feedback'
   | 'client_approval'
   | 'client_revision'
+  | 'file_shared'
+  | 'delivery_ready'
 
 export type NotificationMetadata = {
   submission_id?: string
@@ -567,10 +584,12 @@ export type NotificationRow = {
   submission_id: string | null
   task_id: string | null
   type: NotificationType
+  event: NotificationEvent | null
   title: string
   message: string
   action_url: string | null
   metadata: NotificationMetadata | Json
+  dedupe_key: string | null
   read_at: string | null
   created_at: string
 }
@@ -759,7 +778,7 @@ export interface Database {
         { foreignKeyName: 'form_submission_events_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
       ]>
       notifications: TableDefinition<NotificationRow, {
-        id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; read_at?: string | null; created_at?: string
+        id?: string; recipient_id: string; actor_id?: string | null; project_id?: string | null; submission_id?: string | null; task_id?: string | null; type?: NotificationType; event?: NotificationEvent | null; title: string; message: string; action_url?: string | null; metadata?: NotificationMetadata | Json; dedupe_key?: string | null; read_at?: string | null; created_at?: string
       }, Partial<NotificationRow>, [
         { foreignKeyName: 'notifications_recipient_id_fkey'; columns: ['recipient_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'notifications_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
