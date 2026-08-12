@@ -82,16 +82,19 @@ async function verifyCaller(callerClient: ReturnType<typeof createRequestClients
   return { userId: callerData.user.id }
 }
 
-async function verifyAdmin(
+async function verifyPermissions(
   callerClient: ReturnType<typeof createRequestClients>['callerClient'],
   token: string,
+  required: string[],
 ) {
   const caller = await verifyCaller(callerClient, token)
   if ('error' in caller) return caller
 
   const { data: permissions, error: permissionsError } = await callerClient.rpc('get_user_permissions')
-  if (permissionsError) return { error: errorResponse('Unable to verify administrator permissions.', 403) }
-  if (!permissions.includes('admin.manage')) return { error: errorResponse('Administrator access required.', 403) }
+  if (permissionsError) return { error: errorResponse('Unable to verify permissions.', 403) }
+  if (!required.some((key) => permissions.includes(key))) {
+    return { error: errorResponse('You do not have permission to manage team accounts.', 403) }
+  }
 
   return caller
 }
@@ -167,7 +170,7 @@ function friendlyAuthCreateError(message: string) {
  * Creates a real Supabase Auth user and its internal profile.
  *
  * The service-role key is used only after the caller's JWT has been verified and
- * the database confirms the caller has `admin.manage`. It must never be moved to
+ * the database confirms the caller has `employee.manage`. It must never be moved to
  * a NEXT_PUBLIC environment variable or returned to the browser.
  *
  * The temporary password is generated here, returned once in the response, and
@@ -305,8 +308,8 @@ export async function PATCH(request: Request) {
   }
 
   const { data: callerPermissions, error: permissionsError } = await callerClient.rpc('get_user_permissions')
-  if (permissionsError) return errorResponse('Unable to verify administrator permissions.', 403)
-  if (!callerPermissions.includes('admin.manage')) return errorResponse('Administrator access required.', 403)
+  if (permissionsError) return errorResponse('Unable to verify permissions.', 403)
+  if (!callerPermissions.includes('employee.manage')) return errorResponse('You do not have permission to manage team accounts.', 403)
 
   const parsedMember = parseMember(member)
   if ('error' in parsedMember) return parsedMember.error

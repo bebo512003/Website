@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Briefcase, ClipboardList, FolderKanban, ImageIcon, KeyRound, LoaderCircle, Pencil, Plus, ShieldCheck, Trash2, UserRound, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { ADMIN_AREA_PERMISSIONS } from '@/lib/permissions'
 import { RolesPermissionsAdmin } from '@/components/admin/roles-permissions'
 import { FormsAdmin } from '@/components/admin/forms-admin'
 import { TeamManagement } from '@/components/admin/team-management'
@@ -44,7 +45,18 @@ const slugify = (value: string) =>
   value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || `role_${crypto.randomUUID().slice(0, 8)}`
 
 export default function AdminPage() {
-  const { isAdmin } = useAuth()
+  const { can, hasAny } = useAuth()
+  const canOpenAdmin = hasAny(...ADMIN_AREA_PERMISSIONS)
+  const visibleTabs = useMemo(() => ([
+    { id: 'team' as const, show: can('employee.manage') || can('employee.edit') },
+    { id: 'roles' as const, show: can('employee.manage') },
+    { id: 'permissions' as const, show: can('role.view') || can('role.assign_permissions') || can('permission.view') },
+    { id: 'forms' as const, show: can('form.manage') || can('form.view') },
+    { id: 'portfolio' as const, show: can('portfolio.manage') },
+    { id: 'clients' as const, show: can('employee.manage') },
+    { id: 'projects' as const, show: can('project.view') && (can('project.create') || can('project.delete') || can('project.view_all')) },
+    { id: 'access' as const, show: can('project.assign') },
+  ].filter((item) => item.show).map((item) => item.id)), [can])
   const [tab, setTab] = useState<Tab>('team')
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
@@ -63,7 +75,7 @@ export default function AdminPage() {
   const [message, setMessage] = useState('')
 
   const load = useCallback(async () => {
-    if (!isAdmin) {
+    if (!canOpenAdmin) {
       setLoading(false)
       return
     }
@@ -76,9 +88,14 @@ export default function AdminPage() {
     setError(profileResult.error || projectResult.error || clientResult.error || employeeRoleResult.error || '')
     setSelectedProjectId((current) => current || projectResult.data[0]?.id || '')
     setLoading(false)
-  }, [isAdmin])
+  }, [canOpenAdmin])
 
   useEffect(() => { void load() }, [load])
+
+  useEffect(() => {
+    if (visibleTabs.length === 0) return
+    setTab((current) => (visibleTabs.includes(current) ? current : visibleTabs[0]))
+  }, [visibleTabs])
 
   const loadMembers = useCallback(async () => {
     if (!selectedProjectId) {
@@ -225,8 +242,8 @@ export default function AdminPage() {
     else await loadMembers()
   }
 
-  if (!isAdmin) {
-    return <Page><PageHeader eyebrow="ADMIN / ACCESS CONTROL" title="Administration" description="This area is restricted to workspace administrators." /><Panel><EmptyState icon={ShieldCheck} title="Administrator access required" description="Your current role cannot manage users, permissions, or projects." /></Panel></Page>
+  if (!canOpenAdmin) {
+    return <Page><PageHeader eyebrow="ADMIN / ACCESS CONTROL" title="Administration" description="This area is restricted to people with a management permission." /><Panel><EmptyState icon={ShieldCheck} title="Management permission required" description="Ask an administrator to grant the specific capability you need — for example Manage forms, Manage portfolio, or Manage employees. You do not need the full system-admin permission." /></Panel></Page>
   }
 
   return (

@@ -101,7 +101,10 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params)
   const router = useRouter()
   const { can } = useAuth()
-  const allowed = can('form.manage')
+  const canManage = can('form.manage')
+  const canViewForm = canManage || can('form.view')
+  const canViewSubmissions = can('submission.view')
+  const allowed = canViewForm || canViewSubmissions
 
   const [tab, setTab] = useState<Tab>('build')
   const [template, setTemplate] = useState<FormTemplate | null>(null)
@@ -132,7 +135,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       const sp = new URLSearchParams(window.location.search)
       const tabParam = sp.get('tab')
       const subParam = sp.get('submission')
-      if (tabParam === 'submissions') setTab('submissions')
+      if (tabParam === 'submissions' || (!can('form.manage') && !can('form.view') && can('submission.view'))) setTab('submissions')
       if (subParam) {
         setExpandedId(subParam)
         void getFormSubmissionDetails(subParam).then((res) => {
@@ -338,13 +341,13 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   }
 
   if (!allowed) {
-    return <Page><PageHeader eyebrow="ADMIN / FORMS" title="Form builder" description="This area is restricted to form managers." /><Panel><EmptyState icon={ShieldCheck} title="Form management permission required" description="Ask an administrator to grant you the “Manage forms” permission." /></Panel></Page>
+    return <Page><PageHeader eyebrow="ADMIN / FORMS" title="Form builder" description="This area is restricted to form managers." /><Panel><EmptyState icon={ShieldCheck} title="Form permission required" description="Ask an administrator to grant “View forms” or “Manage forms”. You do not need the full system-admin permission." /></Panel></Page>
   }
 
   if (loading) return <Page><Panel><LoadingState label="Loading form builder…" /></Panel></Page>
 
   if (notFound || !template) {
-    return <Page><PageHeader eyebrow="ADMIN / FORMS" title="Form builder" description="" /><Panel><EmptyState icon={ClipboardList} title="Form not found" description="It may have been deleted, or your role cannot manage forms." action={<Link href="/admin" className={secondaryButtonClassName}><ArrowLeft className="h-4 w-4" /> Back to administration</Link>} /></Panel></Page>
+    return <Page><PageHeader eyebrow="ADMIN / FORMS" title="Form builder" description="" /><Panel><EmptyState icon={ClipboardList} title="Form not found" description="It may have been deleted, or your role cannot manage forms." action={<Link href="/admin/forms" className={secondaryButtonClassName}><ArrowLeft className="h-4 w-4" /> Back to forms</Link>} /></Panel></Page>
   }
 
   const live = template.status === 'published'
@@ -355,7 +358,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
         eyebrow="ADMIN / FORM BUILDER"
         title={template.title}
         description="Everything on this page is stored in the database — the respondent form renders exactly what you configure here. No code changes required."
-        action={<Link href="/admin" className={secondaryButtonClassName}><ArrowLeft className="h-4 w-4" /> All forms</Link>}
+        action={<Link href="/admin/forms" className={secondaryButtonClassName}><ArrowLeft className="h-4 w-4" /> All forms</Link>}
       />
 
       {/* Status + lifecycle actions */}
@@ -374,18 +377,20 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
           <div className="flex flex-wrap items-center gap-2">
             {busy && <LoaderCircle className="h-4 w-4 animate-spin text-accent" />}
             <button onClick={() => setPreviewOpen(true)} className={secondaryButtonClassName}><Eye className="h-4 w-4" /> Preview</button>
-            {!live ? (
+            {canManage && !live ? (
               <button onClick={() => void setStatus('published', template.status === 'draft' ? 'Form is now live. Share its public link.' : 'Form re-enabled.')} disabled={busy} className={primaryButtonClassName}>Enable form</button>
-            ) : (
+            ) : null}
+            {canManage && live ? (
               <button onClick={() => void setStatus('disabled', 'Form disabled. It no longer accepts responses, but existing responses are kept.')} disabled={busy} className={secondaryButtonClassName}>Disable</button>
-            )}
-            <button onClick={() => void duplicate()} disabled={busy} className={secondaryButtonClassName}><Copy className="h-4 w-4" /> Duplicate</button>
-            {template.status === 'archived' ? (
+            ) : null}
+            {canManage && <button onClick={() => void duplicate()} disabled={busy} className={secondaryButtonClassName}><Copy className="h-4 w-4" /> Duplicate</button>}
+            {canManage && template.status === 'archived' ? (
               <button onClick={() => void setStatus('draft', 'Form restored to draft.')} disabled={busy} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
-            ) : (
+            ) : null}
+            {canManage && template.status !== 'archived' ? (
               <button onClick={() => void setStatus('archived', 'Form archived. Its responses are kept and it no longer accepts new ones.')} disabled={busy} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive</button>
-            )}
-            <button onClick={() => void removeForm()} disabled={busy} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label="Delete form"><Trash2 className="h-4 w-4" /></button>
+            ) : null}
+            {canManage && <button onClick={() => void removeForm()} disabled={busy} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label="Delete form"><Trash2 className="h-4 w-4" /></button>}
           </div>
         </div>
       </Panel>
@@ -394,11 +399,11 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
       <div className="flex flex-wrap gap-2">
-        <button onClick={() => setTab('build')} className={tab === 'build' ? primaryButtonClassName : secondaryButtonClassName}><Pencil className="h-4 w-4" /> Build</button>
-        <button onClick={() => setTab('submissions')} className={tab === 'submissions' ? primaryButtonClassName : secondaryButtonClassName}><Inbox className="h-4 w-4" /> Responses</button>
+        {canViewForm && <button onClick={() => setTab('build')} className={tab === 'build' ? primaryButtonClassName : secondaryButtonClassName}><Pencil className="h-4 w-4" /> {canManage ? 'Build' : 'Questions'}</button>}
+        {canViewSubmissions && <button onClick={() => setTab('submissions')} className={tab === 'submissions' ? primaryButtonClassName : secondaryButtonClassName}><Inbox className="h-4 w-4" /> Responses</button>}
       </div>
 
-      {tab === 'build' && (
+      {tab === 'build' && canViewForm && (
         <>
           {/* Details */}
           <Panel title="Form details" description="Shown to respondents at the top of the public form.">
@@ -409,9 +414,11 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                 Auto-create a project when someone submits (needs a mapped e-mail question)
               </label>
               <label className="text-xs text-text-secondary sm:col-span-2">Description<textarea className={`${inputClassName} mt-2 min-h-20`} value={details.description} onChange={(e) => setDetails({ ...details, description: e.target.value })} /></label>
-              <div className="flex justify-end sm:col-span-2">
-                <button onClick={() => void saveDetails()} disabled={savingDetails || !details.title.trim()} className={primaryButtonClassName}>{savingDetails && <LoaderCircle className="h-4 w-4 animate-spin" />}Save details</button>
-              </div>
+              {canManage && (
+                <div className="flex justify-end sm:col-span-2">
+                  <button onClick={() => void saveDetails()} disabled={savingDetails || !details.title.trim()} className={primaryButtonClassName}>{savingDetails && <LoaderCircle className="h-4 w-4 animate-spin" />}Save details</button>
+                </div>
+              )}
             </div>
           </Panel>
 
@@ -447,10 +454,12 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                             {question.question_type === 'rating' && ` · max ${ratingMax(question.config)}`}
                           </p>
                         </div>
-                        <button onClick={() => (editing ? (setEditingId(null), setEditForm(null)) : startEdit(question))} className="rounded-md border border-border p-2 text-text-tertiary hover:text-fg" aria-label={editing ? 'Close editor' : `Edit ${question.label}`}>
-                          {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-                        </button>
-                        <button onClick={() => void removeQuestion(question)} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Delete ${question.label}`}><Trash2 className="h-4 w-4" /></button>
+                        {canManage && (
+                          <button onClick={() => (editing ? (setEditingId(null), setEditForm(null)) : startEdit(question))} className="rounded-md border border-border p-2 text-text-tertiary hover:text-fg" aria-label={editing ? 'Close editor' : `Edit ${question.label}`}>
+                            {editing ? <X className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                          </button>
+                        )}
+                        {canManage && <button onClick={() => void removeQuestion(question)} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Delete ${question.label}`}><Trash2 className="h-4 w-4" /></button>}
                       </div>
 
                       {editing && (
@@ -547,7 +556,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
           </Panel>
 
           {/* Add question */}
-          <Panel title="Add a question" description="Pick a type — the question is created immediately and opens for editing. New types can be added to the registry later without touching this page.">
+          {canManage && <Panel title="Add a question" description="Pick a type — the question is created immediately and opens for editing. New types can be added to the registry later without touching this page.">
             <div className="grid grid-cols-2 gap-3 p-5 sm:grid-cols-3 lg:grid-cols-5">
               {QUESTION_TYPES.map((meta) => {
                 const Icon = meta.icon
@@ -560,7 +569,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                 )
               })}
             </div>
-          </Panel>
+          </Panel>}
         </>
       )}
 
@@ -633,13 +642,15 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                                 )
                               })}
                             </dl>
-                            <div className="flex justify-end border-t border-border pt-3">
-                              {submission.status === 'archived' ? (
-                                <button onClick={() => void setSubmissionStatus(submission, 'submitted')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
-                              ) : (
-                                <button onClick={() => void setSubmissionStatus(submission, 'archived')} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive response</button>
-                              )}
-                            </div>
+                            {can('submission.edit') && (
+                              <div className="flex justify-end border-t border-border pt-3">
+                                {submission.status === 'archived' ? (
+                                  <button onClick={() => void setSubmissionStatus(submission, 'submitted')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
+                                ) : (
+                                  <button onClick={() => void setSubmissionStatus(submission, 'archived')} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive response</button>
+                                )}
+                              </div>
+                            )}
                           </>
                         )}
                       </div>

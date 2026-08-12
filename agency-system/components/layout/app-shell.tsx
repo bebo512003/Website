@@ -10,7 +10,7 @@ import { ForcedPasswordChangeScreen } from './forced-password-change'
 import { useAccent } from '@/contexts/accent-context'
 import { useAuth } from '@/contexts/auth-context'
 import { secondaryButtonClassName, primaryButtonClassName } from '@/components/ui/page'
-import { permissionRequiredForPath } from '@/lib/permissions'
+import { firstAllowedStaffPath, pathAllowed } from '@/lib/permissions'
 
 function LoadingScreen({ style, label = 'Loading your workspace…' }: { style: Record<string, string>; label?: string }) {
   return (
@@ -77,7 +77,7 @@ function AccountRemovedScreen({ style }: { style: Record<string, string> }) {
   )
 }
 
-function RestrictedScreen({ style }: { style: Record<string, string> }) {
+function RestrictedScreen({ style, fallbackHref }: { style: Record<string, string>; fallbackHref: string }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
       <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
@@ -89,8 +89,8 @@ function RestrictedScreen({ style }: { style: Record<string, string> }) {
           Your account does not have the permission needed to open this page. If you believe this is a
           mistake, ask an administrator to grant you access.
         </p>
-        <Link href="/dashboard" className={`${primaryButtonClassName} mt-6`}>
-          <Home className="h-4 w-4" /> Back to dashboard
+        <Link href={fallbackHref} className={`${primaryButtonClassName} mt-6`}>
+          <Home className="h-4 w-4" /> Back to workspace
         </Link>
       </section>
     </main>
@@ -179,12 +179,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // Clients are never allowed into the staff shell; redirect is in flight.
   if (isClient) return <LoadingScreen style={style} />
 
-  // Route-level authorization: a user who lacks the permission for a page is blocked
-  // from viewing it even if they type the URL directly. RLS enforces the same rule
-  // in the database, so this is defence-in-depth, not the only guard.
-  const requiredPermission = permissionRequiredForPath(pathname)
-  const routeAllowed = !requiredPermission || can(requiredPermission)
-  if (permissionsLoaded && !routeAllowed) return <RestrictedScreen style={style} />
+  // Route-level authorization: a user who lacks every permission accepted by a
+  // page is blocked even if they type the URL. RLS enforces the same rule in
+  // the database, so this is defence-in-depth, not the only guard.
+  const routeAllowed = pathAllowed(pathname, can)
+  if (permissionsLoaded && !routeAllowed) {
+    return <RestrictedScreen style={style} fallbackHref={firstAllowedStaffPath(can)} />
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-fg" style={style}>

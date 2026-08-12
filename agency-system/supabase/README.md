@@ -84,8 +84,13 @@ roles to employees. Assigning a role updates the user's effective permissions im
 
 The default matrix (seeded) is: Admin has every permission; Manager manages projects, clients,
 tasks, files, and submissions but **cannot** delete employees, manage admins/permissions, edit
-system settings, or assign permissions to roles; Employee works on assigned projects; Client is
-portal-only.
+system settings, or assign permissions to roles; Employee works on assigned projects and does
+**not** receive `submission.view` or `client.view` unless those boxes are checked; Client is
+portal-only. Custom roles start empty.
+
+Management UIs are gated by their own capability (`form.manage`, `portfolio.manage`,
+`employee.manage`, `role.view`, …). They are **not** locked behind `admin.manage`, so granting
+a checkbox is enough to open the matching area.
 
 Project/portfolio reads still follow membership: `can_access_project` requires
 `has_permission('project.view')` plus either `project.view_all` (Admin/Manager) or a

@@ -79,6 +79,8 @@ Covered guarantees:
   - Checking a box changes REAL access (the employee can suddenly create forms /
     portfolio projects through RLS); unchecking revokes it immediately without
     re-login; unchecked boxes keep denying the action at the database.
+  - A custom role with `form.manage` but not `admin.manage` can create/update forms
+    and call form RPCs (the old “admin route required” inconsistency is gone).
   - Manager/Employee attempts to toggle checkboxes are rejected by the RPC guards and
     leave the stored permission set untouched.
 

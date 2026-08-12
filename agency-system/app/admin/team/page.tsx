@@ -6,14 +6,19 @@ import { TeamManagement } from '@/components/admin/team-management'
 import { EmptyState, Page, PageHeader, Panel } from '@/components/ui/page'
 
 export default function TeamPage() {
-  const { isAdmin } = useAuth()
+  const { can } = useAuth()
+  const allowed = can('employee.manage') || can('employee.edit')
 
-  if (!isAdmin) {
+  if (!allowed) {
     return (
       <Page>
         <PageHeader eyebrow="ADMIN / TEAM" title="Team Management" description="Manage your internal team members." />
         <Panel>
-          <EmptyState icon={ShieldCheck} title="Administrator access required" description="Your current role cannot manage team members." />
+          <EmptyState
+            icon={ShieldCheck}
+            title="Team management permission required"
+            description="Ask an administrator to grant “Manage employees” or “Edit employees”. You do not need the full system-admin permission."
+          />
         </Panel>
       </Page>
     )
@@ -24,7 +29,7 @@ export default function TeamPage() {
       <PageHeader
         eyebrow="ADMIN / TEAM MANAGEMENT"
         title="Team Management"
-        description="View all team members, add new members, edit, activate/deactivate, assign roles from the dynamic Role system, and view detailed profiles. Team members are always Employee/Internal Users, never Clients."
+        description="View all team members, add new members, edit, activate/deactivate, and assign roles. This area follows employee.manage — not admin.manage."
       />
       <TeamManagement />
     </Page>
