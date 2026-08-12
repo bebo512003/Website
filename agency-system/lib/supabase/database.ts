@@ -753,17 +753,6 @@ export type TeamMemberPayload = {
   role_id?: string | null
   employee_role_id?: string | null
   status?: ProfileStatus
-  skills?: string | null
-  experience?: string | null
-  certifications?: string | null
-  previous_projects?: string | null
-  linkedin?: string | null
-  behance?: string | null
-  instagram?: string | null
-  facebook?: string | null
-  twitter?: string | null
-  personal_website?: string | null
-  other_social_links?: Record<string, string> | null
 }
 
 export type TeamMemberUpdatePayload = Partial<TeamMemberPayload> & { id: string }
@@ -817,8 +806,37 @@ export async function createTeamMember(payload: TeamMemberPayload, initialPasswo
 
 export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any).rpc('admin_update_team_member', {
+
+  // Status toggles already have a dedicated permission-checked RPC and do not
+  // need the service-role route used to synchronize login e-mail changes.
+  if (payload.email === undefined && payload.status !== undefined) {
+    return setProfileStatus(payload.id, payload.status)
+  }
+
+  if (payload.email !== undefined) {
+    const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+    const accessToken = sessionData.session?.access_token
+    if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+    try {
+      const response = await fetch('/api/admin/team-members', {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ member: payload }),
+        cache: 'no-store',
+      })
+      const result = await response.json() as { data?: Profile; error?: string }
+      if (!response.ok || !result.data) return fail(null, result.error || 'Unable to update the team account.')
+      return ok(result.data)
+    } catch {
+      return fail(null, 'Unable to reach the account management service.')
+    }
+  }
+
+  const { data, error } = await supabase.rpc('admin_update_team_member', {
     p_user_id: payload.id,
     p_email: payload.email || null,
     p_full_name: payload.full_name || null,
@@ -836,36 +854,13 @@ export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promis
     p_employee_role_id: payload.employee_role_id || null,
     p_status: payload.status || null,
   })
-  if (!error) return ok(data as Profile)
-
-  const updates: Partial<Profile> = {}
-  if (payload.full_name !== undefined) updates.full_name = payload.full_name
-  if (payload.email !== undefined) updates.email = payload.email
-  if (payload.phone !== undefined) updates.phone = payload.phone
-  if (payload.whatsapp !== undefined) updates.whatsapp = payload.whatsapp
-  if (payload.avatar_url !== undefined) updates.avatar_url = payload.avatar_url
-  if (payload.job_title !== undefined) updates.job_title = payload.job_title
-  if (payload.department !== undefined) updates.department = payload.department
-  if (payload.specialization !== undefined) updates.specialization = payload.specialization
-  if (payload.bio !== undefined) updates.bio = payload.bio
-  if (payload.location !== undefined) updates.location = payload.location
-  if (payload.portfolio_url !== undefined) updates.portfolio_url = payload.portfolio_url
-  if (payload.social_links !== undefined) updates.social_links = payload.social_links
-  if (payload.role_id !== undefined) updates.role_id = payload.role_id
-  if (payload.employee_role_id !== undefined) updates.employee_role_id = payload.employee_role_id
-  if (payload.status !== undefined) updates.status = payload.status
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data: direct, error: directError } = await (supabase as any).from('profiles').update(updates).eq('id', payload.id).select().single()
-  return directError ? fail(null, directError.message) : ok(direct as Profile)
+  return error ? fail(null, error.message) : ok(data)
 }
 
 export async function deleteTeamMember(userId: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.rpc('admin_delete_team_member', { p_user_id: userId })
-  if (!error) return ok(true)
-  const { error: directError } = await supabase.from('profiles').delete().eq('id', userId)
-  return directError ? fail(false, directError.message) : ok(true)
+  return error ? fail(false, error.message) : ok(true)
 }
 
 export async function uploadTeamAvatar(userId: string, file: File): Promise<Result<string | null>> {
@@ -915,8 +910,7 @@ export async function updateOwnEnhancedProfile(userId: string, updates: {
 }): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { data, error } = await (supabase as any).rpc('update_own_enhanced_profile', {
+  const { data, error } = await supabase.rpc('update_own_enhanced_profile', {
     p_user_id: userId,
     p_full_name: updates.full_name || null,
     p_phone: updates.phone || null,
@@ -944,8 +938,7 @@ export async function updateOwnEnhancedProfile(userId: string, updates: {
 
 export async function markPasswordChanged(userId: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { error } = await (supabase as any).rpc('mark_password_changed', { p_user_id: userId })
+  const { error } = await supabase.rpc('mark_password_changed', { p_user_id: userId })
   return error ? fail(false, error.message) : ok(true)
 }
 

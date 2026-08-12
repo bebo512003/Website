@@ -51,7 +51,7 @@ SUPABASE_SERVICE_ROLE_KEY=your-service-role-key # server only; never NEXT_PUBLIC
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ```
 
-Apply `supabase/schema.sql` in the Supabase SQL Editor. The same SQL is available as a timestamped file under `supabase/migrations/` for CLI-based workflows.
+For a new Supabase project, apply the generated `supabase/schema.sql` snapshot in the SQL Editor. For an existing project, apply every unapplied file in `supabase/migrations/` in filename order (or use the Supabase CLI migration workflow). The ordered migration directory is authoritative; `schema.sql` is generated from it and can be verified with `npm run db:schema:check`.
 
 Then start the application:
 
@@ -61,9 +61,9 @@ npm run dev
 
 ## Closed account provisioning
 
-1. Apply `supabase/schema.sql` on a new database, or apply
-   `supabase/migrations/20260815000000_admin_only_account_creation.sql` after the earlier
-   migrations on an existing database.
+1. Apply `supabase/schema.sql` on a new database. On an existing database, apply all
+   unapplied migrations in filename order, including
+   `20260818000000_database_foundation_consistency.sql`.
 2. In **Supabase Dashboard → Authentication → Providers → Email**, turn **Allow new users
    to sign up** OFF. The database trigger also rejects public sign-up if this dashboard
    setting is accidentally re-enabled.
@@ -126,6 +126,7 @@ Recommended smoke test:
 ## Validation
 
 ```bash
+npm test                 # schema parity + database/RLS regression suite
 npm run build
 npm run lint
 ```

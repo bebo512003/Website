@@ -7,6 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "test": "npm run db:schema:check && npm run test:db",
+    "test:db": "npm --prefix supabase/tests test",
+    "db:schema:generate": "node scripts/generate-schema.mjs",
+    "db:schema:check": "node scripts/generate-schema.mjs --check",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs"
   },
   "dependencies": {

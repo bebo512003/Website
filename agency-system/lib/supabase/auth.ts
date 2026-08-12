@@ -86,8 +86,8 @@ export async function updatePasswordAndMarkChanged(password: string): Promise<Au
   // Then mark the password as changed in the profile
   const { data: { user } } = await supabase.auth.getUser()
   if (user) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).rpc('mark_password_changed', { p_user_id: user.id }).catch(() => {})
+    const { error: profileError } = await supabase.rpc('mark_password_changed', { p_user_id: user.id })
+    if (profileError) return { error: new Error(profileError.message) }
   }
   
   return { error: null }

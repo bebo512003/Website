@@ -341,8 +341,8 @@ export type NotificationRow = {
   recipient_id: string
   actor_id: string | null
   project_id: string | null
-  submission_id?: string | null
-  task_id?: string | null
+  submission_id: string | null
+  task_id: string | null
   type: NotificationType
   title: string
   message: string
@@ -427,8 +427,12 @@ export interface Database {
   public: {
     Tables: {
       profiles: TableDefinition<ProfileRow, {
-        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; status?: ProfileStatus; employee_role_id?: string | null; role_id?: string | null; client_id?: string | null; agency_name?: string | null; agency_website?: string | null; phone?: string | null; whatsapp?: string | null; bio?: string | null; job_title?: string | null; department?: string | null; specialization?: string | null; location?: string | null; portfolio_url?: string | null; social_links?: Json; created_at?: string; updated_at?: string
-      }>
+        id: string; email: string; full_name?: string | null; avatar_url?: string | null; role?: AppRole; agency_name?: string | null; agency_website?: string | null; phone?: string | null; bio?: string | null; created_at?: string; updated_at?: string; status?: ProfileStatus; employee_role_id?: string | null; client_id?: string | null; role_id?: string | null; job_title?: string | null; department?: string | null; specialization?: string | null; location?: string | null; portfolio_url?: string | null; whatsapp?: string | null; social_links?: Json; must_change_password?: boolean; skills?: string | null; experience?: string | null; certifications?: string | null; previous_projects?: string | null; linkedin?: string | null; behance?: string | null; instagram?: string | null; facebook?: string | null; twitter?: string | null; personal_website?: string | null; other_social_links?: Json
+      }, Partial<ProfileRow>, [
+        { foreignKeyName: 'profiles_employee_role_id_fkey'; columns: ['employee_role_id']; isOneToOne: false; referencedRelation: 'employee_roles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'profiles_client_id_fkey'; columns: ['client_id']; isOneToOne: false; referencedRelation: 'clients'; referencedColumns: ['id'] },
+        { foreignKeyName: 'profiles_role_id_fkey'; columns: ['role_id']; isOneToOne: false; referencedRelation: 'app_roles'; referencedColumns: ['id'] },
+      ]>
       employee_roles: TableDefinition<EmployeeRoleRow, {
         id?: string; key: string; name: string; description?: string | null; is_active?: boolean; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<EmployeeRoleRow>, [{ foreignKeyName: 'employee_roles_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
@@ -443,12 +447,12 @@ export interface Database {
       }, Partial<RolePermissionRow>>
       clients: TableDefinition<ClientRow, {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
-      }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] }]>
+      }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] }]>
       projects: TableDefinition<ProjectRow, {
         id?: string; name: string; description?: string | null; client_id: string; type?: string; status?: ProjectStatus; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ProjectRow>, [
         { foreignKeyName: 'projects_client_id_fkey'; columns: ['client_id']; isOneToOne: false; referencedRelation: 'clients'; referencedColumns: ['id'] },
-        { foreignKeyName: 'projects_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'projects_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] },
       ]>
       project_members: TableDefinition<ProjectMemberRow, {
         project_id: string; user_id: string; assigned_by?: string | null; assigned_at?: string
@@ -536,6 +540,8 @@ export interface Database {
       set_user_employee_role: { Args: { target_user_id: string; new_employee_role_id: string | null }; Returns: ProfileRow }
       set_user_client_link: { Args: { target_user_id: string; new_client_id: string | null }; Returns: ProfileRow }
       update_own_profile: { Args: { new_full_name: string; new_avatar_url: string; new_agency_name: string; new_agency_website: string; new_phone: string; new_bio: string }; Returns: ProfileRow }
+      update_own_enhanced_profile: { Args: { p_user_id: string; p_full_name: string | null; p_phone: string | null; p_whatsapp: string | null; p_bio: string | null; p_job_title: string | null; p_skills: string | null; p_experience: string | null; p_previous_projects: string | null; p_certifications: string | null; p_location: string | null; p_portfolio_url: string | null; p_linkedin: string | null; p_behance: string | null; p_instagram: string | null; p_facebook: string | null; p_twitter: string | null; p_personal_website: string | null; p_other_social_links: Json | null; p_avatar_url: string | null }; Returns: ProfileRow }
+      mark_password_changed: { Args: { p_user_id: string }; Returns: undefined }
       admin_create_team_member: { Args: { p_email: string; p_full_name: string; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string }; Returns: ProfileRow }
       admin_update_team_member: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string | null }; Returns: ProfileRow }
       admin_delete_team_member: { Args: { p_user_id: string }; Returns: boolean }

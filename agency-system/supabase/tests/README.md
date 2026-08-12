@@ -14,18 +14,20 @@ What it does:
 
 1. Stubs the Supabase-only pieces (`auth.users`, `auth.uid()`, `storage.*`) and the
    `anon` / `authenticated` roles, with the same default grants Supabase applies.
-2. **Upgrade path** — applies every migration before the Admin-only account-creation
-   migration, applies that migration exactly like Supabase would, then runs the
-   assertion suite.
-3. **Fresh-install path** — applies the full `supabase/schema.sql` and re-checks the
-   core guarantees.
+2. **Upgrade path** — applies every migration before the latest migration, applies the
+   latest migration exactly like Supabase would, then runs the assertion suite. The latest
+   file is detected automatically so a new migration cannot silently escape testing.
+3. **Fresh-install path** — applies the generated full-chain `supabase/schema.sql` and
+   re-checks the core guarantees. The root `npm test` first verifies that this snapshot is
+   byte-for-byte current with the ordered migration history.
 
 Covered guarantees:
 
 - The first trusted server-provisioned account becomes bootstrap Admin; anonymous visitors never get profiles.
 - Public Auth sign-up and anonymous-to-permanent conversion are rejected by the database.
 - A form submitter remains a CRM client without an Auth account and can still submit anonymously.
-- Admin Team Management placeholders are claimed by trusted Auth Admin provisioning, producing a real employee login-linked profile.
+- Admin Team Management placeholders are claimed by trusted Auth Admin provisioning, producing a real employee login-linked profile with all enhanced-profile columns and temporary-password enforcement.
+- The enhanced profile RPC is owner-only; password flags cannot be cleared for another user; team deletion removes the Profile and Auth user atomically while nullable attribution foreign keys preserve business rows.
 - Clients: no projects/tasks/notifications, staff-directory hidden, cannot modify other
   submissions, cannot be assigned to projects (blocked at the database, not only the UI),
   see only their own linked submissions.
@@ -56,7 +58,8 @@ Covered guarantees:
   an employee, and watch the employee's effective permissions change immediately
   (including gaining the ability to delete a project).
 - Guard rails: users without `role.create` / `role.assign_permissions` / `employee.manage`
-  are rejected by the RPCs.
+  are rejected by the RPCs; `workspace.access` alone does not expose the team or RBAC catalogs.
+- Legacy intake attachment rows and storage objects follow `submission.view` / `submission.edit`, matching dynamic-form submission access.
 - **Checkbox UI contract** — the exact sequence the "Roles & permissions" admin UI
   performs, logged in as different roles:
   - `list_permissions()` (the checkbox catalog) returns every group the UI renders.
