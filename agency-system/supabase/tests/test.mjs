@@ -8,13 +8,13 @@ const supabaseDir = join(here, '..')
 
 const sanitize = (sql) => sql.replace(/^create extension if not exists pgcrypto;$/m, '-- pgcrypto stripped for PGlite test (gen_random_uuid is core in PG16)')
 
-// Upgrade path: every migration before the one under test reproduces the
-// previous production state; then the migration under test is applied on top.
-const MIGRATION_UNDER_TEST = '20260817000000'
+// Upgrade path: every migration before the latest reproduces the previous
+// production state; then the latest migration is applied on top. Keeping this
+// automatic prevents a newly added migration from silently escaping the suite.
 const migrationFiles = readdirSync(join(supabaseDir, 'migrations')).filter((file) => file.endsWith('.sql')).sort()
-const migrationFile = migrationFiles.find((file) => file.startsWith(MIGRATION_UNDER_TEST))
-if (!migrationFile) throw new Error(`Migration ${MIGRATION_UNDER_TEST} not found`)
-const priorMigrations = migrationFiles.filter((file) => file < migrationFile).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
+const migrationFile = migrationFiles.at(-1)
+if (!migrationFile) throw new Error('No migrations found')
+const priorMigrations = migrationFiles.slice(0, -1).map((file) => sanitize(readFileSync(join(supabaseDir, 'migrations', file), 'utf8')))
 const migration = sanitize(readFileSync(join(supabaseDir, 'migrations', migrationFile), 'utf8'))
 const freshSchema = sanitize(readFileSync(join(supabaseDir, 'schema.sql'), 'utf8'))
 
@@ -127,10 +127,12 @@ async function runSuite(db, ids, label) {
   const pAlice = await scalar(db, 'select role, status from public.profiles where id = $1', [alice])
   ok(`${label}: trusted first user becomes active bootstrap admin`, pAlice?.role === 'admin' && pAlice?.status === 'active', JSON.stringify(pAlice))
   ok(`${label}: anonymous visitor has no profile`, (await scalar(db, 'select count(*)::int n from public.profiles where id = $1', [anonVisitor])).n === 0)
-  const pBob = await scalar(db, 'select role from public.profiles where id = $1', [bob])
+  const pBob = await scalar(db, 'select role, must_change_password from public.profiles where id = $1', [bob])
   ok(`${label}: Admin-provisioned team account becomes employee`, pBob?.role === 'employee', pBob?.role)
-  const pErin = await scalar(db, 'select role from public.profiles where id = $1', [erin])
+  ok(`${label}: Admin-provisioned account must replace its temporary password`, pBob?.must_change_password === true)
+  const pErin = await scalar(db, 'select role, must_change_password from public.profiles where id = $1', [erin])
   ok(`${label}: Admin can provision a Manager without changing RBAC architecture`, pErin?.role === 'manager', pErin?.role)
+  ok(`${label}: bootstrap Admin is not incorrectly forced through the team-account password flow`, pAlice?.role === 'admin' && (await scalar(db, 'select must_change_password v from public.profiles where id = $1', [alice])).v === false)
   let existingAccountAuthUpdateWorks = true
   try {
     await db.query(`update auth.users set raw_user_meta_data = raw_user_meta_data || '{"auth_refresh_test":true}'::jsonb where id = $1`, [bob])
@@ -138,6 +140,47 @@ async function runSuite(db, ids, label) {
     existingAccountAuthUpdateWorks = false
   }
   ok(`${label}: existing accounts remain usable by normal Auth update flows`, existingAccountAuthUpdateWorks)
+
+  // The profile page's enhanced RPC exists, updates only the caller, and cannot
+  // be used to clear another account's temporary-password flag.
+  await asUser(db, bob)
+  const updatedOwnProfile = (await db.query(
+    `select * from public.update_own_enhanced_profile(
+      $1, 'Bob Profile', '+1 555 0100', '+1 555 0101', 'Profile bio', 'Designer',
+      'Branding, UI', 'Five years', 'Project Alpha', 'Certified', 'Remote',
+      'https://portfolio.test', 'https://linkedin.test/bob', null, null, null,
+      null, 'https://bob.test', '{"github":"https://github.test/bob"}'::jsonb, null
+    )`, [bob],
+  )).rows[0]
+  ok(`${label}: enhanced profile RPC persists the existing profile form fields`,
+    updatedOwnProfile?.full_name === 'Bob Profile'
+      && updatedOwnProfile?.skills === 'Branding, UI'
+      && updatedOwnProfile?.other_social_links?.github === 'https://github.test/bob')
+  const updateOtherProfileBlocked = await expectError(db, () => db.query(
+    `select * from public.update_own_enhanced_profile(
+      $1, 'Hacked', null, null, null, null, null, null, null, null, null,
+      null, null, null, null, null, null, null, '{}'::jsonb, null
+    )`, [alice],
+  ))
+  ok(`${label}: enhanced profile RPC rejects updates to another profile`, updateOtherProfileBlocked)
+  const clearOtherPasswordFlagBlocked = await expectError(db, () => db.query(`select public.mark_password_changed($1)`, [erin]))
+  ok(`${label}: password flag RPC rejects a caller-supplied different user id`, clearOtherPasswordFlagBlocked)
+  await db.query(`select public.mark_password_changed($1)`, [bob])
+  ok(`${label}: user can clear their own temporary-password flag`, (await scalar(db, 'select must_change_password v from public.profiles where id = $1', [bob])).v === false)
+
+  await asUser(db, alice)
+  const profileOnlyEmailChangeBlocked = await expectError(db, () => db.query(
+    `select public.admin_update_team_member($1, p_email := 'drifted@agency.test')`, [bob],
+  ))
+  ok(`${label}: login profile email cannot drift from Supabase Auth`, profileOnlyEmailChangeBlocked)
+  await superUser(db)
+  await db.query(`update auth.users set email = 'bob.updated@agency.test' where id = $1`, [bob])
+  const synchronizedEmail = await scalar(db,
+    `select p.email profile_email, u.email auth_email
+     from public.profiles p join auth.users u on u.id = p.id where p.id = $1`, [bob],
+  )
+  ok(`${label}: trusted Auth email update synchronizes the profile`, synchronizedEmail.profile_email === 'bob.updated@agency.test' && synchronizedEmail.auth_email === 'bob.updated@agency.test')
+
   const publicSignupBlocked = await expectError(db, () => addUser(db, 'visitor@public.test'))
   ok(`${label}: public visitor cannot create an account by calling Auth directly`, publicSignupBlocked)
   const anonymousConversionBlocked = await expectError(db, () => db.query(
@@ -145,6 +188,21 @@ async function runSuite(db, ids, label) {
     [anonVisitor],
   ))
   ok(`${label}: visitor cannot convert an anonymous form session into an account`, anonymousConversionBlocked)
+
+  await asUser(db, alice)
+  await db.query(`select public.admin_create_team_member('remove-me@agency.test', 'Remove Me')`)
+  await superUser(db)
+  const removableUser = await addUser(db, 'remove-me@agency.test', { fullName: 'Remove Me', adminProvisioned: true })
+  await asUser(db, alice)
+  await db.query(`select public.admin_delete_team_member($1)`, [removableUser])
+  await superUser(db)
+  const removedAccount = await scalar(db,
+    `select
+       (select count(*)::int from public.profiles where id = $1) profile_count,
+       (select count(*)::int from auth.users where id = $1) auth_count`,
+    [removableUser],
+  )
+  ok(`${label}: team deletion removes both profile and Auth account atomically`, removedAccount.profile_count === 0 && removedAccount.auth_count === 0)
 
   // Admin sets up a CRM client + project, erin becomes manager.
   await asUser(db, alice)
@@ -154,10 +212,35 @@ async function runSuite(db, ids, label) {
   const project = (await db.query(`select id from public.projects limit 1`)).rows[0]
   await db.query(`select public.set_user_role($1, 'manager'::public.app_role)`, [erin])
 
+  const attributionPlaceholder = (await db.query(
+    `select * from public.admin_create_team_member('attribution@agency.test', 'Attribution Owner')`,
+  )).rows[0]
+  await superUser(db)
+  await db.query(`insert into public.employee_roles (key, name, created_by) values ('preserved_role', 'Preserved role', $1)`, [attributionPlaceholder.id])
+  await db.query(`insert into public.tasks (title, project_id, created_by) values ('Preserved task', $1, $2)`, [project.id, attributionPlaceholder.id])
+  await asUser(db, alice)
+  await db.query(`select public.admin_delete_team_member($1)`, [attributionPlaceholder.id])
+  await superUser(db)
+  const preservedAttribution = await scalar(db,
+    `select
+       (select count(*)::int from public.tasks where title = 'Preserved task' and created_by is null) task_count,
+       (select count(*)::int from public.employee_roles where key = 'preserved_role' and created_by is null) role_count`,
+  )
+  ok(`${label}: nullable attribution FKs preserve business rows when a profile is removed`, preservedAttribution.task_count === 1 && preservedAttribution.role_count === 1)
+
   // Form submission flow: anonymous submit creates a CLIENT row, never an employee.
   const anonIntakeId = crypto.randomUUID()
   await asUser(db, anonVisitor, 'anon')
   await db.query(`insert into public.intake_forms (id, service_type, service_types, contact_name, contact_email, company_name, data) values ($1, 'logo_design', array['logo_design'], 'Dina Founder', 'dina@newco.test', 'NewCo', '{}'::jsonb)`, [anonIntakeId])
+  await db.query(
+    `insert into public.intake_attachments (intake_id, name, storage_path, uploaded_by)
+     values ($1, 'brief.pdf', $2, $3)`,
+    [anonIntakeId, `${anonVisitor}/${anonIntakeId}/brief.pdf`, anonVisitor],
+  )
+  await db.query(
+    `insert into storage.objects (bucket_id, name, owner_id) values ('intake-files', $1, $2)`,
+    [`${anonVisitor}/${anonIntakeId}/brief.pdf`, anonVisitor],
+  )
   await db.query(`select public.submit_intake_form($1)`, [anonIntakeId])
   await superUser(db)
   const newcoClient = (await db.query(`select id, email from public.clients where email = 'dina@newco.test'`)).rows[0]
@@ -232,6 +315,8 @@ async function runSuite(db, ids, label) {
   await asUser(db, bob)
   ok(`${label}: active employee sees assigned project`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 1)
   ok(`${label}: active employee sees notifications`, (await scalar(db, 'select count(*)::int n from public.notifications')).n >= 1)
+  ok(`${label}: submission.view includes legacy intake attachment metadata`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 1)
+  ok(`${label}: submission.view includes legacy intake file storage reads`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 1)
 
   await asUser(db, alice)
   await db.query(`select public.set_user_status($1, 'inactive')`, [bob])
@@ -269,7 +354,7 @@ async function runSuite(db, ids, label) {
       (select count(*)::int from public.clients) clients,
       (select count(*)::int from public.employee_roles) roles,
       (select count(*)::int from public.intake_forms) intakes`)
-  ok(`${label}: admin retains full access`, counts.profiles >= 4 && counts.projects === 3 && counts.clients === 2 && counts.roles === 1 && counts.intakes === 1, JSON.stringify(counts))
+  ok(`${label}: admin retains full access`, counts.profiles >= 4 && counts.projects === 3 && counts.clients === 2 && counts.roles >= 2 && counts.intakes === 1, JSON.stringify(counts))
 
   await asUser(db, erin)
   ok(`${label}: manager keeps full portfolio access`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 3)
@@ -347,6 +432,11 @@ async function runPermissionSuite(db, ids, label) {
   await asUser(db, bob)
   const bobPerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
   ok(`${label}: bob gains project.delete after role assignment`, bobPerms.includes('project.delete'))
+  ok(`${label}: workspace.access alone does not expose the employee directory`, (await scalar(db, `select count(*)::int n from public.profiles`)).n === 1)
+  ok(`${label}: RBAC catalog tables require their explicit view permissions`,
+    (await scalar(db, `select count(*)::int n from public.permissions`)).n === 0
+      && (await scalar(db, `select count(*)::int n from public.app_roles`)).n === 0
+      && (await scalar(db, `select count(*)::int n from public.role_permissions`)).n === 0)
   const bobDeletes = await db.query(`delete from public.projects where name = 'Second Project'`).then((r) => r.affectedRows ?? 0).catch(() => -1)
   ok(`${label}: bob CAN delete a project once granted the permission`, bobDeletes > 0)
 
@@ -777,7 +867,7 @@ async function runNotificationSuite(db, ids, label) {
 }
 
 async function main() {
-  console.log('=== Path A: prior migrations + admin-only account migration (upgrade path) ===')
+  console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
@@ -791,7 +881,9 @@ async function main() {
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
   const dbB = await makeDb()
-  await dbB.exec(freshSchema)
+  // Execute the generated full-chain snapshot with transaction boundaries in the
+  // same way as psql/Supabase SQL Editor (required after ALTER TYPE ... ADD VALUE).
+  await execMigrationLikePsql(dbB, freshSchema)
   const aliceB = await addUser(dbB, 'admin@fresh.test', { adminProvisioned: true, fullName: 'Fresh Admin' })
   const carolClient = crypto.randomUUID()
   await asUser(dbB, aliceB)
@@ -807,8 +899,9 @@ async function main() {
   const employeePlaceholder = (await dbB.query(`select * from public.admin_create_team_member('employee@fresh.test', 'Fresh Employee')`)).rows[0]
   await superUser(dbB)
   const employeeB = await addUser(dbB, 'employee@fresh.test', { adminProvisioned: true, fullName: 'Fresh Employee' })
-  const employeeRow = (await dbB.query('select role, full_name from public.profiles where id = $1', [employeeB])).rows[0]
+  const employeeRow = (await dbB.query('select role, full_name, must_change_password, other_social_links from public.profiles where id = $1', [employeeB])).rows[0]
   ok('fresh: Admin Team Management provisions an employee Auth account', employeeRow?.role === 'employee' && employeeRow?.full_name === 'Fresh Employee')
+  ok('fresh: enhanced profile columns and temporary-password state are installed', employeeRow?.must_change_password === true && employeeRow?.other_social_links && typeof employeeRow.other_social_links === 'object')
   ok('fresh: claimed placeholder does not remain as a second profile', (await scalar(dbB, 'select count(*)::int n from public.profiles where id = $1', [employeePlaceholder.id])).n === 0)
 
   // Fresh installs include the dynamic form builder end to end.

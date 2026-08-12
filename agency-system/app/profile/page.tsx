@@ -5,7 +5,6 @@ import { Plus, Shield, Camera, Mail, Phone, MapPin, Briefcase, Award, BookOpen, 
 import { useAuth } from '@/contexts/auth-context'
 import {
   getSocialLinks,
-  markPasswordChanged,
   updateOwnEnhancedProfile,
   uploadTeamAvatar,
 } from '@/lib/supabase/database'
@@ -159,8 +158,7 @@ export default function UserProfilePage() {
       setMessage('Password changed successfully')
       setCurrentPassword(''); setNewPassword(''); setConfirmPassword('')
       setShowPasswordForm(false)
-      const changed = await markPasswordChanged(user.id)
-      if (!changed.error) setMustChangePassword(false)
+      setMustChangePassword(false)
     }
     setSaving(false)
   }

@@ -4,25 +4,40 @@
 
 Create a Supabase project, then copy `.env.local.example` to `.env.local` and add the project URL and public anonymous key. Do not use the `service_role` key in browser environment variables.
 
-## 2. Apply the schema
+## 2. Authoritative schema and migration order
 
-Use either approach:
+`supabase/migrations/*.sql`, sorted by the 14-digit filename prefix, is the **only
+authoritative database source**. Historical migration files are not edited after they have
+been deployed; corrections are added as a later migration.
 
-- Paste `supabase/schema.sql` into the Supabase SQL Editor and run it once.
-- Use the Supabase CLI to apply `supabase/migrations/20260808000000_secure_roles_and_projects.sql`.
+`supabase/schema.sql` is a generated, complete-chain snapshot for a fresh project. Do not
+edit it directly:
 
-The schema is safe for an existing early Agency OS database: it replaces permissive development policies, converts legacy role values, backfills profiles for real Auth users, and promotes the oldest real account only when no Admin exists.
+```bash
+npm run db:schema:generate  # rebuild after adding a migration
+npm run db:schema:check     # fail if the snapshot has drifted
+```
 
-If you already applied an earlier version of the schema, apply the newer migrations in
-order. In particular `20260809000000_user_employee_architecture.sql` adds the `client`
-account type, `20260810000000_role_permission_system.sql` installs the granular
-role/permission model described below, and `20260811000000_dynamic_form_builder.sql`
-installs the dynamic form builder (`form_templates`, `form_questions`, `form_submissions`,
-`form_submission_answers`, `form_submission_attachments`, the `form.manage` permission,
-the `submit_dynamic_form` / `duplicate_form_template` / `reorder_form_questions` RPCs,
-and the private `form-files` storage bucket). Migration
-`20260815000000_admin_only_account_creation.sql` closes public sign-up and restricts
-permanent Auth provisioning to the Admin-controlled Team Management flow.
+Use the setup path appropriate to the database:
+
+- **Fresh Supabase project:** paste `supabase/schema.sql` into the SQL Editor and run it.
+- **Existing project:** apply every unapplied file from `supabase/migrations/` in filename
+  order, preferably through the Supabase CLI migration workflow. Do not run the full fresh
+  snapshot over an already migrated production project.
+
+The ordered history upgrades early Agency OS databases, replaces permissive development
+policies, converts legacy role values, and backfills profiles for real Auth users. Major
+milestones include the user/employee architecture (`20260809000000`), granular RBAC
+(`20260810000000`), dynamic forms (`20260811000000`), Team Management
+(`20260813000000`), portfolio (`20260814000000`), closed account provisioning
+(`20260815000000`), enhanced profiles (`20260816000000`), notifications
+(`20260817000000`), and the schema/profile/auth consistency fixes (`20260818000000`).
+
+The final consistency migration installs the enhanced-profile RPC used by the application,
+secures the password-change flag, makes temporary-password enforcement effective for newly
+provisioned team accounts, prevents profile e-mail drift from Auth, keeps Auth/profile
+deletion atomic, repairs attribution foreign keys, fills missing FK indexes, and aligns the
+affected RLS policies with explicit permissions.
 
 ## 3. Authentication settings
 
@@ -34,25 +49,20 @@ In **Authentication → URL Configuration**:
 
 Public sign-up must remain disabled. Apply `20260815000000_admin_only_account_creation.sql`, then turn **Authentication → Providers → Email → Allow new users to sign up** OFF. Keep Anonymous Sign-ins enabled for public forms. The database guard also rejects direct sign-up requests and anonymous-to-permanent conversion if the dashboard setting is accidentally enabled.
 
-Existing installations keep their current Admin. For a fresh empty database, use `npm run bootstrap:admin` once with the documented bootstrap environment variables. Afterwards, every internal Auth user is created by an authenticated Admin from **Administration → Team Management**. The protected server route requires `SUPABASE_SERVICE_ROLE_KEY`; keep that key server-only and never expose it through a `NEXT_PUBLIC_*` variable.
+Existing installations keep their current Admin. For a fresh empty database, use `npm run bootstrap:admin` once with the documented bootstrap environment variables. Afterwards, every internal Auth user is created by an authenticated Admin from **Administration → Team Management**. Newly provisioned team accounts are marked `must_change_password = true` until the owner replaces the temporary password; deleting a team member removes both the profile and matching Auth user transactionally. The protected Team Management create/e-mail-update route requires `SUPABASE_SERVICE_ROLE_KEY`; keep that key server-only and never expose it through a `NEXT_PUBLIC_*` variable.
 
 ## Security model
 
-RLS is enabled for:
+RLS is enabled for every application table:
 
-- `profiles`
-- `employee_roles`
-- `app_roles`
-- `permissions`
-- `role_permissions`
-- `clients`
-- `projects`
-- `project_members`
-- `tasks`
-- `files`
-- `interactions`
-- `comments`
-- `notifications`
+- identity/access: `profiles`, `employee_roles`, `app_roles`, `permissions`, `role_permissions`
+- operations: `clients`, `projects`, `project_members`, `tasks`, `files`, `interactions`, `comments`, `notifications`
+- legacy intake: `intake_forms`, `intake_projects`, `intake_attachments`
+- dynamic forms: `form_templates`, `form_questions`, `form_submissions`, `form_submission_answers`, `form_submission_attachments`
+- public portfolio: `portfolio_categories`, `portfolio_projects`, `portfolio_project_images`
+
+Storage object policies separately protect `project-files`, `intake-files`, `form-files`,
+`portfolio-images`, and `avatars`.
 
 ## Roles & permissions (granular RBAC)
 
@@ -81,11 +91,11 @@ Project/portfolio reads still follow membership: `can_access_project` requires
 `has_permission('project.view')` plus either `project.view_all` (Admin/Manager) or a
 `project_members` row (Employee).
 
-The `client` account type is denied by default: management helpers only resolve for active Admin/Manager profiles, project membership is restricted to active team members, and profile visibility is staff-or-self. Clients only read their own profile and the intake submissions linked to their CRM record.
+The `client` account type is denied by default: management helpers only resolve for active authorized profiles, project membership is restricted to active team members, and directory visibility requires `employee.view` (owners can always read their own profile). Clients only read their own profile and the intake submissions linked to their CRM record.
 
 Every access helper is status-aware: setting `profiles.status = 'inactive'` immediately revokes all workspace reads and writes, including notifications and previously uploaded files.
 
-Only Admins can call `set_user_role`, `set_user_status`, `set_user_employee_role`, and `set_user_client_link`. Profile owners use `update_own_profile`, which cannot change role, status, or email. The final active Admin cannot demote or deactivate themself. Job roles in `employee_roles` are Admin-managed rows — create them from the Admin dashboard instead of editing code.
+Only users with `employee.manage` can call `set_user_role`, `set_user_status`, `set_user_employee_role`, and `set_user_client_link` (the default matrix grants it only to Admin). Profile owners use `update_own_profile` or `update_own_enhanced_profile`; neither can change role, status, or email. The final active Admin cannot demote or deactivate themself. Job roles in `employee_roles` are Admin-managed rows — create them from the Admin dashboard instead of editing code.
 
 ## Private file storage
 
@@ -97,6 +107,6 @@ The migration creates a private `project-files` bucket. Objects use this path fo
 
 Storage policies validate the project UUID in the first path segment with the same project-access function used by table RLS.
 
-## No seeded records
+## Seeded configuration only
 
-The schema creates no example users, clients, projects, assignments, tasks, files, or notifications. All records visible in the application are real workspace records.
+The schema seeds required system configuration (default roles, permissions, role grants, and portfolio categories). It creates no example users, clients, projects, assignments, tasks, files, submissions, or notifications. All business records visible in the application are real workspace records.
