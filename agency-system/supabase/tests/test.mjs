@@ -1505,7 +1505,7 @@ async function runSubmissionConversionSuite(db, ids, label) {
   await asUser(db, alice)
   const project = (await db.query(
     `select * from public.convert_submission_to_project(
-       $1, null, $2::jsonb, $3, $4, 'Website', 'high', 'review', 2, 'Planning',
+       $1, null, $2::jsonb, $3, $4, 'Website', 'high', 'in-review', 2, 'Planning',
        '2026-08-15', '2026-09-30', 25000, 'USD', $5, $6, array[$5]::uuid[]
      )`,
     [
@@ -1524,7 +1524,7 @@ async function runSubmissionConversionSuite(db, ids, label) {
   )).rows[0]
   ok(`${label}: conversion creates configured project and links it to its client`,
     project?.name === 'Controlled Website Project' && project?.type === 'Website' && project?.priority === 'high' &&
-    project?.status === 'review' && project?.phase === 2 && project?.phase_name === 'Planning' &&
+    project?.status === 'in-review' && project?.phase === 2 && project?.phase_name === 'Planning' &&
     project?.owner_id === bob && project?.manager_id === erin && !!project?.client_id)
   ok(`${label}: project preserves immutable original submission reference`, project?.source_submission_id === submission.id)
   ok(`${label}: submission links back to project and records converter/timestamp`,
@@ -1565,6 +1565,43 @@ async function runSubmissionConversionSuite(db, ids, label) {
   const convertedStatusMutationFails = await expectError(db, () =>
     db.query(`select public.update_form_submission_status($1, 'approved')`, [submission.id]))
   ok(`${label}: converted submissions cannot return to an earlier workflow status`, convertedStatusMutationFails)
+
+  // ── Session 12: project lifecycle, health, and ownership guarantees ─────
+  const defaultHealth = await scalar(db, `select health from public.projects where id = $1`, [project.id])
+  ok(`${label}: projects default to on-track health`, defaultHealth?.health === 'on-track')
+
+  const badHealthFails = await expectError(db, () =>
+    db.query(`update public.projects set health = 'exploded' where id = $1`, [project.id]))
+  ok(`${label}: invalid project health is rejected by the database`, badHealthFails)
+
+  await db.query(`update public.projects set status = 'ready-for-delivery' where id = $1`, [project.id])
+  const afterValidMove = await scalar(db, `select status from public.projects where id = $1`, [project.id])
+  ok(`${label}: valid lifecycle transition is accepted (in-review → ready-for-delivery)`,
+    afterValidMove?.status === 'ready-for-delivery')
+
+  const skippedStageFails = await expectError(db, () =>
+    db.query(`update public.projects set status = 'completed' where id = $1`, [project.id]))
+  const afterInvalidMove = await scalar(db, `select status from public.projects where id = $1`, [project.id])
+  ok(`${label}: skipping lifecycle stages is rejected (ready-for-delivery → completed)`,
+    skippedStageFails && afterInvalidMove?.status === 'ready-for-delivery')
+
+  await db.query(`update public.projects set status = 'delivered' where id = $1`, [project.id])
+  await db.query(`update public.projects set status = 'completed' where id = $1`, [project.id])
+  const completedRow = await scalar(db, `select status, completed_date from public.projects where id = $1`, [project.id])
+  ok(`${label}: delivered → completed is valid and stamps completed_date`,
+    completedRow?.status === 'completed' && completedRow?.completed_date !== null)
+
+  const anyClientId = (await db.query(`select id from public.clients limit 1`)).rows[0]?.id
+  const directProject = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id)
+     values ('Ownership Guarantee', $1, 'planned', $2, $3) returning id`,
+    [anyClientId, bob, erin]
+  )).rows[0]
+  const leadAssignments = (await db.query(
+    `select user_id from public.project_members where project_id = $1`, [directProject.id]
+  )).rows.map((row) => row.user_id)
+  ok(`${label}: owner and manager are automatically project members`,
+    leadAssignments.includes(bob) && leadAssignments.includes(erin))
 
   // Explicit Admin automation remains available as an exceptional opt-in.
   const autoForm = (await db.query(

@@ -24,8 +24,13 @@ const PRIORITY_LABELS: Record<ProjectPriority, string> = {
   urgent: 'Urgent',
 }
 const STATUS_LABELS: Record<ProjectStatus, string> = {
+  draft: 'Draft',
+  planned: 'Planned',
   active: 'Active',
-  review: 'In review',
+  'waiting-for-client': 'Waiting for client',
+  'in-review': 'In review',
+  'ready-for-delivery': 'Ready for delivery',
+  delivered: 'Delivered',
   completed: 'Completed',
   'on-hold': 'On hold',
   cancelled: 'Cancelled',

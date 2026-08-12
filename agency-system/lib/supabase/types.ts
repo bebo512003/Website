@@ -1,8 +1,19 @@
 export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]
 export type AppRole = 'admin' | 'manager' | 'employee' | 'client'
 export type ProfileStatus = 'active' | 'inactive'
-export type ProjectStatus = 'active' | 'review' | 'completed' | 'on-hold' | 'cancelled'
+export type ProjectStatus =
+  | 'draft'
+  | 'planned'
+  | 'active'
+  | 'waiting-for-client'
+  | 'in-review'
+  | 'ready-for-delivery'
+  | 'delivered'
+  | 'completed'
+  | 'on-hold'
+  | 'cancelled'
 export type ProjectPriority = 'low' | 'medium' | 'high' | 'urgent'
+export type ProjectHealth = 'on-track' | 'at-risk' | 'off-track' | 'blocked'
 export type TaskStatus = 'todo' | 'inprogress' | 'review' | 'done'
 export type TaskPriority = 'high' | 'medium' | 'low'
 
@@ -115,6 +126,7 @@ export type ProjectRow = {
   type: string
   priority: ProjectPriority
   status: ProjectStatus
+  health: ProjectHealth
   phase: number
   phase_name: string | null
   progress: number
@@ -456,7 +468,7 @@ export interface Database {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] }]>
       projects: TableDefinition<ProjectRow, {
-        id?: string; name: string; description?: string | null; client_id: string; type?: string; priority?: ProjectPriority; status?: ProjectStatus; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; owner_id?: string | null; manager_id?: string | null; source_submission_id?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
+        id?: string; name: string; description?: string | null; client_id: string; type?: string; priority?: ProjectPriority; status?: ProjectStatus; health?: ProjectHealth; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; owner_id?: string | null; manager_id?: string | null; source_submission_id?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ProjectRow>, [
         { foreignKeyName: 'projects_client_id_fkey'; columns: ['client_id']; isOneToOne: false; referencedRelation: 'clients'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_owner_id_fkey'; columns: ['owner_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },

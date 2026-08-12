@@ -199,6 +199,31 @@ export async function createProject(project: ProjectInsert): Promise<Result<Proj
   const { data, error } = await supabase.from('projects').insert(project).select().single()
   return error ? fail(null, error.message) : ok(data)
 }
+/**
+ * Creates a project and assigns its initial team in one go. The owner and
+ * manager are added to `project_members` automatically by a database trigger
+ * (`sync_project_lead_membership`), so only the additional team members are
+ * inserted here — avoiding duplicate-key conflicts.
+ */
+export async function createProjectWithTeam(
+  project: ProjectInsert,
+  teamMemberIds: string[] = []
+): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.from('projects').insert(project).select().single()
+  if (error) return fail(null, error.message)
+  if (!data) return fail(null, 'The project was not created.')
+
+  const leads = new Set([project.owner_id, project.manager_id].filter(Boolean))
+  const extras = teamMemberIds.filter((id) => Boolean(id) && !leads.has(id))
+  if (extras.length > 0) {
+    const { error: memberError } = await supabase
+      .from('project_members')
+      .insert(extras.map((userId) => ({ project_id: data.id, user_id: userId })))
+    if (memberError) return fail(data, memberError.message)
+  }
+  return ok(data)
+}
 export async function updateProject(id: string, updates: ProjectUpdate): Promise<Result<Project | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').update(updates).eq('id', id).select().single()

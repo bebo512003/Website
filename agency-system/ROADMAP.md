@@ -20,6 +20,7 @@
 - Legacy `/intake` system retired: Request a New Project goes only through Dynamic Forms (`/forms` → `/f/<slug>`); intake RPC, write policies, and notification trigger removed; historical tables kept read-only
 - Admin Submission Inbox (`/submissions`): full operational inbox with search, status/form filters, sorting, complete answer+file review using the stored question snapshots, a status workflow (New/Reviewing/Need Information/Qualified/Rejected/Approved/Converted/Archived), and reviewer/owner assignment
 - Submission Review Workflow (Session 10): full qualification and review system with internal review notes (`form_submission_notes`), audit events & timeline history (`form_submission_events`), authorized reviewer validation, reviewer notifications, qualification status progression, and strict RLS protecting internal notes and audit events from unauthorized staff and clients
+- Project Ownership, Status & Lifecycle (Session 12): explicit project Owner + Manager (always kept as project members by a database trigger, so ownership is visible and grants access), priority, deadline, team assignments, and a health indicator (`on-track` / `at-risk` / `off-track` / `blocked`). Projects follow a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — with a valid-transition state machine, a visual lifecycle tracker, one-click status moves, and team management on the project detail page
 
 ## Next priorities
 
