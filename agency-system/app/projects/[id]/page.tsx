@@ -15,6 +15,7 @@ import {
 } from '@/lib/tasks'
 import { CreateTaskModal } from '@/components/tasks/create-task-modal'
 import { TaskDetailModal } from '@/components/tasks/task-detail-modal'
+import { ProjectActivityTimeline } from '@/components/projects/project-activity-timeline'
 import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type Member = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
@@ -43,6 +44,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     progress: '0', phase: '1', phase_name: '', due_date: '', owner_id: '', manager_id: '',
   })
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null)
+  const [activityKey, setActivityKey] = useState(0)
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -71,6 +73,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     }
     setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || '')
     setLoading(false)
+    setActivityKey((key) => key + 1)
   }, [id])
 
   useEffect(() => { void load() }, [load])
@@ -316,6 +319,8 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           )
         })}</div>}
       </Panel>
+
+      <ProjectActivityTimeline key={activityKey} projectId={project.id} />
 
       {detailTask && (
         <TaskDetailModal

@@ -192,6 +192,32 @@ export type TaskActivityRow = {
   created_at: string
 }
 
+// ── Project activity (Session 14) ──────────────────────────────────────────
+// Project-level audit events, distinct from task-level events (task_activity).
+// Client-facing discussion lives in `comments` — never in this feed.
+export type ProjectActivityEventType =
+  | 'created'
+  | 'submission_converted'
+  | 'owner_changed'
+  | 'manager_changed'
+  | 'member_added'
+  | 'member_removed'
+  | 'status_changed'
+  | 'deadline_changed'
+  | 'file_uploaded'
+  | 'file_deleted'
+
+export type ProjectActivityRow = {
+  id: string
+  project_id: string
+  actor_id: string | null
+  event_type: ProjectActivityEventType
+  old_value: string | null
+  new_value: string | null
+  metadata: Json
+  created_at: string
+}
+
 /** One row of the list_task_assignees RPC: a valid task assignee candidate. */
 export type TaskAssigneeRow = {
   id: string
@@ -529,6 +555,12 @@ export interface Database {
         { foreignKeyName: 'task_activity_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
         { foreignKeyName: 'task_activity_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
       ]>
+      project_activity: TableDefinition<ProjectActivityRow, {
+        id?: string; project_id: string; actor_id?: string | null; event_type: ProjectActivityEventType; old_value?: string | null; new_value?: string | null; metadata?: Json; created_at?: string
+      }, Partial<ProjectActivityRow>, [
+        { foreignKeyName: 'project_activity_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'project_activity_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
       files: TableDefinition<FileRow, {
         id?: string; name: string; type?: FileRow['type']; size?: number; mime_type?: string | null; storage_path?: string | null; project_id?: string | null; client_id?: string | null; uploaded_by?: string | null; starred?: boolean; created_at?: string; updated_at?: string
       }, Partial<FileRow>, [
@@ -726,4 +758,7 @@ export type TaskActivity = TaskActivityRow & {
   actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
 }
 export type TaskAssignee = TaskAssigneeRow
+export type ProjectActivity = ProjectActivityRow & {
+  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
 export type FileWithProject = FileItem & { projects: Pick<Project, 'id' | 'name'> | null }

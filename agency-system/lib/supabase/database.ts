@@ -28,6 +28,7 @@ import type {
   ProfileStatus,
   Project,
   ProjectInsert,
+  ProjectActivity,
   ProjectMember,
   ProjectPriority,
   ProjectStatus,
@@ -542,6 +543,32 @@ export async function addTaskNote(taskId: string, note: string): Promise<Result<
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('add_task_note', { p_task_id: taskId, p_note: note })
   return error ? fail(null, error.message) : ok(data as unknown as TaskActivity | null)
+}
+
+const projectActivitySelect = '*, actor:profiles!project_activity_actor_id_fkey(id, full_name, email, avatar_url, job_title)'
+
+/** Project-level audit events for one project (creation, status, ownership,
+ * membership, files). Task events are fetched separately and merged in the
+ * unified timeline (see lib/project-activity.ts). */
+export async function getProjectActivity(projectId: string): Promise<Result<ProjectActivity[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('project_activity')
+    .select(projectActivitySelect)
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true })
+  return error ? fail([], error.message) : ok((data || []) as unknown as ProjectActivity[])
+}
+
+/** Every task-level event recorded across the tasks of one project. */
+export async function getProjectTaskActivity(projectId: string): Promise<Result<TaskActivity[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('task_activity')
+    .select(taskActivitySelect)
+    .eq('project_id', projectId)
+    .order('created_at', { ascending: true })
+  return error ? fail([], error.message) : ok((data || []) as unknown as TaskActivity[])
 }
 
 export async function createTask(task: TaskInsert): Promise<Result<Task | null>> {

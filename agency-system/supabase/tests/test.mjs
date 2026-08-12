@@ -1814,6 +1814,121 @@ async function runTaskManagementSuite(db, ids, label) {
   await superUser(db)
 }
 
+// ── Session 14: unified project activity & audit timeline ───────────────────
+// Proves the project_activity feed at the database layer: creation, submission
+// conversion, ownership/status/deadline changes, team membership, file
+// uploads/deletes, RLS scoping, and the append-only (unforgeable) guarantee.
+async function runProjectActivitySuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+  // rania is a regular employee (no project.view_all) created by the task
+  // management suite; she is never a member of the audit-test project.
+  const rania = (await db.query(`select id from public.profiles where email = 'rania@agency.test'`)).rows[0]?.id
+
+  // Build a source submission so "submission converted" can be attributed.
+  await asUser(db, alice)
+  const paForm = (await db.query(
+    `insert into public.form_templates (slug, title, status) values ('pa-audit-form', 'Audit Form', 'published') returning id`
+  )).rows[0]
+  const paEmailQ = (await db.query(
+    `insert into public.form_questions (form_id, question_type, label, required, map_to, position)
+     values ($1, 'short_text', 'E-mail', true, 'email', 1) returning id`, [paForm.id]
+  )).rows[0].id
+  await asUser(db, anonVisitor, 'anon')
+  const paSub = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [
+    paForm.id, JSON.stringify({ [paEmailQ]: 'audit@conversion.test' }),
+  ])).rows[0]
+  await asUser(db, alice)
+  const paClientId = paSub.client_id
+  ok(`${label}: audit submission auto-creates its CRM client`, !!paClientId)
+
+  // Project created directly from a submission (records 'created' + 'submission_converted').
+  const proj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id, source_submission_id, due_date)
+     values ('Audit Timeline', $1, 'active', $2, $3, $4, current_date + 10) returning id`,
+    [paClientId, alice, erin, paSub.id]
+  )).rows[0]
+
+  const createdEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'created'`, [proj.id])).rows
+  ok(`${label}: project creation records a 'created' event with the actor`,
+    createdEvents.length === 1 && createdEvents[0].actor_id === alice)
+  const convertedEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'submission_converted'`, [proj.id])).rows
+  ok(`${label}: a project created from a submission records 'submission_converted'`,
+    convertedEvents.length === 1 && convertedEvents[0].metadata?.source_submission_id === paSub.id)
+
+  // Status change (active → in-review).
+  await db.query(`update public.projects set status = 'in-review' where id = $1`, [proj.id])
+  const statusEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'status_changed'`, [proj.id])).rows
+  ok(`${label}: status change is recorded with old/new values and the actor`,
+    statusEvents.length === 1 && statusEvents[0].old_value === 'active' && statusEvents[0].new_value === 'in-review')
+
+  // Deadline change.
+  await db.query(`update public.projects set due_date = current_date + 20 where id = $1`, [proj.id])
+  const deadlineEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'deadline_changed'`, [proj.id])).rows
+  ok(`${label}: deadline change is recorded with old and new dates`,
+    deadlineEvents.length === 1 && deadlineEvents[0].new_value === deadlineEvents[0].new_value && deadlineEvents[0].old_value !== deadlineEvents[0].new_value)
+
+  // Ownership & management changes.
+  await db.query(`update public.projects set owner_id = $1 where id = $2`, [bob, proj.id])
+  const ownerEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'owner_changed'`, [proj.id])).rows
+  ok(`${label}: owner change is recorded with old and new owner names`,
+    ownerEvents.length === 1 && ownerEvents[0].old_value && ownerEvents[0].new_value && ownerEvents[0].metadata?.new_owner_id === bob)
+
+  await db.query(`update public.projects set manager_id = null where id = $1`, [proj.id])
+  const managerEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'manager_changed'`, [proj.id])).rows
+  ok(`${label}: manager change is recorded (cleared manager)`,
+    managerEvents.length === 1 && managerEvents[0].new_value === null && managerEvents[0].old_value !== null)
+
+  // Team membership add/remove.
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [proj.id, rania, alice])
+  const addedEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'member_added' and metadata->>'user_id' = $2`, [proj.id, rania])).rows
+  ok(`${label}: adding a team member records a 'member_added' event`, addedEvents.length === 1 && addedEvents[0].new_value !== null)
+
+  await db.query(`delete from public.project_members where project_id = $1 and user_id = $2`, [proj.id, rania])
+  const removedEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'member_removed' and metadata->>'user_id' = $2`, [proj.id, rania])).rows
+  ok(`${label}: removing a team member records a 'member_removed' event`, removedEvents.length === 1 && removedEvents[0].old_value !== null)
+
+  // File upload / delete.
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('brief.pdf', 'pdf', 1024, $1, $2, $3)`, [`${proj.id}/brief.pdf`, proj.id, alice])
+  const uploadedEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'file_uploaded'`, [proj.id])).rows
+  ok(`${label}: file upload records a 'file_uploaded' event with the name`,
+    uploadedEvents.length === 1 && uploadedEvents[0].new_value === 'brief.pdf' && uploadedEvents[0].actor_id === alice)
+
+  await db.query(`delete from public.files where name = 'brief.pdf' and project_id = $1`, [proj.id])
+  const deletedEvents = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'file_deleted'`, [proj.id])).rows
+  ok(`${label}: file deletion records a 'file_deleted' event with the name`,
+    deletedEvents.length === 1 && deletedEvents[0].old_value === 'brief.pdf')
+
+  // The feed is append-only and unforgeable: no insert/update/delete policies.
+  const forgedInsertFails = await expectError(db, () => db.query(
+    `insert into public.project_activity (project_id, event_type, new_value) values ($1, 'status_changed', 'done')`, [proj.id]))
+  const activityUpdate = await db.query(`update public.project_activity set new_value = 'edited' where project_id = $1`, [proj.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  const activityDelete = await db.query(`delete from public.project_activity where project_id = $1`, [proj.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: project activity cannot be forged, edited, or deleted`, forgedInsertFails && activityUpdate === 0 && activityDelete === 0)
+
+  // RLS scoping: outsiders see no project_activity; members do.
+  await asUser(db, rania)
+  ok(`${label}: non-member employee sees no project activity (RLS)`,
+    (await scalar(db, `select count(*)::int n from public.project_activity where project_id = $1`, [proj.id])).n === 0)
+  await asUser(db, bob)
+  ok(`${label}: project member can read the full activity feed`,
+    (await scalar(db, `select count(*)::int n from public.project_activity where project_id = $1`, [proj.id])).n >= 9)
+
+  await superUser(db)
+}
+
 async function runStorageSecuritySuite(db, ids, label) {
   const { anonVisitor, alice, bob, carol } = ids
 
@@ -1925,6 +2040,7 @@ async function main() {
   await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
   await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
   await runTaskManagementSuite(dbA, idsA, 'upgrade')
+  await runProjectActivitySuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
