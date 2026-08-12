@@ -18,6 +18,7 @@
 - Roles & permissions enforcement (checkbox-driven capabilities actually open their management areas; employees cannot read submissions or client records unless granted; inactive users lose every permission)
 - Storage & file upload security (centralized bucket rules, strict MIME and extension whitelists, pre-upload UX validation, backend attachment verification, executable blocking, folder isolation, signed URLs, and orphaned object management)
 - Legacy `/intake` system retired: Request a New Project goes only through Dynamic Forms (`/forms` → `/f/<slug>`); intake RPC, write policies, and notification trigger removed; historical tables kept read-only
+- Admin Submission Inbox (`/submissions`): full operational inbox with search, status/form filters, sorting, complete answer+file review using the stored question snapshots, a status workflow (New/Reviewing/Need Information/Qualified/Rejected/Approved/Converted/Archived), and reviewer/owner assignment
 
 ## Next priorities
 

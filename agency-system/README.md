@@ -16,6 +16,7 @@ The application contains no seeded users or placeholder business records. All da
 - Admin-only creation of employee, manager, and additional Admin login accounts from Team Management
 - Admin controls for user roles, job roles, statuses, projects, and employee assignments
 - **Dynamic form builder**: admins create, publish, duplicate, reorder, disable, archive, and delete forms and their questions entirely from the website — respondents answer them at public `/f/<slug>` links
+- **Admin Submission Inbox** at `/submissions`: the operational inbox for every public form response with search, status/form filters, sorting, full answer & file review, a status workflow, and reviewer/owner assignment
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
 - Project and client create, read, update, and delete workflows
 - Project task workflow and progress updates
@@ -106,6 +107,34 @@ grantable to any role from *Roles & permissions*). To add a new question type la
 allow it in the `form_questions.question_type` CHECK + the `submit_dynamic_form`
 validation, register it in `lib/forms/question-types.ts`, and add a render branch in
 `components/forms/dynamic-form-renderer.tsx`.
+
+## Admin Submission Inbox
+
+`/submissions` (linked in the sidebar as **Submissions**) is the operational inbox for
+every public form response. It is permission-guarded by `submission.view`; reading a
+submission never rebuilds or mutates the stored data — each answer is rendered from the
+frozen per-question snapshot captured at submit time.
+
+- **List** every submission with its form name, client information, submission date,
+  current status, and reviewer/owner.
+- **Search** across respondent name/e-mail/phone, company, and form title.
+- **Filter** by workflow status and by form, and **sort** by newest / oldest / status.
+- **Open** any submission to see every answer next to its original question, plus any
+  submitted files (downloaded through temporary signed links from the private
+  `form-files` bucket).
+- **Workflow statuses** — New, Reviewing, Need Information, Qualified, Rejected,
+  Approved, Converted, Archived. New submissions start at **New**; changing status
+  requires `submission.edit` (via the `update_form_submission_status` RPC, which
+  validates the allowed set server-side).
+- **Reviewer/owner** — assign or clear the internal team member responsible, requiring
+  `submission.assign` (via the `assign_form_submission_reviewer` RPC).
+
+The workflow lives in migration `20260825000000_admin_submission_inbox.sql`, which also
+widens the `form_submissions.status` CHECK constraint and migrates any legacy
+`submitted` rows to `new`. The underlying submission storage (answers, question
+snapshots, attachments) is unchanged. Permissions: `submission.view` (read),
+`submission.edit` (status), `submission.assign` (ownership) — all granted to Admin and
+Manager by default.
 
 ## Public company portfolio
 

@@ -717,6 +717,32 @@ export async function getAllFormSubmissions(): Promise<Result<(import('./types')
   return error ? fail([], error.message) : ok((data || []) as unknown as (import('./types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[])
 }
 
+/** Submission inbox row: the submission joined to its form title and its
+ * current reviewer/owner (internal team member). */
+export type AdminSubmissionRow = import('./types').FormSubmission & {
+  form_templates?: { title: string; slug: string } | null
+  reviewer?: Pick<import('./types').Profile, 'id' | 'full_name' | 'email'> | null
+}
+
+export async function getAdminInboxSubmissions(): Promise<Result<AdminSubmissionRow[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_submissions')
+    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email)')
+    .order('submitted_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as AdminSubmissionRow[])
+}
+
+export async function getAdminInboxSubmission(id: string): Promise<Result<AdminSubmissionRow | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase
+    .from('form_submissions')
+    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email)')
+    .eq('id', id)
+    .maybeSingle()
+  return error ? fail(null, error.message) : ok(data as unknown as AdminSubmissionRow | null)
+}
+
 export async function getFormSubmissionDetails(submissionId: string): Promise<Result<{ answers: import('./types').FormSubmissionAnswer[]; attachments: import('./types').FormSubmissionAttachment[] }>> {
   if (!supabase) return fail({ answers: [], attachments: [] })
   const [answersResult, attachmentsResult] = await Promise.all([
@@ -728,9 +754,15 @@ export async function getFormSubmissionDetails(submissionId: string): Promise<Re
   return ok({ answers: answersResult.data || [], attachments: attachmentsResult.data || [] })
 }
 
-export async function updateFormSubmissionStatus(id: string, status: 'submitted' | 'archived'): Promise<Result<boolean>> {
+export async function updateFormSubmissionStatus(id: string, status: import('./types').SubmissionStatus): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
-  const { error } = await supabase.from('form_submissions').update({ status }).eq('id', id)
+  const { error } = await supabase.rpc('update_form_submission_status', { p_submission_id: id, p_status: status })
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function assignFormSubmissionReviewer(id: string, reviewerId: string | null): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.rpc('assign_form_submission_reviewer', { p_submission_id: id, p_reviewer_id: reviewerId })
   return error ? fail(false, error.message) : ok(true)
 }
 

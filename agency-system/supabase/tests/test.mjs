@@ -841,7 +841,7 @@ async function runDynamicFormSuite(db, ids, label) {
     [qType]: 'Logo',
     [qDeliverables]: ['Print', 'Web'],
   })])).rows[0]
-  ok(`${label}: anonymous visitor submits the dynamic form`, submitted?.status === 'submitted' && submitted?.respondent_name === 'Mona Founder')
+  ok(`${label}: anonymous visitor submits the dynamic form`, submitted?.status === 'new' && submitted?.respondent_name === 'Mona Founder')
 
   await superUser(db)
   const monaClient = (await db.query(`select id, email from public.clients where email = 'mona@demo.test'`)).rows[0]
@@ -853,6 +853,35 @@ async function runDynamicFormSuite(db, ids, label) {
     from public.form_submission_answers where submission_id = $1`, [submitted.id])
   ok(`${label}: answers stored with per-question snapshots`, answerRows.total === 4 && answerRows.named === 1 && answerRows.dropdown === 1, JSON.stringify(answerRows))
 
+  // ── Admin Submission Inbox workflow ────────────────────────────────
+  // Moving a submission through statuses and assigning a reviewer must never
+  // touch the stored answers, question snapshots or attachments.
+  await asUser(db, alice)
+  const reviewing = await scalar(db, `select public.update_form_submission_status($1, 'reviewing')`, [submitted.id])
+  ok(`${label}: admin moves a submission to Reviewing (submission.edit)`, reviewing?.update_form_submission_status === true)
+  const needsInfo = await scalar(db, `select public.update_form_submission_status($1, 'need_information')`, [submitted.id])
+  ok(`${label}: admin moves a submission to Need Information`, needsInfo?.update_form_submission_status === true)
+  const badStatusFails = await expectError(db, () => scalar(db, `select public.update_form_submission_status($1, 'hacked')`, [submitted.id]))
+  ok(`${label}: invalid status is rejected server-side`, badStatusFails)
+  await scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submitted.id, erin])
+  const reviewerRow = (await db.query(`select reviewer_id, reviewed_at from public.form_submissions where id = $1`, [submitted.id])).rows[0]
+  ok(`${label}: admin assigns a reviewer/owner (submission.assign)`, reviewerRow?.reviewer_id === erin && reviewerRow?.reviewed_at !== null)
+  const answersAfterWorkflow = await scalar(db, `select count(*)::int n from public.form_submission_answers where submission_id = $1`, [submitted.id])
+  const snapshotAfterWorkflow = await scalar(db, `select count(*)::int n from public.form_submission_answers where submission_id = $1 and question_snapshot ->> 'label' = 'Your full name'`, [submitted.id])
+  const attachmentsAfterWorkflow = await scalar(db, `select count(*)::int n from public.form_submission_attachments where submission_id = $1`, [submitted.id])
+  ok(`${label}: reviewing preserves every answer and question snapshot`, answersAfterWorkflow.n === 4 && snapshotAfterWorkflow.n === 1 && attachmentsAfterWorkflow.n === 0, JSON.stringify(answersAfterWorkflow))
+  await scalar(db, `select public.assign_form_submission_reviewer($1, null)`, [submitted.id])
+  const clearedReviewer = (await db.query(`select reviewer_id, reviewed_at from public.form_submissions where id = $1`, [submitted.id])).rows[0]
+  ok(`${label}: reviewer can be cleared (ownership released)`, clearedReviewer?.reviewer_id === null && clearedReviewer?.reviewed_at === null)
+
+  // Manager (submission.edit) can also move the workflow, but the change still
+  // leaves every answer intact.
+  await asUser(db, erin)
+  const managerStatus = await scalar(db, `select public.update_form_submission_status($1, 'approved')`, [submitted.id])
+  ok(`${label}: manager (submission.edit) can approve a submission`, managerStatus?.update_form_submission_status === true)
+  const answersForManager = await scalar(db, `select count(*)::int n from public.form_submission_answers where submission_id = $1`, [submitted.id])
+  ok(`${label}: manager review keeps all answers`, answersForManager.n === 4)
+
   // ── Read access ───────────────────────────────────────────────────
   await asUser(db, bob)
   ok(`${label}: employee without submission.view cannot read submissions`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 0)
@@ -860,6 +889,10 @@ async function runDynamicFormSuite(db, ids, label) {
   const employeeArchiveFails = await expectError(db, () => db.query(`update public.form_submissions set status = 'archived'`))
   const archiveRows = await scalar(db, `select count(*)::int n from public.form_submissions where status = 'archived'`)
   ok(`${label}: employee (no submission.edit) cannot archive submissions`, employeeArchiveFails || archiveRows.n === 0)
+  const employeeStatusFails = await expectError(db, () => scalar(db, `select public.update_form_submission_status($1, 'approved')`, [submitted.id]))
+  ok(`${label}: employee (no submission.edit) cannot move submission status via RPC`, employeeStatusFails)
+  const employeeAssignFails = await expectError(db, () => scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submitted.id, alice]))
+  ok(`${label}: employee (no submission.assign) cannot assign a reviewer via RPC`, employeeAssignFails)
 
   await asUser(db, anonVisitor, 'anon')
   ok(`${label}: submitter re-reads only their own submission`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 1)
@@ -1307,7 +1340,7 @@ async function main() {
   await asUser(dbB, anonVisitorB, 'anon')
   ok('fresh: published dynamic form is publicly readable', (await scalar(dbB, 'select count(*)::int n from public.form_templates')).n === 1)
   const freshSubmission = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'visitor@fresh.test' })])).rows[0]
-  ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'submitted' && freshSubmission?.respondent_email === 'visitor@fresh.test')
+  ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'new' && freshSubmission?.respondent_email === 'visitor@fresh.test')
   await asUser(dbB, aliceB)
   ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
   const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows

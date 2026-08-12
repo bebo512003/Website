@@ -327,10 +327,10 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     setDetailsCache((cache) => ({ ...cache, [submissionId]: result.data }))
   }
 
-  const setSubmissionStatus = async (submission: FormSubmission, status: 'submitted' | 'archived') => {
+  const setSubmissionStatus = async (submission: FormSubmission, status: import('@/lib/supabase/types').SubmissionStatus) => {
     const result = await updateFormSubmissionStatus(submission.id, status)
     if (result.error) return setError(result.error)
-    flash(status === 'archived' ? 'Response archived.' : 'Response restored.')
+    flash(status === 'archived' ? 'Response archived.' : 'Response restored to New.')
     await loadSubmissions()
   }
 
@@ -645,7 +645,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                             {can('submission.edit') && (
                               <div className="flex justify-end border-t border-border pt-3">
                                 {submission.status === 'archived' ? (
-                                  <button onClick={() => void setSubmissionStatus(submission, 'submitted')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
+                                  <button onClick={() => void setSubmissionStatus(submission, 'new')} className={secondaryButtonClassName}><ArchiveRestore className="h-4 w-4" /> Restore</button>
                                 ) : (
                                   <button onClick={() => void setSubmissionStatus(submission, 'archived')} className={secondaryButtonClassName}><Archive className="h-4 w-4" /> Archive response</button>
                                 )}

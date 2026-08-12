@@ -8,11 +8,7 @@ import { useAuth } from '@/contexts/auth-context'
 import { getClientFormSubmissions } from '@/lib/supabase/database'
 import type { ClientFormSubmission } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
-
-const statusLabels: Record<string, string> = {
-  submitted: 'Submitted',
-  archived: 'Archived',
-}
+import { SUBMISSION_STATUS_LABELS, submissionStatusStyle } from '@/lib/submissions'
 
 export default function ClientPortalPage() {
   const router = useRouter()
@@ -92,7 +88,6 @@ export default function ClientPortalPage() {
           ) : (
             <div className="divide-y divide-border">
               {submissions.map((submission) => {
-                const submitted = submission.status === 'submitted'
                 const when = submission.submitted_at || submission.created_at
                 return (
                   <div key={submission.id} className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
@@ -104,14 +99,8 @@ export default function ClientPortalPage() {
                         {submission.company_name || submission.respondent_name || 'Request'} · {new Date(when).toLocaleDateString()}
                       </p>
                     </div>
-                    <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${
-                      submitted
-                        ? 'border-green-500/30 bg-green-500/5 text-green-400'
-                        : submission.status === 'archived'
-                          ? 'border-border text-text-tertiary'
-                          : 'border-blue-500/30 bg-blue-500/5 text-blue-400'
-                    }`}>
-                      {statusLabels[submission.status] || submission.status}
+                    <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${submissionStatusStyle(submission.status)}`}>
+                      {SUBMISSION_STATUS_LABELS[submission.status as keyof typeof SUBMISSION_STATUS_LABELS] || submission.status}
                     </span>
                   </div>
                 )

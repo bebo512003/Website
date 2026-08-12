@@ -190,6 +190,9 @@ export type CommentRow = {
 
 // ── Dynamic form builder (Phase D) ──────────────────────────────────────────
 export type FormStatus = 'draft' | 'published' | 'disabled' | 'archived'
+export type SubmissionStatus =
+  | 'new' | 'reviewing' | 'need_information'
+  | 'qualified' | 'rejected' | 'approved' | 'converted' | 'archived'
 export type FormQuestionType =
   | 'short_text' | 'long_text' | 'single_choice' | 'multiple_choice' | 'yes_no'
   | 'dropdown' | 'number' | 'date' | 'file_upload' | 'rating'
@@ -228,13 +231,15 @@ export type FormSubmissionRow = {
   id: string
   form_id: string
   form_version: number
-  status: 'submitted' | 'archived'
+  status: SubmissionStatus
   respondent_name: string | null
   respondent_email: string | null
   respondent_phone: string | null
   company_name: string | null
   client_id: string | null
   project_id: string | null
+  reviewer_id: string | null
+  reviewed_at: string | null
   created_by: string | null
   submitted_at: string
   created_at: string
@@ -447,7 +452,7 @@ export interface Database {
         id?: string; form_id: string; question_type: FormQuestionType; label: string; help_text?: string | null; placeholder?: string | null; required?: boolean; options?: Json; config?: Json; map_to?: FormQuestionMapTo | null; position?: number; created_at?: string; updated_at?: string
       }, Partial<FormQuestionRow>>
       form_submissions: TableDefinition<FormSubmissionRow, {
-        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
+        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; reviewer_id?: string | null; reviewed_at?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
       }, Partial<FormSubmissionRow>>
       form_submission_answers: TableDefinition<FormSubmissionAnswerRow, {
         id?: string; submission_id: string; question_id?: string | null; question_snapshot: Json; value?: Json; created_at?: string
@@ -499,6 +504,8 @@ export interface Database {
       admin_update_team_member: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_phone?: string | null; p_whatsapp?: string | null; p_avatar_url?: string | null; p_job_title?: string | null; p_department?: string | null; p_specialization?: string | null; p_bio?: string | null; p_location?: string | null; p_portfolio_url?: string | null; p_social_links?: Json; p_role_id?: string | null; p_employee_role_id?: string | null; p_status?: string | null }; Returns: ProfileRow }
       admin_delete_team_member: { Args: { p_user_id: string }; Returns: boolean }
       submit_dynamic_form: { Args: { p_form_id: string; p_answers: Json }; Returns: FormSubmissionRow }
+      update_form_submission_status: { Args: { p_submission_id: string; p_status: string }; Returns: boolean }
+      assign_form_submission_reviewer: { Args: { p_submission_id: string; p_reviewer_id: string | null }; Returns: boolean }
       duplicate_form_template: { Args: { p_form_id: string }; Returns: FormTemplateRow }
       reorder_form_questions: { Args: { p_form_id: string; p_question_ids: string[] }; Returns: number }
       get_user_permissions: { Args: Record<string, never>; Returns: string[] }
