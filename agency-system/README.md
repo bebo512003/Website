@@ -131,16 +131,32 @@ npm run build
 npm run lint
 ```
 
-## Public project requests
+## Public client routes and project requests
 
-**Request a New Project** always opens the Dynamic Forms listing at `/forms`. Visitors pick a published form and submit it at `/f/<slug>`. There is no separate `/intake` wizard — that route permanently redirects to `/forms`.
+The client-facing flow is deliberately separate from the staff workspace:
 
-Public submissions use **Supabase Anonymous Sign-in** so respondents can upload files and own their response without creating an account:
+| Route | Public behavior |
+| --- | --- |
+| `/` | Landing page with **Request a New Project**, **Portfolio**, and **Login** paths. |
+| `/forms` | Lists published Dynamic Forms only. New Admin-published forms appear automatically. |
+| `/f/<slug>` | Renders and submits a published form without sign-up or client credentials. |
+| `/portfolio` | Lists only published, non-archived portfolio projects. |
+| `/portfolio/<slug>` | Shows a public project only while it remains published and non-archived. |
+| `/auth` | Login/reset for existing team accounts only; there is no public sign-up. |
 
-1. Go to **Supabase Dashboard → Authentication → Providers**
-2. Scroll to **Anonymous** and toggle **Enable Anonymous Sign-ins** to ON
+**Request a New Project** always opens `/forms`. There is no competing `/intake` wizard; old `/intake` bookmarks permanently redirect forward to `/forms`. No current CTA points to `/intake`.
 
-Without this toggle, anonymous authentication will fail and file uploads on public forms will not work.
+Public submissions use **Supabase Anonymous Sign-in** behind the scenes. The visitor never registers, chooses a password, receives a client account, or enters a portal. The short-lived anonymous identity lets the database rate-limit submissions, attribute the response, and authorize private file uploads.
+
+Before production launch:
+
+1. Go to **Supabase Dashboard → Authentication → Providers**.
+2. Keep **Email → Allow new users to sign up** OFF.
+3. Turn **Anonymous → Enable Anonymous Sign-ins** ON. This is required for public form submission and file uploads; without it the form displays a configuration warning instead of asking the client to log in.
+4. Apply every migration in `supabase/migrations/` (or `supabase/schema.sql` for a fresh project).
+5. Set the deployment values from `.env.local.example`, especially the Supabase URL/anon key and the real `NEXT_PUBLIC_SITE_URL`.
+6. Publish at least one form in **Administration → Forms** and, optionally, portfolio projects in **Administration → Portfolio Management**.
+7. Smoke-test `/forms`, one `/f/<slug>`, and `/portfolio` in an incognito window.
 
 ## Security notes
 

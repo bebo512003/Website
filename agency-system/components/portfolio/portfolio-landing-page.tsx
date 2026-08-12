@@ -46,18 +46,28 @@ export function PortfolioLandingPage() {
     <main className="min-h-screen overflow-hidden bg-[#080808] text-white">
       <header className="absolute inset-x-0 top-0 z-30">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 sm:px-8 lg:px-10">
-          <Link href="/portfolio" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)}>
+          <Link href="/" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)} aria-label="Agency OS home">
             <span className="flex h-9 w-9 items-center justify-center border border-white/20 bg-white/[0.05] text-accent transition group-hover:border-accent"><Layers3 className="h-4 w-4" /></span>
             <span><span className="block text-sm font-bold tracking-[0.22em]">AGENCY OS</span><span className="font-mono-tech text-[8px] text-white/40">CREATIVE STUDIO</span></span>
           </Link>
-          <nav className="hidden items-center gap-8 md:flex" aria-label="Portfolio navigation">
+          <nav className="hidden items-center gap-7 md:flex" aria-label="Portfolio navigation">
+            <Link href="/" className="text-xs text-white/60 transition hover:text-white">Home</Link>
             <a href="#work" className="text-xs text-white/60 transition hover:text-white">Selected work</a>
             <a href="#about" className="text-xs text-white/60 transition hover:text-white">About</a>
-            <Link href="/forms" className="inline-flex items-center gap-2 border border-accent bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground transition hover:brightness-110">Start a project <ArrowRight className="h-3.5 w-3.5" /></Link>
+            <Link href="/auth" className="text-xs text-white/60 transition hover:text-white">Login</Link>
+            <Link href="/forms" className="inline-flex min-h-11 items-center gap-2 border border-accent bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground transition hover:brightness-110">Request a New Project <ArrowRight className="h-3.5 w-3.5" /></Link>
           </nav>
           <button type="button" className="rounded border border-white/15 p-2 text-white md:hidden" onClick={() => setMenuOpen((open) => !open)} aria-label={menuOpen ? 'Close menu' : 'Open menu'} aria-expanded={menuOpen}>{menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}</button>
         </div>
-        {menuOpen && <nav className="mx-5 grid gap-2 border border-white/10 bg-[#111]/95 p-4 backdrop-blur md:hidden" aria-label="Mobile portfolio navigation"><a href="#work" onClick={() => setMenuOpen(false)} className="px-2 py-2 text-sm text-white/70">Selected work</a><a href="#about" onClick={() => setMenuOpen(false)} className="px-2 py-2 text-sm text-white/70">About</a><Link href="/forms" className="mt-1 inline-flex items-center justify-center gap-2 bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">Start a project <ArrowRight className="h-4 w-4" /></Link></nav>}
+        {menuOpen && (
+          <nav className="mx-5 grid gap-1 border border-white/10 bg-[#111]/95 p-4 backdrop-blur md:hidden" aria-label="Mobile portfolio navigation">
+            <Link href="/" onClick={() => setMenuOpen(false)} className="min-h-11 px-2 py-3 text-sm text-white/70">Home</Link>
+            <a href="#work" onClick={() => setMenuOpen(false)} className="min-h-11 px-2 py-3 text-sm text-white/70">Selected work</a>
+            <a href="#about" onClick={() => setMenuOpen(false)} className="min-h-11 px-2 py-3 text-sm text-white/70">About</a>
+            <Link href="/auth" onClick={() => setMenuOpen(false)} className="min-h-11 px-2 py-3 text-sm text-white/70">Login</Link>
+            <Link href="/forms" onClick={() => setMenuOpen(false)} className="mt-2 inline-flex min-h-11 items-center justify-center gap-2 bg-accent px-4 py-3 text-sm font-semibold text-accent-foreground">Request a New Project <ArrowRight className="h-4 w-4" /></Link>
+          </nav>
+        )}
       </header>
 
       <section className="relative flex min-h-[720px] items-end bg-[radial-gradient(circle_at_80%_15%,rgba(185,40,45,0.24),transparent_35%),linear-gradient(135deg,#080808_0%,#101010_60%,#16090a_100%)] px-5 pb-20 pt-36 sm:min-h-[800px] sm:px-8 lg:px-10">
@@ -99,10 +109,20 @@ export function PortfolioLandingPage() {
 
       <section className="relative overflow-hidden bg-accent px-5 py-20 text-accent-foreground sm:px-8 lg:px-10 lg:py-28">
         <div className="pointer-events-none absolute -right-20 -top-32 h-96 w-96 rounded-full border border-black/15" /><div className="pointer-events-none absolute -right-4 -top-16 h-64 w-64 rounded-full border border-black/10" />
-        <div className="relative mx-auto flex max-w-7xl flex-col justify-between gap-10 lg:flex-row lg:items-end"><div><p className="font-mono-tech text-[10px] opacity-60">04 / LET&apos;S WORK TOGETHER</p><h2 className="mt-5 max-w-3xl font-display text-7xl leading-[0.82] sm:text-9xl">HAVE A<br />GOOD ONE?</h2></div><div className="max-w-sm"><p className="text-base leading-7 opacity-80">Tell us what you are building. We will bring the right questions, the sharpest thinking, and a clear next step.</p><Link href="/forms" className="mt-7 inline-flex items-center gap-3 border border-black/30 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/80">Start a conversation <ArrowRight className="h-4 w-4" /></Link></div></div>
+        <div className="relative mx-auto flex max-w-7xl flex-col justify-between gap-10 lg:flex-row lg:items-end"><div><p className="font-mono-tech text-[10px] opacity-60">04 / LET&apos;S WORK TOGETHER</p><h2 className="mt-5 max-w-3xl font-display text-7xl leading-[0.82] sm:text-9xl">HAVE A<br />GOOD ONE?</h2></div><div className="max-w-sm"><p className="text-base leading-7 opacity-80">Tell us what you are building. We will bring the right questions, the sharpest thinking, and a clear next step.</p><Link href="/forms" className="mt-7 inline-flex min-h-11 items-center gap-3 border border-black/30 bg-black px-5 py-3 text-sm font-semibold text-white transition hover:bg-black/80">Request a New Project <ArrowRight className="h-4 w-4" /></Link></div></div>
       </section>
 
-      <footer className="bg-[#080808] px-5 py-8 sm:px-8 lg:px-10"><div className="mx-auto flex max-w-7xl flex-col justify-between gap-3 text-[10px] uppercase tracking-[0.18em] text-white/30 sm:flex-row"><span>AGENCY OS / Creative studio</span><span>Built for brands with intent.</span></div></footer>
+      <footer className="bg-[#080808] px-5 py-8 sm:px-8 lg:px-10">
+        <div className="mx-auto flex max-w-7xl flex-col gap-5 text-[10px] uppercase tracking-[0.18em] text-white/30 sm:flex-row sm:items-center sm:justify-between">
+          <span>AGENCY OS / Creative studio</span>
+          <nav className="flex flex-wrap gap-x-5 gap-y-3" aria-label="Portfolio footer">
+            <Link href="/" className="transition hover:text-white">Home</Link>
+            <Link href="/forms" className="transition hover:text-white">Request a project</Link>
+            <Link href="/auth" className="transition hover:text-white">Login</Link>
+          </nav>
+          <span>Built for brands with intent.</span>
+        </div>
+      </footer>
     </main>
   )
 }

@@ -104,7 +104,7 @@ export function DynamicFormRenderer({
   const currentSection = currentSectionIndex === -1 ? sections.length - 1 : currentSectionIndex
 
   const fieldShell = (question: FormQuestion, span: boolean, control: React.ReactNode) => (
-    <div key={question.id} className={cn('text-sm text-text-secondary', span && 'sm:col-span-2')}>
+    <div id={`question-${question.id}`} key={question.id} className={cn('scroll-mt-24 text-sm text-text-secondary', span && 'sm:col-span-2')}>
       <span className="block font-medium text-fg">
         {question.label}
         {question.required && <span className="text-accent"> *</span>}
@@ -266,7 +266,7 @@ export function DynamicFormRenderer({
           return fieldShell(
             question,
             false,
-            <div className="mt-2 flex items-center gap-1.5">
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
               {Array.from({ length: max }, (_, index) => index + 1).map((score) => (
                 <button
                   key={score}

@@ -18,8 +18,8 @@ import {
   X,
   Zap,
 } from 'lucide-react'
-import { getFormTemplates, getPublicPortfolioProjects } from '@/lib/supabase/database'
-import type { FormTemplateWithCounts, PortfolioProjectWithRelations } from '@/lib/supabase/types'
+import { getPublishedFormTemplates, getPublicPortfolioProjects } from '@/lib/supabase/database'
+import type { PortfolioProjectWithRelations, PublicFormTemplateSummary } from '@/lib/supabase/types'
 import { PortfolioProjectCard } from '@/components/portfolio/portfolio-project-card'
 
 // ── Client Landing Page ──────────────────────────────────────────────────────
@@ -73,7 +73,7 @@ const STEPS = [
 
 export function ClientLandingPage() {
   const [projects, setProjects] = useState<PortfolioProjectWithRelations[]>([])
-  const [forms, setForms] = useState<FormTemplateWithCounts[]>([])
+  const [forms, setForms] = useState<PublicFormTemplateSummary[]>([])
   const [loadingPortfolio, setLoadingPortfolio] = useState(true)
   const [loadingForms, setLoadingForms] = useState(true)
   const [error, setError] = useState('')
@@ -82,11 +82,11 @@ export function ClientLandingPage() {
   const load = useCallback(async () => {
     const [portfolioResult, formsResult] = await Promise.all([
       getPublicPortfolioProjects(),
-      // Form list is RLS-safe: only published forms surface to anonymous visitors.
-      getFormTemplates(),
+      // This public query explicitly filters lifecycle state even for staff sessions.
+      getPublishedFormTemplates(),
     ])
     setProjects(portfolioResult.data)
-    setForms(formsResult.data.filter((form) => form.status === 'published'))
+    setForms(formsResult.data)
     setError(portfolioResult.error || formsResult.error || '')
     setLoadingPortfolio(false)
     setLoadingForms(false)
@@ -129,10 +129,10 @@ export function ClientLandingPage() {
           </nav>
           <div className="hidden items-center gap-2 md:flex">
             <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
-              <LogIn className="h-3.5 w-3.5" /> Sign in
+              <LogIn className="h-3.5 w-3.5" /> Login
             </Link>
             <Link href="/forms" className="inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-3.5 py-2 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
-              Start a project <ArrowRight className="h-3.5 w-3.5" />
+              Request a project <ArrowRight className="h-3.5 w-3.5" />
             </Link>
           </div>
           <button
@@ -155,10 +155,10 @@ export function ClientLandingPage() {
             </div>
             <div className="mt-3 grid gap-2 border-t border-border pt-3">
               <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
-                <LogIn className="h-4 w-4" /> Sign in
+                <LogIn className="h-4 w-4" /> Login
               </Link>
               <Link href="/forms" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
-                Start a project <ArrowRight className="h-4 w-4" />
+                Request a project <ArrowRight className="h-4 w-4" />
               </Link>
             </div>
           </nav>
@@ -180,7 +180,7 @@ export function ClientLandingPage() {
             </h1>
             <p className="mt-6 max-w-xl text-base leading-7 text-text-secondary sm:text-lg">
               From the first idea to the finished work — we help ambitious brands move with clarity.
-              Start a new project, explore our portfolio, or sign in to your workspace.
+              Start a new project or explore our portfolio without an account. Team members can use the secure login.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
               <Link href="/forms" className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:brightness-110">
@@ -190,7 +190,7 @@ export function ClientLandingPage() {
                 <Layers3 className="h-4 w-4" /> View our portfolio
               </Link>
               <Link href="/auth" className="inline-flex items-center justify-center gap-2 rounded-md border border-transparent px-3 py-3 text-sm font-medium text-text-secondary transition hover:text-fg">
-                <Lock className="h-4 w-4" /> Sign in to your account
+                <Lock className="h-4 w-4" /> Team login
               </Link>
             </div>
             <div className="mt-10 grid max-w-xl grid-cols-2 gap-5 border-t border-border pt-5 sm:grid-cols-3">
@@ -212,13 +212,13 @@ export function ClientLandingPage() {
           {/* Flow card — quick visual of the three public paths */}
           <aside className="rounded-md border border-border bg-surface/85 p-6 backdrop-blur sm:p-7">
             <p className="font-mono-tech text-[10px] text-accent">CLIENT FLOW</p>
-            <h2 className="mt-3 font-display text-3xl leading-tight">Three ways to start.</h2>
-            <p className="mt-2 text-sm text-text-secondary">No account required for the first two. Sign in only when you need workspace access.</p>
+            <h2 className="mt-3 font-display text-3xl leading-tight">Choose your next step.</h2>
+            <p className="mt-2 text-sm text-text-secondary">Clients can request work or browse the portfolio without an account. Login is for existing team accounts only.</p>
             <ol className="mt-6 grid gap-3">
               {[
                 { label: 'Request a New Project', href: '/forms', accent: true },
                 { label: 'Browse our portfolio', href: '/portfolio' },
-                { label: 'Sign in to your account', href: '/auth' },
+                { label: 'Team login', href: '/auth' },
               ].map((item) => (
                 <li key={item.label}>
                   <Link
@@ -408,12 +408,12 @@ export function ClientLandingPage() {
               {forms.map((form) => (
                 <article key={form.id} className="group flex flex-col gap-4 rounded-md border border-border bg-surface p-6 transition hover:border-line-light">
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="truncate text-base font-semibold text-fg">{form.title}</h3>
+                    <h3 className="min-w-0 break-words text-base font-semibold text-fg">{form.title}</h3>
                     <span className="rounded border border-green-500/30 bg-green-500/5 px-1.5 py-0.5 font-mono-tech text-[9px] text-green-400">LIVE</span>
                   </div>
                   {form.description && <p className="line-clamp-2 text-sm leading-5 text-text-secondary">{form.description}</p>}
                   <p className="font-mono-tech text-[10px] text-text-tertiary">
-                    {(form.form_questions?.[0]?.count ?? 0)} QUESTIONS · {(form.form_submissions?.[0]?.count ?? 0)} RESPONSES
+                    {(form.form_questions?.[0]?.count ?? 0)} QUESTIONS · NO ACCOUNT REQUIRED
                   </p>
                   <Link href={`/f/${form.slug}`} className="mt-auto inline-flex items-center gap-2 self-start rounded-md border border-accent bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
                     <FileText className="h-3.5 w-3.5" /> Open form <ArrowUpRight className="h-3.5 w-3.5" />
@@ -432,7 +432,7 @@ export function ClientLandingPage() {
             <p className="font-mono-tech text-[10px] opacity-60">05 / READY WHEN YOU ARE</p>
             <h2 className="mt-4 max-w-3xl font-display text-6xl leading-[0.85] sm:text-8xl">Let&apos;s begin.</h2>
             <p className="mt-4 max-w-xl text-sm leading-7 opacity-80 sm:text-base">
-              Pick the path that fits — request a new project, browse the portfolio, or sign in to your account.
+              Request a new project or browse the portfolio publicly. Existing team members can log in from the navigation.
             </p>
           </div>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -461,7 +461,7 @@ export function ClientLandingPage() {
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
             <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="hover:text-fg">Request a project</Link>
-            <Link href="/auth" className="hover:text-fg">Sign in</Link>
+            <Link href="/auth" className="hover:text-fg">Login</Link>
           </nav>
           <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>
         </div>

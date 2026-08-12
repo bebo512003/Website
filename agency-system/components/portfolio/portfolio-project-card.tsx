@@ -33,7 +33,7 @@ export function PortfolioProjectCard({ project, featured = false }: { project: P
       </div>
       <div className="flex items-start justify-between gap-4 p-5">
         <div className="min-w-0">
-          <h3 className={`${featured ? 'text-xl sm:text-2xl' : 'text-lg'} font-semibold text-fg transition group-hover:text-accent`}>{project.title}</h3>
+          <h3 className={`${featured ? 'text-xl sm:text-2xl' : 'text-lg'} break-words font-semibold text-fg transition group-hover:text-accent`}>{project.title}</h3>
           <p className="mt-1 text-sm text-text-tertiary">{project.client_name || 'Independent project'}</p>
         </div>
         {project.featured && <span className="shrink-0 pt-1 font-mono-tech text-[9px] text-accent">FEATURED</span>}

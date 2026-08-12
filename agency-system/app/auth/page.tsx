@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, Zap } from 'lucide-react'
+import { ArrowLeft, Eye, EyeOff, LoaderCircle, LockKeyhole, Mail, Sparkles, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { updatePasswordAndMarkChanged } from '@/lib/supabase/auth'
 import { InlineAlert, inputClassName, primaryButtonClassName } from '@/components/ui/page'
@@ -69,9 +70,12 @@ export default function AuthPage() {
   const subtitle = mode === 'reset' ? 'We will email you a secure reset link.' : mode === 'update-password' ? 'Use at least eight characters.' : 'Login with your existing team account.'
 
   return (
-    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg p-5">
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-bg px-4 py-16 sm:p-5">
       <div className="pointer-events-none absolute inset-0 opacity-30" style={{ backgroundImage: 'linear-gradient(hsl(0 0% 12%) 1px, transparent 1px), linear-gradient(90deg, hsl(0 0% 12%) 1px, transparent 1px)', backgroundSize: '60px 60px' }} />
-      <section className="relative z-10 w-full max-w-md rounded-md border border-border bg-surface p-7 shadow-2xl sm:p-9">
+      <Link href="/" className="absolute left-4 top-4 z-20 inline-flex min-h-11 items-center gap-2 rounded-md border border-border bg-surface/90 px-3 py-2 text-xs text-text-secondary backdrop-blur transition hover:border-line-light hover:text-fg sm:left-6 sm:top-6">
+        <ArrowLeft className="h-3.5 w-3.5" /> Back to public site
+      </Link>
+      <section className="relative z-10 w-full max-w-md rounded-md border border-border bg-surface p-6 shadow-2xl sm:p-9">
         <div className="mb-7">
           <div className="mb-5 flex h-11 w-11 items-center justify-center rounded-md border border-accent/30 bg-accent/10">
             <Zap className="h-5 w-5 text-accent" />
@@ -79,6 +83,11 @@ export default function AuthPage() {
           <p className="mb-2 font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / SECURE ACCESS</p>
           <h1 className="text-2xl font-semibold text-fg">{title}</h1>
           <p className="mt-2 text-sm text-text-secondary">{subtitle}</p>
+          {mode === 'signin' && (
+            <p className="mt-4 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-xs leading-5 text-text-secondary">
+              Existing staff accounts only. Public sign-up is not available.
+            </p>
+          )}
         </div>
 
         {!configured && (
@@ -121,9 +130,18 @@ export default function AuthPage() {
 
         <div className="mt-6 flex justify-center text-xs text-text-secondary">
           {mode === 'signin'
-            ? <button onClick={() => changeMode('reset')} className="hover:text-accent">Forgot Password?</button>
-            : <button onClick={() => changeMode('signin')} className="hover:text-accent">Return to Login</button>}
+            ? <button onClick={() => changeMode('reset')} className="min-h-10 px-2 hover:text-accent">Forgot Password?</button>
+            : <button onClick={() => changeMode('signin')} className="min-h-10 px-2 hover:text-accent">Return to Login</button>}
         </div>
+
+        {mode === 'signin' && (
+          <div className="mt-4 border-t border-border pt-5 text-center">
+            <p className="text-xs text-text-tertiary">Here to request creative work? You do not need an account.</p>
+            <Link href="/forms" className="mt-3 inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
+              <Sparkles className="h-4 w-4" /> Request a New Project
+            </Link>
+          </div>
+        )}
       </section>
     </main>
   )

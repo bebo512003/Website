@@ -143,7 +143,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
         })
       }
     }
-  }, [])
+  }, [can])
 
   const load = useCallback(async () => {
     const [templateResult, questionsResult] = await Promise.all([getFormTemplateById(id), getFormQuestions(id)])

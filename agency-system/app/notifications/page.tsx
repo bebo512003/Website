@@ -7,7 +7,6 @@ import {
   Check,
   CheckCheck,
   CheckSquare,
-  Clock,
   Copy,
   ExternalLink,
   FileText,
@@ -16,7 +15,6 @@ import {
   Info,
   LoaderCircle,
   Search,
-  Sparkles,
   Trash2,
   X,
 } from 'lucide-react'

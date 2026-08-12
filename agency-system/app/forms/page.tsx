@@ -15,8 +15,8 @@ import {
   X,
   ClipboardList,
 } from 'lucide-react'
-import { getFormTemplates } from '@/lib/supabase/database'
-import type { FormTemplateWithCounts } from '@/lib/supabase/types'
+import { getPublishedFormTemplates } from '@/lib/supabase/database'
+import type { PublicFormTemplateSummary } from '@/lib/supabase/types'
 
 // ── Public Forms Listing Page ───────────────────────────────────────────────
 // Displays all published forms from the Admin Form Builder.
@@ -26,15 +26,14 @@ import type { FormTemplateWithCounts } from '@/lib/supabase/types'
 const HEADING = 'AGENCY OS / REQUEST A PROJECT'
 
 export default function PublicFormsPage() {
-  const [forms, setForms] = useState<FormTemplateWithCounts[]>([])
+  const [forms, setForms] = useState<PublicFormTemplateSummary[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
 
   const load = useCallback(async () => {
-    const result = await getFormTemplates()
-    // Filter to only published forms for public display
-    setForms(result.data.filter((form) => form.status === 'published'))
+    const result = await getPublishedFormTemplates()
+    setForms(result.data)
     setError(result.error || '')
     setLoading(false)
   }, [])
@@ -61,7 +60,7 @@ export default function PublicFormsPage() {
           </nav>
           <div className="hidden items-center gap-2 md:flex">
             <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
-              <LogIn className="h-3.5 w-3.5" /> Sign in
+              <LogIn className="h-3.5 w-3.5" /> Login
             </Link>
           </div>
           <button
@@ -82,7 +81,7 @@ export default function PublicFormsPage() {
             </div>
             <div className="mt-3 grid gap-2 border-t border-border pt-3">
               <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
-                <LogIn className="h-4 w-4" /> Sign in
+                <LogIn className="h-4 w-4" /> Login
               </Link>
             </div>
           </nav>
@@ -105,9 +104,16 @@ export default function PublicFormsPage() {
             Request a New Project
           </h1>
           <p className="mt-4 max-w-2xl text-base leading-7 text-text-secondary sm:text-lg">
-            Pick the form that best describes what you need. Fill it out — no account required. 
+            Pick the form that best describes what you need. Fill it out — no account required.
             We will review your request and reach out with the next step.
           </p>
+          <ol className="mt-7 grid max-w-2xl grid-cols-3 gap-2" aria-label="Request steps">
+            {['Select form', 'Fill form', 'Submit'].map((label, index) => (
+              <li key={label} className={`border-t-2 pt-2 text-[10px] sm:text-xs ${index === 0 ? 'border-accent font-semibold text-fg' : 'border-border text-text-tertiary'}`}>
+                <span className="mr-1 font-mono-tech">0{index + 1}</span> {label}
+              </li>
+            ))}
+          </ol>
         </div>
 
         {/* Forms Grid */}
@@ -150,14 +156,14 @@ export default function PublicFormsPage() {
                     className="group flex flex-col gap-4 rounded-md border border-border bg-surface p-6 transition hover:border-line-light hover:shadow-lg"
                   >
                     <div className="flex items-center justify-between gap-3">
-                      <h3 className="truncate text-lg font-semibold text-fg">{form.title}</h3>
+                      <h3 className="min-w-0 break-words text-lg font-semibold text-fg">{form.title}</h3>
                       <span className="rounded border border-green-500/30 bg-green-500/5 px-1.5 py-0.5 font-mono-tech text-[9px] text-green-400">LIVE</span>
                     </div>
                     {form.description && (
                       <p className="line-clamp-2 text-sm leading-5 text-text-secondary">{form.description}</p>
                     )}
                     <p className="font-mono-tech text-[10px] text-text-tertiary">
-                      {form.form_questions?.[0]?.count ?? 0} QUESTIONS · {form.form_submissions?.[0]?.count ?? 0} RESPONSES
+                      {form.form_questions?.[0]?.count ?? 0} QUESTIONS · NO ACCOUNT REQUIRED
                     </p>
                     <Link
                       href={`/f/${form.slug}`}
@@ -226,7 +232,7 @@ export default function PublicFormsPage() {
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
             <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="hover:text-fg">Request a project</Link>
-            <Link href="/auth" className="hover:text-fg">Sign in</Link>
+            <Link href="/auth" className="hover:text-fg">Login</Link>
           </nav>
           <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>
         </div>
