@@ -12,6 +12,7 @@ import type { FormQuestion, FormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
 import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
+import { validateFile } from '@/lib/storage-config'
 import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
 
 // ── Public dynamic form page ─────────────────────────────────────────────────
@@ -154,6 +155,11 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
       return
     }
     setError('')
+    const validation = validateFile(file, 'form-files', lang)
+    if (!validation.valid) {
+      setError(lang === 'ar' ? (validation.errorAr || validation.error || '') : (validation.error || ''))
+      return
+    }
     setUploadingQuestionId(question.id)
     const result = await uploadFormFile(user.id, file)
     setUploadingQuestionId(null)

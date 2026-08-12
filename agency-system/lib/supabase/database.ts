@@ -1,4 +1,5 @@
 import { isDatabaseConnected, supabase } from './client'
+import { validateFile, sanitizeFileName, STORAGE_RULES } from '@/lib/storage-config'
 import type {
   AccessRole,
   AppRole,
@@ -198,6 +199,14 @@ export async function updateProject(id: string, updates: ProjectUpdate): Promise
 }
 export async function deleteProject(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
+  // Clean up any files in project-files bucket for this project before deleting row
+  const filesQuery = await supabase.from('files').select('storage_path').eq('project_id', id)
+  if (filesQuery.data && filesQuery.data.length > 0) {
+    const paths = filesQuery.data.map((f) => f.storage_path).filter((p): p is string => Boolean(p))
+    if (paths.length > 0) {
+      await supabase.storage.from('project-files').remove(paths)
+    }
+  }
   const { error } = await supabase.from('projects').delete().eq('id', id)
   return error ? fail(false, error.message) : ok(true)
 }
@@ -383,9 +392,12 @@ export async function deletePortfolioCategory(id: string): Promise<Result<boolea
 
 export async function uploadPortfolioImage(projectId: string, userId: string, file: File): Promise<Result<PortfolioProjectImage | null>> {
   if (!supabase) return fail(null)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const validation = validateFile(file, 'portfolio-images')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid portfolio image.')
+
+  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
   const storagePath = `${projectId}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('portfolio-images').upload(storagePath, file, { contentType: file.type, upsert: false })
+  const upload = await supabase.storage.from('portfolio-images').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (upload.error) return fail(null, upload.error.message)
 
   const latest = await supabase.from('portfolio_project_images').select('display_order').eq('project_id', projectId).order('display_order', { ascending: false }).limit(1).maybeSingle()
@@ -413,7 +425,7 @@ export async function deletePortfolioImage(image: Pick<PortfolioProjectImage, 'i
   return error ? fail(false, error.message) : ok(true)
 }
 
-export async function getPortfolioImageUrl(storagePath: string, expiresIn = 3600): Promise<Result<string | null>> {
+export async function getPortfolioImageUrl(storagePath: string, expiresIn = STORAGE_RULES['portfolio-images'].signedUrlDurationSeconds || 3600): Promise<Result<string | null>> {
   if (!supabase || !storagePath) return fail(null)
   const { data, error } = await supabase.storage.from('portfolio-images').createSignedUrl(storagePath, expiresIn)
   return error ? fail(null, error.message) : ok(data.signedUrl)
@@ -485,9 +497,12 @@ function getFileType(file: File): FileItem['type'] {
 
 export async function uploadProjectFile(projectId: string, userId: string, file: File): Promise<Result<FileItem | null>> {
   if (!supabase) return fail(null)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const validation = validateFile(file, 'project-files')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid project file.')
+
+  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
   const storagePath = `${projectId}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('project-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  const upload = await supabase.storage.from('project-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (upload.error) return fail(null, upload.error.message)
 
   const { data, error } = await supabase.from('files').insert({
@@ -507,9 +522,9 @@ export async function uploadProjectFile(projectId: string, userId: string, file:
   return ok(data)
 }
 
-export async function getFileDownloadUrl(storagePath: string): Promise<Result<string | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.storage.from('project-files').createSignedUrl(storagePath, 60)
+export async function getFileDownloadUrl(storagePath: string, expiresIn = STORAGE_RULES['project-files'].signedUrlDurationSeconds || 120): Promise<Result<string | null>> {
+  if (!supabase || !storagePath) return fail(null)
+  const { data, error } = await supabase.storage.from('project-files').createSignedUrl(storagePath, expiresIn)
   return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
@@ -596,13 +611,22 @@ export async function submitIntakeForm(id: string): Promise<Result<import('./typ
 
 export async function uploadIntakeAttachment(intakeId: string, userId: string, file: File): Promise<Result<import('./types').IntakeAttachment | null>> {
   if (!supabase) return fail(null)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const validation = validateFile(file, 'intake-files')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid intake file.')
+
+  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
   const storagePath = `${userId}/${intakeId}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('intake-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  const upload = await supabase.storage.from('intake-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (upload.error) return fail(null, upload.error.message)
   const { data, error } = await supabase.from('intake_attachments').insert({ intake_id: intakeId, name: file.name, size: file.size, mime_type: file.type || null, storage_path: storagePath, uploaded_by: userId }).select().single()
   if (error) { await supabase.storage.from('intake-files').remove([storagePath]); return fail(null, error.message) }
   return ok(data)
+}
+
+export async function getIntakeFileUrl(storagePath: string, expiresIn = STORAGE_RULES['intake-files'].signedUrlDurationSeconds || 120): Promise<Result<string | null>> {
+  if (!supabase || !storagePath) return fail(null)
+  const { data, error } = await supabase.storage.from('intake-files').createSignedUrl(storagePath, expiresIn)
+  return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
 // Dynamic form builder
@@ -732,16 +756,19 @@ export async function updateFormSubmissionStatus(id: string, status: 'submitted'
 
 export async function uploadFormFile(userId: string, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
   if (!supabase) return fail(null)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const validation = validateFile(file, 'form-files')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid form attachment.')
+
+  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
   const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type, upsert: false })
+  const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (upload.error) return fail(null, upload.error.message)
   return ok({ storage_path: storagePath, name: file.name, size: file.size, mime_type: file.type || null })
 }
 
-export async function getFormFileUrl(storagePath: string): Promise<Result<string | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.storage.from('form-files').createSignedUrl(storagePath, 60)
+export async function getFormFileUrl(storagePath: string, expiresIn = STORAGE_RULES['form-files'].signedUrlDurationSeconds || 120): Promise<Result<string | null>> {
+  if (!supabase || !storagePath) return fail(null)
+  const { data, error } = await supabase.storage.from('form-files').createSignedUrl(storagePath, expiresIn)
   return error ? fail(null, error.message) : ok(data.signedUrl)
 }
 
@@ -907,12 +934,33 @@ export async function deleteTeamMember(userId: string): Promise<Result<boolean>>
 
 export async function uploadTeamAvatar(userId: string, file: File): Promise<Result<string | null>> {
   if (!supabase) return fail(null)
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
+  const validation = validateFile(file, 'avatars')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid avatar image.')
+
+  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
   const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
-  const { error } = await supabase.storage.from('avatars').upload(storagePath, file, { contentType: file.type, upsert: false })
+  const { error } = await supabase.storage.from('avatars').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (error) return fail(null, error.message)
   const { data } = supabase.storage.from('avatars').getPublicUrl(storagePath)
   return ok(data.publicUrl)
+}
+
+export type StorageAuditSummary = {
+  project_files_count: number
+  form_attachments_count: number
+  intake_attachments_count: number
+  portfolio_images_count: number
+  profiles_with_avatar_count: number
+  storage_objects_total: number
+  unreferenced_storage_objects_count: number
+  audited_at: string
+}
+
+export async function getStorageAuditSummary(): Promise<Result<StorageAuditSummary | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('get_storage_audit_summary')
+  if (error) return fail(null, error.message)
+  return ok(data as unknown as StorageAuditSummary)
 }
 
 /**

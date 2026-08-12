@@ -19,6 +19,7 @@ import {
   validateCustomLink,
   validateProfileForm,
 } from '@/lib/profile-validation'
+import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
 import type { Profile } from '@/lib/supabase/types'
 import { InlineAlert, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -174,12 +175,9 @@ export default function UserProfilePage() {
   const handleAvatarFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] || null
     if (!file) return
-    if (!file.type.startsWith('image/')) {
-      setProfileError('Please choose an image file (PNG, JPG, WEBP, …).')
-      return
-    }
-    if (file.size > PROFILE_LIMITS.avatarMaxBytes) {
-      setProfileError(`The photo is too large. Choose an image up to ${Math.round(PROFILE_LIMITS.avatarMaxBytes / 1024 / 1024)} MB.`)
+    const validation = validateFile(file, 'avatars')
+    if (!validation.valid) {
+      setProfileError(validation.error || 'Please choose a valid image file.')
       return
     }
     setProfileError('')
@@ -434,7 +432,7 @@ export default function UserProfilePage() {
                   <label className="flex cursor-pointer items-center gap-2 text-xs text-text-secondary">
                     <Camera className="h-4 w-4 shrink-0" />
                     <span className="rounded-md border border-border bg-surface-raised px-3 py-2 text-sm text-fg transition hover:border-accent">Choose image…</span>
-                    <input type="file" accept="image/*" onChange={handleAvatarFileChange} className="sr-only" />
+                    <input type="file" accept={STORAGE_RULES['avatars'].acceptAttribute} onChange={handleAvatarFileChange} className="sr-only" />
                   </label>
                   {avatarFile && (
                     <p className="text-xs text-text-secondary">

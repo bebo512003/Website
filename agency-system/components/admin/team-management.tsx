@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Copy, Eye, EyeOff, LoaderCircle, Pencil, Plus, Search, Trash2, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
+  avatarStoragePathFromUrl,
   createTeamMember,
+  deleteTeamAvatar,
   deleteTeamMember,
   getAppRoles,
   getEmployeeRoles,
@@ -12,6 +14,7 @@ import {
   updateTeamMember,
   uploadTeamAvatar,
 } from '@/lib/supabase/database'
+import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
 import type { AppRoleWithPermissions, EmployeeRole, Profile, ProfileStatus } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -136,10 +139,18 @@ export function TeamManagement() {
 
   const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0] || null
-    setAvatarFile(file)
-    if (file) {
-      setAvatarPreview(URL.createObjectURL(file))
+    if (!file) {
+      setAvatarFile(null)
+      return
     }
+    const validation = validateFile(file, 'avatars')
+    if (!validation.valid) {
+      setError(validation.error || 'Invalid avatar image.')
+      return
+    }
+    setError('')
+    setAvatarFile(file)
+    setAvatarPreview(URL.createObjectURL(file))
   }
 
   const handleSocialChange = (key: string, value: string) => {
@@ -165,16 +176,22 @@ export function TeamManagement() {
     setMessage('')
 
     let avatarUrl = form.avatar_url
+    let oldAvatarPath: string | null = null
     // Upload avatar if file selected
     if (avatarFile) {
-      const targetId = editing?.id || 'new'
+      const targetId = editing?.id || crypto.randomUUID()
       const up = await uploadTeamAvatar(targetId, avatarFile)
       if (up.error) {
         setError(up.error)
         setSaving(false)
         return
       }
-      if (up.data) avatarUrl = up.data
+      if (up.data) {
+        avatarUrl = up.data
+        if (editing?.avatar_url && editing.avatar_url !== avatarUrl) {
+          oldAvatarPath = avatarStoragePathFromUrl(editing.avatar_url)
+        }
+      }
     }
 
     const payload = {
@@ -202,6 +219,9 @@ export function TeamManagement() {
       if (result.error) {
         setError(result.error)
         return
+      }
+      if (oldAvatarPath) {
+        await deleteTeamAvatar(oldAvatarPath)
       }
       setMessage('Team member updated successfully')
     } else {
@@ -417,8 +437,8 @@ export function TeamManagement() {
             </div>
             <div className="grid gap-2">
               <label className="text-xs text-text-secondary">
-                Profile Photo
-                <input type="file" accept="image/*" onChange={handleAvatarChange} className={`${inputClassName} mt-2`} />
+                Profile Photo <span className="text-text-tertiary">(JPG, PNG, WebP, GIF · max 5 MB)</span>
+                <input type="file" accept={STORAGE_RULES['avatars'].acceptAttribute} onChange={handleAvatarChange} className={`${inputClassName} mt-2`} />
               </label>
               <input
                 placeholder="Or paste image URL"
