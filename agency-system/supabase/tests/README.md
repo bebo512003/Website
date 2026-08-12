@@ -84,6 +84,13 @@ Covered guarantees:
   - Manager/Employee attempts to toggle checkboxes are rejected by the RPC guards and
     leave the stored permission set untouched.
 
+**Client portal** (migration `20260902000000_client_portal.sql`):
+
+- Only Admins (`admin.manage`) can create, update, or revoke client portal accounts; Managers are rejected.
+- A client account is provisioned as a CRM-linked placeholder and claimed by trusted Auth provisioning, preserving the `client_id` link and the temporary-password flag.
+- The portal RPCs return only the client's own projects and only sanitized fields (no owner, manager, team, budget, health, or priority); another client's project returns nothing, staff get nothing, and anonymous visitors cannot call the RPCs.
+- Clients still cannot read the raw `projects`/`clients` tables (RLS unchanged); suspending a client removes portal data immediately; revoking access deletes both profile and Auth account atomically.
+
 **Project delivery & closure** (migration `20260831000000_project_delivery_closure.sql`):
 
 - Ready for delivery and Delivered require at least one final delivery file on an

@@ -21,6 +21,7 @@ The application contains no seeded users or placeholder business records. All da
 - **Project ownership, status & lifecycle** (Session 12): every project carries an Owner, Manager, priority, deadline, health (`On track` / `At risk` / `Off track` / `Blocked`), and an assigned team. Projects move through a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — where only valid transitions are accepted, the owner and manager are always project members, and ownership is shown across the project list, project detail, dashboard, and reports
 - **Project delivery & closure** (Session 15): after Active / In Review, staff assemble a **final delivery package**, mark it Ready / Delivered, record **revision required**, record an **internal client-approval placeholder**, then Complete and Archive. The database rejects Complete unless those delivery conditions are met. Delivery data is internal and kept separate from any future client-facing approval UI
 - **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
+- **Client Portal** (Session 17) at `/portal`: an invitation-only, authenticated area for the Client role. Admins invite a client from the client detail page (creating a linked login with a temporary password); the invited client sees a dashboard with their own projects, live lifecycle status and progress, and a sanitized project detail page. All portal reads go through SECURITY DEFINER RPCs scoped to the client's own CRM record — internal notes, employee tasks, staff permissions, internal activity, private files, and other clients/projects are never exposed, and public form submitters have no portal access until explicitly invited
 - Project and client create, read, update, and delete workflows
 - **Employee My Work workspace** (Session 13) at `/my-work`: every task assigned to the signed-in user across authorized projects, with live Open / Due today / Upcoming (7 days) / Overdue / High-priority summaries that act as one-click filters, a per-project grouping with completion progress, an inline status control, and a completed-work archive; task-assignment notifications deep-link straight into it
 - **Task management with accountability**: a shared task detail dialog (status, priority, assignee, due date, description, project) plus an append-only per-task activity feed — automatic change history (created, status, priority, assignee, due date, title, description, project moves) with actor attribution, and permission-checked work notes
@@ -223,6 +224,8 @@ The client-facing flow is deliberately separate from the staff workspace:
 | `/portfolio` | Lists only published, non-archived portfolio projects. |
 | `/portfolio/<slug>` | Shows a public project only while it remains published and non-archived. |
 | `/auth` | Login/reset for existing team accounts only; there is no public sign-up. |
+| `/portal` | Authenticated Client Portal dashboard (invitation-only; clients are routed here after login). |
+| `/portal/projects/<id>` | A client's own project status detail — sanitized, never internal staff data. |
 
 **Request a New Project** always opens `/forms`. There is no competing `/intake` wizard; old `/intake` bookmarks permanently redirect forward to `/forms`. No current CTA points to `/intake`.
 
@@ -237,6 +240,19 @@ Before production launch:
 5. Set the deployment values from `.env.local.example`, especially the Supabase URL/anon key and the real `NEXT_PUBLIC_SITE_URL`.
 6. Publish at least one form in **Administration → Forms** and, optionally, portfolio projects in **Administration → Portfolio Management**.
 7. Smoke-test `/forms`, one `/f/<slug>`, and `/portfolio` in an incognito window.
+
+## Client portal
+
+The authenticated portal is the destination for the **Client** role only. It is deliberately invitation-only: submitting a public form never creates a login, and a client can only reach `/portal` after an Administrator invites them.
+
+1. In **Clients → a client record → Portal access**, an Admin clicks **Invite to portal** and enters the client's name and login e-mail.
+2. The server provisions a client profile linked to that CRM record, creates the Auth login, and returns a one-time temporary password for the Admin to share securely.
+3. The client signs in at `/auth` and replaces the temporary password (the same forced-password gate staff accounts use).
+4. The client lands on `/portal`: a dashboard of their own projects (live lifecycle stage + progress) and their service requests, plus a per-project detail page at `/portal/projects/<id>`.
+
+Every portal read (`get_client_portal_projects`, `get_client_portal_project`, `get_client_portal_client`) is a SECURITY DEFINER function that resolves the caller's linked CRM record and returns only that client's projects, and only client-appropriate fields. Clients never see internal notes, employee tasks, staff permissions, internal activity, private files, or other clients/projects — and they never read the raw `projects`/`clients` tables (RLS still returns nothing to them). Suspended (inactive) client accounts lose portal access immediately; revoking access removes both the profile and the Auth login.
+
+Apply `supabase/migrations/20260902000000_client_portal.sql` (or the regenerated `supabase/schema.sql`) before using the portal.
 
 ## Security notes
 

@@ -2282,6 +2282,117 @@ async function runSubmissionTrackingSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runClientPortalSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  // ── Setup: two clients, each with their own project ─────────────────────
+  await asUser(db, alice)
+  const portalClientId = (await db.query(
+    `insert into public.clients (name, email) values ('Portal Client Co', 'portal@client.test') returning id`,
+  )).rows[0].id
+  const portalProjectId = (await db.query(
+    `insert into public.projects (name, client_id, status, progress, phase) values ('Portal Project', $1, 'active', 40, 2) returning id`,
+    [portalClientId],
+  )).rows[0].id
+  const otherClientId = (await db.query(
+    `insert into public.clients (name, email) values ('Other Co', 'other@client.test') returning id`,
+  )).rows[0].id
+  const otherProjectId = (await db.query(
+    `insert into public.projects (name, client_id, status) values ('Other Project', $1, 'active') returning id`,
+    [otherClientId],
+  )).rows[0].id
+
+  // ── Non-admins cannot invite clients ─────────────────────────────────────
+  await asUser(db, erin) // manager
+  const managerInviteFails = await expectError(db, () => db.query(
+    `select public.admin_create_client_account($1, 'sneaky@client.test', 'Sneaky')`,
+    [portalClientId],
+  ))
+  ok(`${label}: manager cannot create a client portal account (admin.manage only)`, managerInviteFails)
+
+  // ── Admin invites the client: placeholder with the CRM link ─────────────
+  await asUser(db, alice)
+  const placeholder = (await db.query(
+    `select * from public.admin_create_client_account($1, 'portal@client.test', 'Portal Client')`,
+    [portalClientId],
+  )).rows[0]
+  ok(`${label}: admin creates a client portal placeholder linked to the CRM record`,
+    placeholder?.role === 'client' && placeholder?.client_id === portalClientId && placeholder?.status === 'active')
+
+  const duplicateEmailRejected = await expectError(db, () => db.query(
+    `select public.admin_create_client_account($1, 'portal@client.test', 'Duplicate')`,
+    [portalClientId],
+  ))
+  ok(`${label}: duplicate client account e-mail is rejected`, duplicateEmailRejected)
+
+  // ── Trusted Auth provisioning claims the client placeholder ──────────────
+  await superUser(db)
+  const portalUser = await addUser(db, 'portal@client.test', { fullName: 'Portal Client', adminProvisioned: true })
+  const claimed = await scalar(db,
+    `select role, client_id, status, must_change_password from public.profiles where id = $1`, [portalUser])
+  ok(`${label}: trusted Auth provisioning claims the client placeholder preserving the CRM link`,
+    claimed?.role === 'client' && claimed?.client_id === portalClientId && claimed?.must_change_password === true)
+  ok(`${label}: claiming a client placeholder leaves no second profile`,
+    (await scalar(db, `select count(*)::int n from public.profiles where lower(email) = 'portal@client.test'`)).n === 1)
+
+  // ── The client sees only their own, sanitized projects ───────────────────
+  await asUser(db, portalUser)
+  await db.query(`select public.mark_password_changed($1)`, [portalUser])
+
+  const projects = (await db.query(`select * from public.get_client_portal_projects()`)).rows
+  ok(`${label}: portal lists only the client's own projects`, projects.length === 1 && projects[0].id === portalProjectId)
+  ok(`${label}: portal project rows are sanitized (no owner, manager, team, budget, health, priority)`,
+    projects[0]?.owner_id === undefined
+      && projects[0]?.manager_id === undefined
+      && projects[0]?.budget === undefined
+      && projects[0]?.health === undefined
+      && projects[0]?.priority === undefined)
+
+  const detail = (await db.query(`select * from public.get_client_portal_project($1)`, [portalProjectId])).rows[0]
+  ok(`${label}: portal project detail returns the client's own project`, detail?.id === portalProjectId && detail?.status === 'active')
+  ok(`${label}: portal project detail returns nothing for another client's project`,
+    (await db.query(`select * from public.get_client_portal_project($1)`, [otherProjectId])).rows.length === 0)
+
+  const clientInfo = (await db.query(`select * from public.get_client_portal_client()`)).rows[0]
+  ok(`${label}: portal returns the client's own CRM record`, clientInfo?.id === portalClientId && clientInfo?.name === 'Portal Client Co')
+
+  // Raw table reads remain blocked by RLS (the portal uses SECURITY DEFINER RPCs).
+  ok(`${label}: client still cannot read the raw projects table`,
+    (await scalar(db, `select count(*)::int n from public.projects`)).n === 0)
+  ok(`${label}: client still cannot read the raw clients table`,
+    (await scalar(db, `select count(*)::int n from public.clients`)).n === 0)
+
+  // ── Staff get nothing from the client-scoped RPCs ────────────────────────
+  await asUser(db, bob)
+  ok(`${label}: staff calling the portal RPC get no projects`,
+    (await db.query(`select * from public.get_client_portal_projects()`)).rows.length === 0)
+
+  // ── Suspended clients lose portal access immediately ─────────────────────
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [portalUser])
+  await asUser(db, portalUser)
+  ok(`${label}: suspended client portal returns no projects`,
+    (await db.query(`select * from public.get_client_portal_projects()`)).rows.length === 0)
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [portalUser])
+
+  // ── Anonymous visitors cannot call the portal RPC at all ─────────────────
+  await asUser(db, anonVisitor, 'anon')
+  const anonBlocked = await expectError(db, () => db.query(`select * from public.get_client_portal_projects()`))
+  ok(`${label}: anonymous visitor cannot execute the portal RPC`, anonBlocked)
+
+  // ── Revoking access removes the profile and Auth login atomically ────────
+  await asUser(db, alice)
+  await db.query(`select public.admin_delete_client_account($1)`, [portalUser])
+  await superUser(db)
+  const revoked = await scalar(db, `select
+    (select count(*)::int from public.profiles where id = $1) p,
+    (select count(*)::int from auth.users where id = $1) a`, [portalUser])
+  ok(`${label}: revoking client access removes both profile and Auth account`, revoked.p === 0 && revoked.a === 0)
+
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2301,6 +2412,7 @@ async function main() {
   await runProjectActivitySuite(dbA, idsA, 'upgrade')
   await runProjectDeliveryClosureSuite(dbA, idsA, 'upgrade')
   await runSubmissionTrackingSuite(dbA, idsA, 'upgrade')
+  await runClientPortalSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
