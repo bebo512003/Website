@@ -200,7 +200,7 @@ export async function POST(request: Request) {
   if ('error' in parsedMember) return parsedMember.error
 
   const { callerClient, serviceClient } = createRequestClients(configuration, token)
-  const authorization = await verifyAdmin(callerClient, token)
+  const authorization = await verifyPermissions(callerClient, token, ['employee.manage'])
   if ('error' in authorization) return authorization.error
 
   // Create the permission-checked placeholder first. The auth.users trigger will
