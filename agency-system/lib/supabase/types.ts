@@ -138,6 +138,8 @@ export type ProjectRow = {
   owner_id: string | null
   manager_id: string | null
   source_submission_id: string | null
+  archived_at: string | null
+  archived_by: string | null
   created_by: string | null
   created_at: string
   updated_at: string
@@ -206,6 +208,54 @@ export type ProjectActivityEventType =
   | 'deadline_changed'
   | 'file_uploaded'
   | 'file_deleted'
+  | 'delivery_prepared'
+  | 'delivery_ready'
+  | 'delivery_sent'
+  | 'delivery_file_added'
+  | 'delivery_file_removed'
+  | 'revision_requested'
+  | 'approval_recorded'
+  | 'archived'
+  | 'unarchived'
+
+export type ProjectDeliveryStatus =
+  | 'preparing'
+  | 'ready'
+  | 'delivered'
+  | 'revision_requested'
+  | 'approved'
+  | 'superseded'
+
+export type ProjectDeliveryApprovalState =
+  | 'not_requested'
+  | 'awaiting_client'
+  | 'approved_internally'
+  | 'revision_required'
+
+export type ProjectDeliveryRow = {
+  id: string
+  project_id: string
+  version: number
+  status: ProjectDeliveryStatus
+  notes: string | null
+  delivered_at: string | null
+  delivered_by: string | null
+  approval_state: ProjectDeliveryApprovalState
+  approval_recorded_by: string | null
+  approval_recorded_at: string | null
+  approval_note: string | null
+  revision_note: string | null
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ProjectDeliveryFileRow = {
+  delivery_id: string
+  file_id: string
+  added_by: string | null
+  added_at: string
+}
 
 export type ProjectActivityRow = {
   id: string
@@ -528,12 +578,13 @@ export interface Database {
         id?: string; name: string; name_en?: string | null; type?: ClientRow['type']; industry?: string | null; status?: ClientRow['status']; contact_person?: string | null; contact_position?: string | null; email?: string | null; phone?: string | null; location?: string | null; website?: string | null; logo_url?: string | null; notes?: string | null; total_value?: number; project_count?: number; first_project_date?: string | null; last_interaction_date?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ClientRow>, [{ foreignKeyName: 'clients_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] }]>
       projects: TableDefinition<ProjectRow, {
-        id?: string; name: string; description?: string | null; client_id: string; type?: string; priority?: ProjectPriority; status?: ProjectStatus; health?: ProjectHealth; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; owner_id?: string | null; manager_id?: string | null; source_submission_id?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
+        id?: string; name: string; description?: string | null; client_id: string; type?: string; priority?: ProjectPriority; status?: ProjectStatus; health?: ProjectHealth; phase?: number; phase_name?: string | null; progress?: number; budget?: number | null; currency?: string; start_date?: string | null; due_date?: string | null; completed_date?: string | null; owner_id?: string | null; manager_id?: string | null; source_submission_id?: string | null; archived_at?: string | null; archived_by?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
       }, Partial<ProjectRow>, [
         { foreignKeyName: 'projects_client_id_fkey'; columns: ['client_id']; isOneToOne: false; referencedRelation: 'clients'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_owner_id_fkey'; columns: ['owner_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_manager_id_fkey'; columns: ['manager_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_source_submission_id_fkey'; columns: ['source_submission_id']; isOneToOne: true; referencedRelation: 'form_submissions'; referencedColumns: ['id'] },
+        { foreignKeyName: 'projects_archived_by_fkey'; columns: ['archived_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
         { foreignKeyName: 'projects_created_by_fkey'; columns: ['created_by']; isOneToOne: false; referencedRelation: 'users'; referencedColumns: ['id'] },
       ]>
       project_members: TableDefinition<ProjectMemberRow, {
@@ -560,6 +611,19 @@ export interface Database {
       }, Partial<ProjectActivityRow>, [
         { foreignKeyName: 'project_activity_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
         { foreignKeyName: 'project_activity_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      project_deliveries: TableDefinition<ProjectDeliveryRow, {
+        id?: string; project_id: string; version: number; status?: ProjectDeliveryStatus; notes?: string | null; delivered_at?: string | null; delivered_by?: string | null; approval_state?: ProjectDeliveryApprovalState; approval_recorded_by?: string | null; approval_recorded_at?: string | null; approval_note?: string | null; revision_note?: string | null; created_by?: string | null; created_at?: string; updated_at?: string
+      }, Partial<ProjectDeliveryRow>, [
+        { foreignKeyName: 'project_deliveries_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'project_deliveries_delivered_by_fkey'; columns: ['delivered_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+        { foreignKeyName: 'project_deliveries_approval_recorded_by_fkey'; columns: ['approval_recorded_by']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
+      project_delivery_files: TableDefinition<ProjectDeliveryFileRow, {
+        delivery_id: string; file_id: string; added_by?: string | null; added_at?: string
+      }, Partial<ProjectDeliveryFileRow>, [
+        { foreignKeyName: 'project_delivery_files_delivery_id_fkey'; columns: ['delivery_id']; isOneToOne: false; referencedRelation: 'project_deliveries'; referencedColumns: ['id'] },
+        { foreignKeyName: 'project_delivery_files_file_id_fkey'; columns: ['file_id']; isOneToOne: false; referencedRelation: 'files'; referencedColumns: ['id'] },
       ]>
       files: TableDefinition<FileRow, {
         id?: string; name: string; type?: FileRow['type']; size?: number; mime_type?: string | null; storage_path?: string | null; project_id?: string | null; client_id?: string | null; uploaded_by?: string | null; starred?: boolean; created_at?: string; updated_at?: string
@@ -738,6 +802,41 @@ export type PortfolioProjectInsert = Database['public']['Tables']['portfolio_pro
 export type PortfolioProjectUpdate = Database['public']['Tables']['portfolio_projects']['Update']
 export type PortfolioProjectImage = PortfolioProjectImageRow
 export type PortfolioProjectImageInsert = Database['public']['Tables']['portfolio_project_images']['Insert']
+
+export type PortfolioImageWithUrl = PortfolioProjectImage & { image_url: string | null }
+export type PortfolioProjectWithRelations = PortfolioProject & {
+  portfolio_categories: Pick<PortfolioCategory, 'id' | 'name' | 'slug' | 'is_active'> | null
+  portfolio_project_images: PortfolioImageWithUrl[]
+}
+
+export type ProjectWithClient = Project & {
+  clients: Pick<Client, 'id' | 'name'> | null
+  owner?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
+  manager?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
+}
+export type TaskWithRelations = Task & {
+  projects: Pick<Project, 'id' | 'name'> | null
+  profiles: Pick<Profile, 'id' | 'full_name' | 'email'> | null
+}
+export type TaskActivity = TaskActivityRow & {
+  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
+export type TaskAssignee = TaskAssigneeRow
+export type ProjectActivity = ProjectActivityRow & {
+  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
+export type ProjectDelivery = ProjectDeliveryRow
+export type ProjectDeliveryFile = ProjectDeliveryFileRow & {
+  file?: FileItem | null
+}
+export type ProjectDeliveryWithFiles = ProjectDelivery & {
+  files: ProjectDeliveryFile[]
+}
+export type FileWithProject = FileItem & {
+  projects: Pick<Project, 'id' | 'name'> | null
+  is_delivery?: boolean
+}
+folio_project_images']['Insert']
 
 export type PortfolioImageWithUrl = PortfolioProjectImage & { image_url: string | null }
 export type PortfolioProjectWithRelations = PortfolioProject & {

@@ -29,6 +29,10 @@ import type {
   Project,
   ProjectInsert,
   ProjectActivity,
+  ProjectDelivery,
+  ProjectDeliveryApprovalState,
+  ProjectDeliveryFile,
+  ProjectDeliveryWithFiles,
   ProjectMember,
   ProjectPriority,
   ProjectStatus,
@@ -560,6 +564,101 @@ export async function getProjectActivity(projectId: string): Promise<Result<Proj
   return error ? fail([], error.message) : ok((data || []) as unknown as ProjectActivity[])
 }
 
+export async function getProjectDeliveries(projectId: string): Promise<Result<ProjectDeliveryWithFiles[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('project_deliveries')
+    .select('*, project_delivery_files(*, file:files(*))')
+    .eq('project_id', projectId)
+    .order('version', { ascending: false })
+  if (error) return fail([], error.message)
+  const deliveries = ((data || []) as unknown as (ProjectDelivery & { project_delivery_files?: ProjectDeliveryFile[] })[]).map((row) => ({
+    ...row,
+    files: row.project_delivery_files || [],
+  }))
+  return ok(deliveries)
+}
+
+export async function getFilesByProjectId(projectId: string): Promise<Result<FileItem[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.from('files').select('*').eq('project_id', projectId).order('created_at', { ascending: false })
+  return error ? fail([], error.message) : ok(data || [])
+}
+
+export async function prepareProjectDelivery(projectId: string, notes?: string | null): Promise<Result<ProjectDelivery | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('prepare_project_delivery', { p_project_id: projectId, p_notes: notes || null })
+  return error ? fail(null, error.message) : ok(data as unknown as ProjectDelivery)
+}
+
+export async function addProjectDeliveryFile(projectId: string, fileId: string): Promise<Result<ProjectDelivery | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('add_project_delivery_file', { p_project_id: projectId, p_file_id: fileId })
+  return error ? fail(null, error.message) : ok(data as unknown as ProjectDelivery)
+}
+
+export async function removeProjectDeliveryFile(projectId: string, fileId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.rpc('remove_project_delivery_file', { p_project_id: projectId, p_file_id: fileId })
+  return error ? fail(false, error.message) : ok(true)
+}
+
+export async function markDeliveryReady(projectId: string): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('mark_delivery_ready', { p_project_id: projectId })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
+}
+
+export async function markProjectDelivered(projectId: string, note?: string | null): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('mark_project_delivered', { p_project_id: projectId, p_note: note || null })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
+}
+
+export async function requestProjectRevision(projectId: string, note: string): Promise<Result<ProjectDelivery | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('request_project_revision', { p_project_id: projectId, p_note: note })
+  return error ? fail(null, error.message) : ok(data as unknown as ProjectDelivery)
+}
+
+export async function recordInternalClientApproval(
+  projectId: string,
+  note: string,
+  state: ProjectDeliveryApprovalState = 'approved_internally',
+): Promise<Result<ProjectDelivery | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('record_internal_client_approval', {
+    p_project_id: projectId,
+    p_note: note,
+    p_state: state,
+  })
+  return error ? fail(null, error.message) : ok(data as unknown as ProjectDelivery)
+}
+
+export async function completeProject(projectId: string): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('complete_project', { p_project_id: projectId })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
+}
+
+export async function archiveProject(projectId: string): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('archive_project', { p_project_id: projectId })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
+}
+
+export async function unarchiveProject(projectId: string): Promise<Result<Project | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('unarchive_project', { p_project_id: projectId })
+  return error ? fail(null, error.message) : ok(data as unknown as Project)
+}
+
+export async function getProjectCompletionBlockers(projectId: string): Promise<Result<string[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.rpc('project_completion_blockers', { p_project_id: projectId })
+  return error ? fail([], error.message) : ok((data as string[]) || [])
+}
+
 /** Every task-level event recorded across the tasks of one project. */
 export async function getProjectTaskActivity(projectId: string): Promise<Result<TaskActivity[]>> {
   if (!supabase) return fail([])
@@ -591,8 +690,27 @@ export async function deleteTask(id: string): Promise<Result<boolean>> {
 
 export async function getFiles(): Promise<Result<FileWithProject[]>> {
   if (!supabase) return fail([])
-  const { data, error } = await supabase.from('files').select('*, projects(id, name)').order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as FileWithProject[])
+  const [filesResult, deliveryLinks, deliveryPackages] = await Promise.all([
+    supabase.from('files').select('*, projects(id, name)').order('created_at', { ascending: false }),
+    supabase.from('project_delivery_files').select('file_id, delivery_id'),
+    supabase.from('project_deliveries').select('id, status'),
+  ])
+  if (filesResult.error) return fail([], filesResult.error.message)
+  const openPackages = new Set(
+    ((deliveryPackages.data || []) as { id: string; status: string }[])
+      .filter((pkg) => pkg.status !== 'superseded')
+      .map((pkg) => pkg.id),
+  )
+  const deliveryIds = new Set(
+    ((deliveryLinks.data || []) as { file_id: string; delivery_id: string }[])
+      .filter((row) => openPackages.has(row.delivery_id))
+      .map((row) => row.file_id),
+  )
+  const files = ((filesResult.data || []) as unknown as FileWithProject[]).map((file) => ({
+    ...file,
+    is_delivery: deliveryIds.has(file.id),
+  }))
+  return ok(files)
 }
 
 function getFileType(file: File): FileItem['type'] {
@@ -605,7 +723,7 @@ function getFileType(file: File): FileItem['type'] {
   return 'other'
 }
 
-export async function uploadProjectFile(projectId: string, userId: string, file: File): Promise<Result<FileItem | null>> {
+export async function uploadProjectFile(projectId: string, userId: string, file: File, options?: { asDelivery?: boolean }): Promise<Result<FileItem | null>> {
   if (!supabase) return fail(null)
   const validation = validateFile(file, 'project-files')
   if (!validation.valid) return fail(null, validation.error || 'Invalid project file.')
@@ -628,6 +746,10 @@ export async function uploadProjectFile(projectId: string, userId: string, file:
   if (error) {
     await supabase.storage.from('project-files').remove([storagePath])
     return fail(null, error.message)
+  }
+  if (options?.asDelivery && data) {
+    const marked = await addProjectDeliveryFile(projectId, data.id)
+    if (marked.error) return fail(data, marked.error)
   }
   return ok(data)
 }

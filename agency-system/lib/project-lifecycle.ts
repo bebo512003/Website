@@ -1,6 +1,11 @@
 // Single source of truth for the project lifecycle on the client. The database
 // mirrors these rules in `valid_project_status_transition` and enforces them
 // with the `enforce_project_status_transition` trigger — keep the two in sync.
+//
+// Session 15 adds delivery conditions on top of the state machine:
+// Ready for delivery and Delivered require at least one final delivery file;
+// Completed also requires the internal client-approval placeholder. Archive is
+// a flag (not a status) and is only allowed after Completed or Cancelled.
 import type { ProjectHealth, ProjectStatus } from '@/lib/supabase/types'
 
 export const PROJECT_STATUS_ORDER: ProjectStatus[] = [

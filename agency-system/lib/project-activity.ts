@@ -52,6 +52,15 @@ export const PROJECT_ACTIVITY_LABELS: Record<ProjectActivityEventType, string> =
   deadline_changed: 'Deadline changed',
   file_uploaded: 'File uploaded',
   file_deleted: 'File deleted',
+  delivery_prepared: 'Delivery package prepared',
+  delivery_ready: 'Delivery marked ready',
+  delivery_sent: 'Delivery sent',
+  delivery_file_added: 'Final delivery file added',
+  delivery_file_removed: 'Final delivery file removed',
+  revision_requested: 'Revision requested',
+  approval_recorded: 'Internal approval recorded',
+  archived: 'Project archived',
+  unarchived: 'Project unarchived',
 }
 
 /** Who performed the event — falls back to "System" for automatic rows. */
