@@ -217,6 +217,11 @@ export type ProjectActivityEventType =
   | 'approval_recorded'
   | 'archived'
   | 'unarchived'
+  | 'file_shared'
+  | 'file_unshared'
+  | 'client_feedback'
+  | 'client_approved'
+  | 'client_revision_requested'
 
 export type ProjectDeliveryStatus =
   | 'preparing'
@@ -231,6 +236,7 @@ export type ProjectDeliveryApprovalState =
   | 'awaiting_client'
   | 'approved_internally'
   | 'revision_required'
+  | 'approved_by_client'
 
 export type ProjectDeliveryRow = {
   id: string
@@ -313,6 +319,89 @@ export type CommentRow = {
   author_id: string | null
   created_at: string
   updated_at: string
+}
+
+// ── Client portal collaboration (Session 18) ────────────────────────────────
+// These tables are the only client-facing collaboration surface. Internal
+// discussion stays in `comments`; internal delivery state stays in
+// `project_deliveries`. Clients never write those tables directly.
+export type ClientMessageKind = 'message' | 'feedback' | 'approval' | 'revision'
+export type ClientApprovalAction = 'approved' | 'revision_requested' | 'feedback'
+export type ClientFileSource = 'shared' | 'delivery' | 'both'
+
+export type ClientSharedFileRow = {
+  id: string
+  project_id: string
+  file_id: string
+  shared_by: string | null
+  note: string | null
+  shared_at: string
+}
+
+export type ClientMessageRow = {
+  id: string
+  project_id: string
+  author_id: string | null
+  body: string
+  kind: ClientMessageKind
+  created_at: string
+}
+
+export type ClientApprovalRow = {
+  id: string
+  project_id: string
+  delivery_id: string | null
+  action: ClientApprovalAction
+  message: string | null
+  created_by: string | null
+  created_at: string
+}
+
+export type ClientPortalFile = {
+  id: string
+  name: string
+  type: FileRow['type']
+  size: number
+  mime_type: string | null
+  storage_path: string | null
+  created_at: string
+  source: ClientFileSource
+}
+
+export type ClientPortalMessage = {
+  id: string
+  body: string
+  kind: ClientMessageKind
+  created_at: string
+  mine: boolean
+  author_label: string
+  from_client: boolean
+}
+
+export type ClientPortalApproval = {
+  id: string
+  action: ClientApprovalAction
+  message: string | null
+  created_at: string
+}
+
+export type ClientPortalDeliverySummary = {
+  id: string
+  version: number
+  status: ProjectDeliveryStatus
+  delivered_at: string | null
+  approval_state: 'approved_by_client' | 'revision_required' | 'awaiting_you' | 'not_ready'
+}
+
+export type ClientPortalCollaboration = {
+  project_status: ProjectStatus
+  archived: boolean
+  can_approve: boolean
+  can_request_revision: boolean
+  delivery: ClientPortalDeliverySummary | null
+  files: ClientPortalFile[]
+  messages: ClientPortalMessage[]
+  approvals: ClientPortalApproval[]
 }
 
 // ── Dynamic form builder (Phase D) ──────────────────────────────────────────
@@ -439,6 +528,9 @@ export type NotificationType =
   | 'task_assignment'
   | 'form_submission'
   | 'submission'
+  | 'client_feedback'
+  | 'client_approval'
+  | 'client_revision'
 
 export type NotificationMetadata = {
   submission_id?: string
@@ -780,6 +872,18 @@ export type Interaction = InteractionRow
 export type InteractionInsert = Database['public']['Tables']['interactions']['Insert']
 export type Comment = CommentRow
 export type CommentInsert = Database['public']['Tables']['comments']['Insert']
+export type ClientSharedFile = ClientSharedFileRow
+export type ClientMessage = ClientMessageRow
+export type ClientApproval = ClientApprovalRow
+export type CommentWithAuthor = Comment & {
+  author?: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url'> | null
+}
+export type ClientSharedFileWithFile = ClientSharedFile & {
+  file?: FileItem | null
+}
+export type ClientMessageWithAuthor = ClientMessage & {
+  author?: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null
+}
 export type FormTemplate = FormTemplateRow
 export type FormTemplateInsert = Database['public']['Tables']['form_templates']['Insert']
 export type FormTemplateUpdate = Database['public']['Tables']['form_templates']['Update']

@@ -2,9 +2,9 @@
 // (Session 15). Mirrors the database helpers in
 // `project_completion_blockers` / `project_delivery_readiness` — keep them in sync.
 //
-// This module is staff-only. The approval state is an INTERNAL placeholder
-// recorded by the team; it is not a client-portal action and must stay
-// separate from any future client-facing approval table.
+// This module is staff-only. `approved_internally` is a staff placeholder;
+// real client-portal approval lives in `client_approvals` and is mirrored
+// here as `approved_by_client`. Clients never write this table directly.
 import type {
   Project,
   ProjectDelivery,
@@ -28,7 +28,7 @@ export const PROJECT_DELIVERY_STATUS_LABELS: Record<ProjectDeliveryStatus, strin
   ready: 'Ready',
   delivered: 'Delivered',
   revision_requested: 'Revision requested',
-  approved: 'Approved (internal)',
+  approved: 'Approved',
   superseded: 'Superseded',
 }
 
@@ -37,6 +37,7 @@ export const PROJECT_APPROVAL_STATE_ORDER: ProjectDeliveryApprovalState[] = [
   'awaiting_client',
   'approved_internally',
   'revision_required',
+  'approved_by_client',
 ]
 
 export const PROJECT_APPROVAL_STATE_LABELS: Record<ProjectDeliveryApprovalState, string> = {
@@ -44,6 +45,7 @@ export const PROJECT_APPROVAL_STATE_LABELS: Record<ProjectDeliveryApprovalState,
   awaiting_client: 'Awaiting client (internal note)',
   approved_internally: 'Approved — internal record',
   revision_required: 'Revision required',
+  approved_by_client: 'Approved by client',
 }
 
 /** Statuses a brand-new project (or a conversion) may start in. Delivery-stage
@@ -98,6 +100,7 @@ export function approvalStateBadgeClass(state: ProjectDeliveryApprovalState): st
     case 'awaiting_client':
       return 'border-cyan-500/30 text-cyan-300'
     case 'approved_internally':
+    case 'approved_by_client':
       return 'border-emerald-500/30 text-emerald-300'
     case 'revision_required':
       return 'border-orange-500/30 text-orange-300'
@@ -129,8 +132,8 @@ export function completionBlockers(
   if (delivery.status !== 'delivered' && delivery.status !== 'approved') {
     blockers.push('Mark the delivery package as delivered')
   }
-  if (delivery.approval_state !== 'approved_internally') {
-    blockers.push('Record the internal client-approval placeholder')
+  if (delivery.approval_state !== 'approved_internally' && delivery.approval_state !== 'approved_by_client') {
+    blockers.push('Record client approval or the internal approval placeholder')
   }
   return blockers
 }
