@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { flushEmailQueue } from '@/lib/email/flush'
 import type { Database, Json } from '@/lib/supabase/types'
 
 export const runtime = 'nodejs'
@@ -39,7 +40,14 @@ export async function GET(request: Request) {
     return Response.json({ error: error.message }, { status: 500, headers: NO_STORE })
   }
 
-  return Response.json({ data: data as Json }, { status: 200, headers: NO_STORE })
+  // Hobby plans can only run crons once per day, so also drain the email
+  // outbox here. The dedicated /api/cron/emails job remains the primary flush.
+  const email = await flushEmailQueue().catch((flushError) => {
+    console.error('[email] reminder-job flush failed:', flushError)
+    return null
+  })
+
+  return Response.json({ data: data as Json, email }, { status: 200, headers: NO_STORE })
 }
 
 export async function POST(request: Request) {
