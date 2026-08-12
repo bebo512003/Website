@@ -92,16 +92,33 @@ export default function ClientPortalPage() {
                 return (
                   <div key={submission.id} className="flex flex-col gap-2 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-fg">
-                        {submission.form_templates?.title || 'Service request'}
-                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="truncate text-sm font-semibold text-fg">
+                          {submission.form_templates?.title || 'Service request'}
+                        </p>
+                        {submission.reference_number && (
+                          <span className="font-mono-tech rounded border border-border bg-surface-raised px-1.5 py-0.5 text-[10px] text-accent">
+                            {submission.reference_number}
+                          </span>
+                        )}
+                      </div>
                       <p className="mt-1 text-xs text-text-tertiary">
                         {submission.company_name || submission.respondent_name || 'Request'} · {new Date(when).toLocaleDateString()}
                       </p>
                     </div>
-                    <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${submissionStatusStyle(submission.status)}`}>
-                      {SUBMISSION_STATUS_LABELS[submission.status as keyof typeof SUBMISSION_STATUS_LABELS] || submission.status}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${submissionStatusStyle(submission.status)}`}>
+                        {SUBMISSION_STATUS_LABELS[submission.status as keyof typeof SUBMISSION_STATUS_LABELS] || submission.status}
+                      </span>
+                      {submission.reference_number && (
+                        <Link
+                          href={`/track?ref=${encodeURIComponent(submission.reference_number)}`}
+                          className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text-secondary hover:border-line-light hover:text-fg"
+                        >
+                          Track
+                        </Link>
+                      )}
+                    </div>
                   </div>
                 )
               })}

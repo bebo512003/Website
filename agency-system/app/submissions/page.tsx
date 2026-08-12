@@ -366,6 +366,7 @@ export default function SubmissionsPage() {
       // Search query
       if (q) {
         const haystack = [
+          submission.reference_number,
           submission.respondent_name,
           submission.respondent_email,
           submission.respondent_phone,
@@ -693,6 +694,11 @@ export default function SubmissionsPage() {
                           <p className="truncate text-sm font-semibold text-fg hover:text-accent transition">
                             {submission.respondent_name || submission.respondent_email || 'Anonymous respondent'}
                           </p>
+                          {submission.reference_number && (
+                            <span className="font-mono-tech rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-accent">
+                              {submission.reference_number}
+                            </span>
+                          )}
                           {submission.company_name && (
                             <span className="rounded border border-border bg-surface px-1.5 py-0.5 text-[10px] text-text-secondary">
                               {submission.company_name}
@@ -756,7 +762,24 @@ export default function SubmissionsPage() {
                       ) : (
                         <>
                           {/* Contact Info Header */}
-                          <div className="grid gap-3 rounded-md border border-border bg-surface p-3.5 sm:grid-cols-2 lg:grid-cols-4">
+                          <div className="grid gap-3 rounded-md border border-border bg-surface p-3.5 sm:grid-cols-2 lg:grid-cols-5">
+                            <div>
+                              <dt className="font-mono-tech text-[9px] uppercase tracking-wider text-text-tertiary">Reference</dt>
+                              <dd className="mt-0.5 flex items-center gap-1.5 font-mono-tech text-xs font-semibold text-accent">
+                                {submission.reference_number || '—'}
+                                {submission.reference_number && (
+                                  <Link
+                                    href={`/track?ref=${encodeURIComponent(submission.reference_number)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-text-tertiary hover:text-accent"
+                                    title="View public tracking page"
+                                  >
+                                    <ExternalLink className="h-3 w-3" />
+                                  </Link>
+                                )}
+                              </dd>
+                            </div>
                             <div>
                               <dt className="font-mono-tech text-[9px] uppercase tracking-wider text-text-tertiary">Form</dt>
                               <dd className="mt-0.5 text-sm font-medium text-fg">{submission.form_templates?.title || 'Unknown Form'}</dd>

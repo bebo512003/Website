@@ -101,3 +101,83 @@ export function submissionClientLabel(submission: {
     .filter(Boolean)
     .join(' · ') || 'Anonymous respondent'
 }
+
+// ── Public Tracking & Confirmation Metadata (Session 16) ───────────────────
+
+export const AGENCY_CONTACT = {
+  email: 'support@agencyos.studio',
+  phone: '+1 (555) 019-2834',
+  hours: 'Monday – Friday, 9:00 AM – 6:00 PM EST',
+  hoursAr: 'من الإثنين إلى الجمعة، 9:00 ص – 6:00 م',
+  expectedResponse: '1–2 business days (24–48 hours)',
+  expectedResponseAr: 'خلال 1–2 يوم عمل (24–48 ساعة)',
+}
+
+export const CLIENT_STATUS_DESCRIPTIONS: Record<string, { en: string; ar: string }> = {
+  new: {
+    en: 'Your request has been received and logged in our system. It is currently in the initial review queue.',
+    ar: 'تم استلام طلبك وتسجيله بنجاح في النظام، وهو حالياً في قائمة المراجعة الأولية.',
+  },
+  reviewing: {
+    en: 'Our creative and technical specialists are actively evaluating your requirements, scope, and timeline.',
+    ar: 'يقوم فريقنا بمراجعة متطلبات المشروع ونطاق العمل والجدول الزمني بعناية.',
+  },
+  need_information: {
+    en: 'We need additional details to proceed. Please check your email for questions from our review team.',
+    ar: 'نحتاج إلى بعض التوضيحات الإضافية لمتابعة الطلب. يرجى مراجعة بريدك الإلكتروني.',
+  },
+  qualified: {
+    en: 'Your request has been qualified and approved for engagement planning and proposal preparation.',
+    ar: 'تم تأهيل طلبك والموافقة المبدئية عليه للبدء في تجهيز خطة العمل والعرض.',
+  },
+  approved: {
+    en: 'Your request has been approved by team leadership. Project kickoff preparations are underway.',
+    ar: 'تم اعتماد طلبك من إدارة الفريق وجارٍ تجهيز إجراءات بدء المشروع.',
+  },
+  converted: {
+    en: 'Your request has been converted to an active project in our production pipeline.',
+    ar: 'تم تحويل طلبك رسمياً إلى مشروع نشط قيد التنفيذ في استوديو العمل.',
+  },
+  rejected: {
+    en: 'We are currently unable to accept this request due to capacity or scope constraints. Thank you for reaching out.',
+    ar: 'نعتذر عن عدم إمكانية استلام هذا الطلب حالياً نظراً لضغط العمل أو متطلبات النطاق. شكراً لتواصلك معنا.',
+  },
+  archived: {
+    en: 'This submission has been archived or closed.',
+    ar: 'تمت أرشفة هذا الطلب أو إغلاقه.',
+  },
+}
+
+export const CLIENT_STAGE_STEPS = [
+  { key: 'received', label: 'Received', labelAr: 'تم الاستلام', desc: 'Request logged', descAr: 'تسجيل الطلب' },
+  { key: 'reviewing', label: 'In Review', labelAr: 'قيد المراجعة', desc: 'Scope evaluation', descAr: 'تقييم النطاق' },
+  { key: 'qualified', label: 'Qualified', labelAr: 'مؤهل ومعتمد', desc: 'Planning & scoping', descAr: 'التخطيط والاعتماد' },
+  { key: 'converted', label: 'In Production', labelAr: 'قيد التنفيذ', desc: 'Active project', descAr: 'مشروع نشط' },
+]
+
+export function getClientStageProgress(status: string): {
+  currentStage: number // 1 to 4 (or 0 for terminal non-success)
+  percent: number
+  isTerminal: boolean
+  isDeclined: boolean
+} {
+  switch (status) {
+    case 'new':
+      return { currentStage: 1, percent: 25, isTerminal: false, isDeclined: false }
+    case 'reviewing':
+    case 'need_information':
+      return { currentStage: 2, percent: 50, isTerminal: false, isDeclined: false }
+    case 'qualified':
+    case 'approved':
+      return { currentStage: 3, percent: 75, isTerminal: false, isDeclined: false }
+    case 'converted':
+      return { currentStage: 4, percent: 100, isTerminal: true, isDeclined: false }
+    case 'rejected':
+      return { currentStage: 0, percent: 0, isTerminal: true, isDeclined: true }
+    case 'archived':
+      return { currentStage: 0, percent: 0, isTerminal: true, isDeclined: false }
+    default:
+      return { currentStage: 1, percent: 25, isTerminal: false, isDeclined: false }
+  }
+}
+

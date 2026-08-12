@@ -2192,6 +2192,96 @@ async function runStorageSecuritySuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runSubmissionTrackingSuite(db, ids, label) {
+  const { anonVisitor, alice } = ids
+
+  // 1. Reference generator format check
+  const generatedRef = (await scalar(db, `select public.generate_submission_reference() as ref`)).ref
+  ok(`${label}: submission reference matches expected format REQ-YYMM-XXXXXX`, /^REQ-\d{4}-[A-Z0-9]{6,}$/.test(generatedRef))
+
+  // 2. Submit dynamic form and verify unique reference_number and tracking_token
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, description, status) values ('track-form', 'Branding Track Form', 'Tracking test form', 'published') on conflict do nothing`)
+  const trackForm = (await db.query(`select id from public.form_templates where slug = 'track-form'`)).rows[0]
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Your Name', true, 'name', 1),
+    ($1, 'short_text', 'Email Address', true, 'email', 2)
+    on conflict do nothing`, [trackForm.id])
+  const qRows = (await db.query(`select id, map_to from public.form_questions where form_id = $1`, [trackForm.id])).rows
+  const qName = qRows.find((q) => q.map_to === 'name').id
+  const qEmail = qRows.find((q) => q.map_to === 'email').id
+
+  await asUser(db, anonVisitor, 'anon')
+  const subRec = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [
+    trackForm.id,
+    JSON.stringify({ [qName]: 'Tracking Client', [qEmail]: 'tracker@domain.test' }),
+  ])).rows[0]
+
+  ok(`${label}: new submission receives unique reference number`,
+    typeof subRec?.reference_number === 'string' && subRec.reference_number.startsWith('REQ-'))
+  ok(`${label}: new submission receives unguessable tracking token`,
+    typeof subRec?.tracking_token === 'string' && subRec.tracking_token.length >= 32)
+
+  // 3. Anonymous visitor can track using reference_number (case-insensitive)
+  const trackingByRef = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: tracking lookup by exact reference succeeds`,
+    trackingByRef?.reference_number === subRec.reference_number && trackingByRef?.form_title === 'Branding Track Form')
+  ok(`${label}: tracking stage index defaults to 1 (Received)`,
+    trackingByRef?.stage_index === 1 && trackingByRef?.status === 'new' && trackingByRef?.client_status_label === 'Received')
+
+  const trackingLower = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number.toLowerCase()])).t
+  ok(`${label}: tracking lookup by lowercase reference succeeds (case-insensitive)`,
+    trackingLower?.reference_number === subRec.reference_number)
+
+  // 4. Anonymous visitor can track using tracking_token
+  const trackingByToken = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.tracking_token])).t
+  ok(`${label}: tracking lookup by tracking token succeeds`,
+    trackingByToken?.reference_number === subRec.reference_number && trackingByToken?.tracking_token === subRec.tracking_token)
+
+  // 5. Invalid / non-existent key returns null
+  const trackingNotFound = (await scalar(db, `select public.get_public_submission_tracking('REQ-NON-EXISTENT-999') as t`)).t
+  ok(`${label}: tracking lookup for unknown reference returns null`, trackingNotFound === null)
+
+  const trackingBlank = (await scalar(db, `select public.get_public_submission_tracking('   ') as t`)).t
+  ok(`${label}: tracking lookup for blank key returns null`, trackingBlank === null)
+
+  // 6. Verification of payload security: NO internal notes, reviewer ID, or audit logs leaked
+  ok(`${label}: public tracking payload contains SLA and contact metadata`,
+    typeof trackingByRef?.expected_response_time === 'string' && typeof trackingByRef?.contact_email === 'string')
+  ok(`${label}: public tracking payload does not leak internal reviewer_id`,
+    trackingByRef?.reviewer_id === undefined)
+  ok(`${label}: public tracking payload does not leak internal notes or audit events`,
+    trackingByRef?.notes === undefined && trackingByRef?.events === undefined)
+
+  // 7. Status transitions update client tracking projection in real time
+  await asUser(db, alice)
+  await db.query(`select public.update_form_submission_status($1, 'reviewing', 'Starting review')`, [subRec.id])
+  await asUser(db, anonVisitor, 'anon')
+  const trackingReviewing = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: moving status to reviewing updates tracking stage to 2`,
+    trackingReviewing?.stage_index === 2 && trackingReviewing?.client_status_label === 'Under Review')
+
+  await asUser(db, alice)
+  await db.query(`select public.update_form_submission_status($1, 'qualified', 'Qualified for branding')`, [subRec.id])
+  await asUser(db, anonVisitor, 'anon')
+  const trackingQualified = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: moving status to qualified updates tracking stage to 3`,
+    trackingQualified?.stage_index === 3 && trackingQualified?.client_status_label === 'Qualified')
+
+  // 8. Anonymous visitor cannot query form_submissions table directly for other users' rows
+  await superUser(db)
+  const otherVisitor = await addUser(db, null, { anon: true })
+  await asUser(db, otherVisitor, 'anon')
+  const otherSeesZero = (await scalar(db, `select count(*)::int n from public.form_submissions`)).n
+  ok(`${label}: other anonymous visitor cannot read foreign submissions directly from table (RLS enforced)`,
+    otherSeesZero === 0)
+  const otherTracksSuccess = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: other anonymous visitor CAN track submission using reference number without account`,
+    otherTracksSuccess?.reference_number === subRec.reference_number)
+
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2210,6 +2300,7 @@ async function main() {
   await runTaskManagementSuite(dbA, idsA, 'upgrade')
   await runProjectActivitySuite(dbA, idsA, 'upgrade')
   await runProjectDeliveryClosureSuite(dbA, idsA, 'upgrade')
+  await runSubmissionTrackingSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -2251,6 +2342,12 @@ async function main() {
   ok('fresh: published dynamic form is publicly readable', (await scalar(dbB, 'select count(*)::int n from public.form_templates')).n === 1)
   const freshSubmission = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'visitor@fresh.test' })])).rows[0]
   ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'new' && freshSubmission?.respondent_email === 'visitor@fresh.test')
+  ok('fresh: anonymous submission generates reference number and tracking token',
+    typeof freshSubmission?.reference_number === 'string' && freshSubmission.reference_number.startsWith('REQ-') && typeof freshSubmission?.tracking_token === 'string')
+  const freshTracking = (await scalar(dbB, `select public.get_public_submission_tracking($1) as t`, [freshSubmission.reference_number])).t
+  ok('fresh: public tracking lookup by reference number succeeds',
+    freshTracking?.reference_number === freshSubmission.reference_number && freshTracking?.stage_index === 1)
+
   await asUser(dbB, aliceB)
   ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
   const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows
@@ -2265,6 +2362,9 @@ async function main() {
   await dbB.query(`select public.update_form_submission_status($1, 'qualified', 'Fresh qualification note')`, [freshSubmission.id])
   const freshEvents = (await dbB.query(`select * from public.form_submission_events where submission_id = $1 order by created_at asc`, [freshSubmission.id])).rows
   ok('fresh: full event audit log recorded on fresh schema', freshEvents.length === 3 && freshEvents.map((e) => e.event_type).includes('status_changed'))
+  const freshTrackingQualified = (await scalar(dbB, `select public.get_public_submission_tracking($1) as t`, [freshSubmission.reference_number])).t
+  ok('fresh: public tracking reflects qualification status',
+    freshTrackingQualified?.stage_index === 3 && freshTrackingQualified?.client_status_label === 'Qualified')
 
   const freshProject = (await dbB.query(
     `select * from public.convert_submission_to_project(

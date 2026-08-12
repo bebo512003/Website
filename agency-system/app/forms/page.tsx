@@ -57,6 +57,7 @@ export default function PublicFormsPage() {
           <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
             <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="text-xs text-fg transition">Available forms</Link>
+            <Link href="/track" className="text-xs text-text-secondary transition hover:text-fg">Track request</Link>
           </nav>
           <div className="hidden items-center gap-2 md:flex">
             <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
@@ -78,6 +79,7 @@ export default function PublicFormsPage() {
             <div className="grid gap-1">
               <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
               <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-fg hover:bg-surface-raised">Available forms</Link>
+              <Link href="/track" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Track request</Link>
             </div>
             <div className="mt-3 grid gap-2 border-t border-border pt-3">
               <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
@@ -206,6 +208,27 @@ export default function PublicFormsPage() {
           )}
         </div>
 
+        {/* Track Submission Banner */}
+        <div className="mt-8 rounded-md border border-border bg-surface-raised p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-bg text-accent">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-fg">Already submitted a request?</h3>
+                <p className="text-xs text-text-secondary">Check the live progress of your submission anytime with your reference number.</p>
+              </div>
+            </div>
+            <Link
+              href="/track"
+              className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-4 py-2 text-xs font-semibold text-fg transition hover:border-line-light hover:text-accent"
+            >
+              Track request status <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+
         {/* Browse Portfolio CTA */}
         <div className="mt-10 border-t border-border pt-8">
           <p className="text-sm text-text-secondary">
@@ -232,6 +255,7 @@ export default function PublicFormsPage() {
           <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
             <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
             <Link href="/forms" className="hover:text-fg">Request a project</Link>
+            <Link href="/track" className="hover:text-fg">Track request</Link>
             <Link href="/auth" className="hover:text-fg">Login</Link>
           </nav>
           <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>

@@ -356,6 +356,8 @@ export type FormQuestionRow = {
 
 export type FormSubmissionRow = {
   id: string
+  reference_number: string
+  tracking_token: string
   form_id: string
   form_version: number
   status: SubmissionStatus
@@ -644,7 +646,7 @@ export interface Database {
         id?: string; form_id: string; question_type: FormQuestionType; label: string; help_text?: string | null; placeholder?: string | null; required?: boolean; options?: Json; config?: Json; map_to?: FormQuestionMapTo | null; position?: number; created_at?: string; updated_at?: string
       }, Partial<FormQuestionRow>>
       form_submissions: TableDefinition<FormSubmissionRow, {
-        id?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; reviewer_id?: string | null; reviewed_at?: string | null; converted_at?: string | null; converted_by?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
+        id?: string; reference_number?: string; tracking_token?: string; form_id: string; form_version?: number; status?: FormSubmissionRow['status']; respondent_name?: string | null; respondent_email?: string | null; respondent_phone?: string | null; company_name?: string | null; client_id?: string | null; project_id?: string | null; reviewer_id?: string | null; reviewed_at?: string | null; converted_at?: string | null; converted_by?: string | null; created_by?: string | null; submitted_at?: string; created_at?: string; updated_at?: string
       }, Partial<FormSubmissionRow>>
       form_submission_answers: TableDefinition<FormSubmissionAnswerRow, {
         id?: string; submission_id: string; question_id?: string | null; question_snapshot: Json; value?: Json; created_at?: string
@@ -743,6 +745,8 @@ export interface Database {
       archive_project: { Args: { p_project_id: string }; Returns: ProjectRow }
       unarchive_project: { Args: { p_project_id: string }; Returns: ProjectRow }
       project_completion_blockers: { Args: { p_project_id: string }; Returns: string[] }
+      get_public_submission_tracking: { Args: { p_tracking_key: string }; Returns: PublicSubmissionTracking | null }
+      generate_submission_reference: { Args: Record<string, never>; Returns: string }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -800,6 +804,27 @@ export type PublicFormTemplateSummary = PublicFormTemplate & {
 }
 export type ClientFormSubmission = FormSubmission & {
   form_templates?: { title: string; slug: string } | null
+}
+export type PublicSubmissionTracking = {
+  id: string
+  reference_number: string
+  tracking_token: string
+  form_id: string
+  form_title: string
+  form_description: string | null
+  status: SubmissionStatus
+  client_status_label: string
+  client_status_description: string
+  stage_index: number
+  submitted_at: string
+  updated_at: string
+  respondent_name: string | null
+  company_name: string | null
+  has_project: boolean
+  expected_response_time: string
+  contact_email: string
+  contact_phone: string
+  support_hours: string
 }
 export type Notification = NotificationRow
 export type Permission = PermissionRow

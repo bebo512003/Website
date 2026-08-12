@@ -2,15 +2,16 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, CheckCircle2, FileWarning, Globe, Home, Layers3, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowLeft, FileWarning, Globe, Home, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   getFormQuestions,
   getPublishedFormTemplateBySlug,
   uploadFormFile,
 } from '@/lib/supabase/database'
-import type { FormQuestion, PublicFormTemplate } from '@/lib/supabase/types'
+import type { FormQuestion, FormSubmissionRow, PublicFormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
+import { SubmissionConfirmation } from '@/components/forms/submission-confirmation'
 import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
 import { validateFile } from '@/lib/storage-config'
@@ -89,6 +90,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
+  const [submittedData, setSubmittedData] = useState<FormSubmissionRow | null>(null)
   const [uploadingQuestionId, setUploadingQuestionId] = useState<string | null>(null)
   const [sessionError, setSessionError] = useState('')
 
@@ -229,6 +231,28 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
     // ── Session 05: Honeypot check ───────────────────────────────────────
     if (honeypot.trim() !== '') {
       // Bot detected — silently pretend success.
+      setSubmittedData({
+        id: 'mock-bot',
+        reference_number: 'REQ-' + new Date().toISOString().slice(2, 4) + '08-BOT000',
+        tracking_token: 'bot',
+        form_id: template.id,
+        form_version: 1,
+        status: 'new',
+        respondent_name: null,
+        respondent_email: null,
+        respondent_phone: null,
+        company_name: null,
+        client_id: null,
+        project_id: null,
+        reviewer_id: null,
+        reviewed_at: null,
+        converted_at: null,
+        converted_by: null,
+        created_by: null,
+        submitted_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
       setDone(true)
       return
     }
@@ -276,7 +300,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
         }),
       })
 
-      const result = (await response.json()) as { data?: unknown; error?: string }
+      const result = (await response.json()) as { data?: FormSubmissionRow; error?: string }
 
       if (!response.ok || result.error) {
         setError(result.error || 'Submission failed.')
@@ -284,7 +308,10 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
         return
       }
 
-      // Success — start cooldown.
+      // Success — start cooldown & store submission data for confirmation view.
+      if (result.data) {
+        setSubmittedData(result.data)
+      }
       submitTimeRef.current = Date.now()
       setCooldownRemaining(Math.ceil(SUBMIT_COOLDOWN_MS / 1000))
       setDone(true)
@@ -299,6 +326,7 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
     setValues({})
     setErrors({})
     setError('')
+    setSubmittedData(null)
     setDone(false)
     setTurnstileToken(null)
   }
@@ -336,35 +364,41 @@ export default function PublicFormPage({ params }: { params: Promise<{ slug: str
     )
   }
 
-  // ── Success ──────────────────────────────────────────────────────────────
-  if (done) {
+  // ── Success / Confirmation View (Session 16) ────────────────────────────
+  if (done && template) {
     return (
-      <main className="flex min-h-screen items-center justify-center bg-bg p-5">
-        <div className="w-full max-w-lg rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-accent/10">
-            <CheckCircle2 className="h-7 w-7 text-accent" />
-          </div>
-          <h1 className="text-xl font-semibold text-fg">{i18n.submittedTitle}</h1>
-          <p className="mt-3 text-sm text-text-secondary">{i18n.submittedDesc}</p>
-          {cooldownRemaining > 0 ? (
-            <p className="mt-4 text-xs text-text-tertiary">
-              {i18n.cooldown.replace('{seconds}', String(cooldownRemaining))}
-            </p>
-          ) : (
-            <button onClick={reset} className={`${primaryButtonClassName} mt-6`}>{i18n.another}</button>
-          )}
-          <div className="mt-7 grid gap-3 border-t border-border pt-6 sm:grid-cols-3">
-            <Link href="/" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
-              <Home className="h-4 w-4" /> {lang === 'ar' ? 'الرئيسية' : 'Home'}
+      <main className="relative min-h-screen bg-bg">
+        <div className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
+          <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-3 sm:px-5">
+            <Link href="/" className="flex min-h-10 items-center gap-3 text-fg" aria-label="Agency OS home">
+              <span className="flex h-9 w-9 items-center justify-center rounded border border-border bg-surface text-accent">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <span className="hidden font-mono-tech text-[10px] text-text-tertiary sm:inline">{HEADING}</span>
             </Link>
-            <Link href="/forms" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
-              <ArrowLeft className="h-4 w-4" /> {lang === 'ar' ? 'النماذج' : 'Forms'}
-            </Link>
-            <Link href="/portfolio" className="inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm font-medium text-fg">
-              <Layers3 className="h-4 w-4" /> {lang === 'ar' ? 'الأعمال' : 'Portfolio'}
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link href="/forms" className="hidden min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg sm:inline-flex">
+                <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
+              </Link>
+              <button type="button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="flex min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg">
+                <Globe className="h-3.5 w-3.5" /> {lang === 'ar' ? 'English' : 'العربية'}
+              </button>
+            </div>
           </div>
         </div>
+
+        <SubmissionConfirmation
+          submission={submittedData || {
+            id: 'mock',
+            reference_number: 'REQ-' + new Date().toISOString().slice(2, 4) + '08-ABC123',
+            submitted_at: new Date().toISOString(),
+          }}
+          formTitle={template.title}
+          formDescription={template.description}
+          lang={lang}
+          onReset={reset}
+          cooldownRemaining={cooldownRemaining}
+        />
       </main>
     )
   }
