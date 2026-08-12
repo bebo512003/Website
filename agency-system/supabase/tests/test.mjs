@@ -488,8 +488,12 @@ async function runSuite(db, ids, label) {
   await asUser(db, bob)
   ok(`${label}: active employee sees assigned project`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 1)
   ok(`${label}: active employee sees notifications`, (await scalar(db, 'select count(*)::int n from public.notifications')).n >= 1)
-  ok(`${label}: submission.view includes legacy intake attachment metadata`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 1)
-  ok(`${label}: submission.view includes legacy intake file storage reads`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 1)
+  ok(`${label}: employee without submission.view cannot read intake attachments`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 0)
+  ok(`${label}: employee without submission.view cannot read intake files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 0)
+  await asUser(db, erin)
+  ok(`${label}: manager with submission.view reads legacy intake attachments`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 1)
+  ok(`${label}: manager with submission.view reads legacy intake files`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 1)
+  await asUser(db, bob)
 
   // Forced password change with REAL data: while the temporary password is
   // still pending, the assigned employee sees nothing and can write nothing —
@@ -573,6 +577,9 @@ async function runPermissionSuite(db, ids, label) {
   const employeePerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
   ok(`${label}: employee has task.edit`, employeePerms.includes('task.edit'))
   ok(`${label}: employee CANNOT delete projects or view all`, !employeePerms.includes('project.delete') && !employeePerms.includes('project.view_all'))
+  ok(`${label}: employee does NOT receive submission.view by default`, !employeePerms.includes('submission.view'))
+  ok(`${label}: employee does NOT receive client.view by default`, !employeePerms.includes('client.view'))
+  ok(`${label}: employee cannot read CRM client records unless granted`, (await scalar(db, 'select count(*)::int n from public.clients')).n === 0)
 
   // has_permission() helper matches the permission array.
   ok(`${label}: has_permission true for granted key`, (await scalar(db, `select public.has_permission('task.edit') v`)).v === true)
@@ -591,9 +598,10 @@ async function runPermissionSuite(db, ids, label) {
 
   // Bob (employee, no project.create) cannot create a project even though he can
   // view projects — the write is rejected by RLS, not just hidden in the UI.
+  await asUser(db, alice)
+  const acmeClient = (await db.query(`select id from public.clients where email = 'carol@acme.test'`)).rows[0]
   await asUser(db, bob)
-  const clientRow = (await db.query(`select id from public.clients where email = 'carol@acme.test'`)).rows[0]
-  const employeeCreatesProjectFails = await expectError(db, () => db.query(`insert into public.projects (name, client_id) values ('Sneaky', $1)`, [clientRow.id]))
+  const employeeCreatesProjectFails = await expectError(db, () => db.query(`insert into public.projects (name, client_id) values ('Sneaky', $1)`, [acmeClient.id]))
   ok(`${label}: employee cannot create a project (no project.create)`, employeeCreatesProjectFails)
 
   // Manager (no employee.manage) cannot deactivate a user.
@@ -662,7 +670,7 @@ async function runPermissionUiContractSuite(db, ids, label) {
     ['submissions', 'forms', 'employees', 'portfolio', 'access-control', 'admin'].every((slug) => catalogSlugs.has(slug)),
     [...catalogSlugs].join(','))
   const catalogKeys = new Set(catalog.map((p) => p.key))
-  ok(`${label}: catalog exposes form.manage & portfolio.manage checkboxes`, catalogKeys.has('form.manage') && catalogKeys.has('portfolio.manage'))
+  ok(`${label}: catalog exposes form.manage, form.view & portfolio.manage checkboxes`, catalogKeys.has('form.manage') && catalogKeys.has('form.view') && catalogKeys.has('portfolio.manage'))
 
   // ── 2. Create-role flow: create + tick boxes + save ─────────────────────────
   const editorRoleId = (await scalar(db, `select (public.create_app_role('Content Editor', 'Checks boxes in the test')).id v`)).v
@@ -825,8 +833,8 @@ async function runDynamicFormSuite(db, ids, label) {
 
   // ── Read access ───────────────────────────────────────────────────
   await asUser(db, bob)
-  ok(`${label}: employee (submission.view) reads submissions`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 1)
-  ok(`${label}: employee (submission.view) reads answer snapshots`, (await scalar(db, 'select count(*)::int n from public.form_submission_answers')).n === 4)
+  ok(`${label}: employee without submission.view cannot read submissions`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 0)
+  ok(`${label}: employee without submission.view cannot read answer snapshots`, (await scalar(db, 'select count(*)::int n from public.form_submission_answers')).n === 0)
   const employeeArchiveFails = await expectError(db, () => db.query(`update public.form_submissions set status = 'archived'`))
   const archiveRows = await scalar(db, `select count(*)::int n from public.form_submissions where status = 'archived'`)
   ok(`${label}: employee (no submission.edit) cannot archive submissions`, employeeArchiveFails || archiveRows.n === 0)
@@ -1008,6 +1016,57 @@ async function runPortfolioSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runCapabilityEnforcementSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  // Direct operations — not UI clicks. A custom role with form.manage must be
+  // able to manage forms even though it lacks admin.manage (the old route bug).
+  await asUser(db, alice)
+  const formEditorId = (await scalar(db, `select (public.create_app_role('Form Editor', 'No admin.manage')).id v`)).v
+  await scalar(db, `select public.set_role_permissions($1, array['workspace.access','form.manage','form.view'])`, [formEditorId])
+  await scalar(db, `select public.assign_user_role($1, $2)`, [bob, formEditorId])
+
+  await asUser(db, bob)
+  ok(`${label}: custom form editor has form.manage without admin.manage`,
+    (await scalar(db, `select public.has_permission('form.manage') v`)).v === true
+      && (await scalar(db, `select public.has_permission('admin.manage') v`)).v === false)
+  ok(`${label}: has_any_permission treats form.manage as enough for the forms area`,
+    (await scalar(db, `select public.has_any_permission(array['form.manage','form.view','admin.manage']) v`)).v === true)
+  ok(`${label}: has_any_permission rejects the admin-only hub when none of the keys match`,
+    (await scalar(db, `select public.has_any_permission(array['admin.manage']) v`)).v === false)
+  const bobCreatesForm = await db.query(`insert into public.form_templates (slug, title) values ('editor-owned', 'Editor Owned')`)
+    .then(() => true).catch(() => false)
+  ok(`${label}: form.manage can create a form without admin.manage (RLS)`, bobCreatesForm)
+  const bobEditsForm = await db.query(`update public.form_templates set description = 'edited' where slug = 'editor-owned'`)
+    .then((r) => (r.affectedRows ?? 0) > 0).catch(() => false)
+  ok(`${label}: form.manage can update a form without admin.manage (RLS)`, bobEditsForm)
+  const bobDuplicates = await expectError(db, () => scalar(db, `select public.duplicate_form_template((select id from public.form_templates where slug = 'editor-owned'))`))
+  ok(`${label}: form.manage can call form RPCs without admin.manage`, !bobDuplicates)
+
+  ok(`${label}: form editor still cannot read client records`, (await scalar(db, 'select count(*)::int n from public.clients')).n === 0)
+  ok(`${label}: form editor still cannot read submissions`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 0)
+  const bobDeactivateFails = await expectError(db, () => db.query(`select public.set_user_status($1, 'inactive')`, [erin]))
+  ok(`${label}: form editor cannot deactivate users (no employee.manage)`, bobDeactivateFails)
+
+  await asUser(db, alice)
+  await scalar(db, `select public.set_user_role($1, 'employee'::public.app_role)`, [bob])
+  await scalar(db, `select public.delete_app_role($1)`, [formEditorId])
+
+  await asUser(db, bob)
+  ok(`${label}: default employee still cannot read clients after the custom role is removed`, (await scalar(db, 'select count(*)::int n from public.clients')).n === 0)
+  ok(`${label}: default employee still cannot read submissions after the custom role is removed`, (await scalar(db, 'select count(*)::int n from public.form_submissions')).n === 0)
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [bob])
+  await asUser(db, bob)
+  ok(`${label}: inactive employee loses every permission including leftover grants`,
+    (await scalar(db, `select public.get_user_permissions() perms`)).perms.length === 0
+      && (await scalar(db, `select public.has_any_permission(array['workspace.access','form.manage']) v`)).v === false)
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [bob])
+  await superUser(db)
+}
+
 async function runNotificationSuite(db, ids, label) {
   const { anonVisitor, alice, bob, erin } = ids
 
@@ -1088,6 +1147,7 @@ async function main() {
   await runTeamDirectorySuite(dbA, idsA, 'upgrade')
   await runPortfolioSuite(dbA, idsA, 'upgrade')
   await runPermissionUiContractSuite(dbA, idsA, 'upgrade')
+  await runCapabilityEnforcementSuite(dbA, idsA, 'upgrade')
   await runNotificationSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 

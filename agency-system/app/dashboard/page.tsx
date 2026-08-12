@@ -4,12 +4,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, Bell, CheckCircle2, FolderKanban, Plus, ShieldCheck, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
+import { ADMIN_AREA_PERMISSIONS } from '@/lib/permissions'
 import { getClients, getNotifications, getProjects, getTasks } from '@/lib/supabase/database'
 import type { Notification, ProjectWithClient, TaskWithRelations } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 export default function DashboardPage() {
-  const { profile, can } = useAuth()
+  const { profile, can, hasAny } = useAuth()
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
   const [tasks, setTasks] = useState<TaskWithRelations[]>([])
   const [notifications, setNotifications] = useState<Notification[]>([])

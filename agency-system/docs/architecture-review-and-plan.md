@@ -2,6 +2,13 @@
 
 Prepared 2026-08-09. Historical review; later migrations override parts of this plan.
 
+> **2026-08-12 — Session 04, permission enforcement done:** management areas
+> (`/admin/forms`, `/admin/portfolio`, `/admin/roles`, `/admin/team`, `/submissions`)
+> are gated by their own capability keys. `admin.manage` is no longer required to
+> open a page whose checkbox was granted. Default Employee no longer includes
+> `submission.view` or `client.view`. Inactive users and pending temporary
+> passwords still report an empty permission set.
+>
 > **2026-08-12 — Session 02, employee account lifecycle done:** migration
 > `20260819000000_account_lifecycle_hardening.sql` + Team Management UI/API complete the
 > internal provisioning loop end to end: Admin → Add Team Member → role + profile info →

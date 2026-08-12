@@ -704,6 +704,15 @@ export async function getFormSubmissions(formId: string): Promise<Result<import(
   return error ? fail([], error.message) : ok(data || [])
 }
 
+export async function getAllFormSubmissions(): Promise<Result<(import('./types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('form_submissions')
+    .select('*, form_templates(title, slug)')
+    .order('submitted_at', { ascending: false })
+  return error ? fail([], error.message) : ok((data || []) as unknown as (import('./types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[])
+}
+
 export async function getFormSubmissionDetails(submissionId: string): Promise<Result<{ answers: import('./types').FormSubmissionAnswer[]; attachments: import('./types').FormSubmissionAttachment[] }>> {
   if (!supabase) return fail({ answers: [], attachments: [] })
   const [answersResult, attachmentsResult] = await Promise.all([

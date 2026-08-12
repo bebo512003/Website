@@ -3,30 +3,36 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, Inbox, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/auth-context'
+import { ADMIN_AREA_PERMISSIONS } from '@/lib/permissions'
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
   const pathname = usePathname()
-  const { profile, can } = useAuth()
+  const { profile, can, hasAny } = useAuth()
 
   const navItems = [
-    { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, permission: 'dashboard.view' },
-    { title: 'Projects', href: '/projects', icon: FolderKanban, permission: 'project.view' },
-    { title: 'Forms', href: '/forms', icon: ClipboardList, permission: 'submission.view' },
-    { title: 'Tasks', href: '/tasks', icon: CheckSquare, permission: 'task.view' },
-    { title: 'Clients', href: '/clients', icon: Users, permission: 'client.view' },
-    { title: 'Team', href: '/team', icon: UsersRound, permission: 'employee.view' },
-    { title: 'Files', href: '/files', icon: FileText, permission: 'file.view' },
-    { title: 'Notifications', href: '/notifications', icon: Bell, permission: 'notification.view' },
-    { title: 'Reports', href: '/reports', icon: BarChart3, permission: 'report.view' },
-    { title: 'Administration', href: '/admin', icon: ShieldCheck, permission: 'admin.manage' },
-    { title: 'Settings', href: '/settings', icon: Settings, permission: 'settings.view' },
-  ].filter((item) => can(item.permission))
-  const isActive = (href: string) => href === '/dashboard' ? pathname === '/dashboard' : pathname.startsWith(href)
-  const mobileItems = navItems.filter((item) => ['/dashboard', '/projects', '/forms', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
+    { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, show: can('dashboard.view') },
+    { title: 'Projects', href: '/projects', icon: FolderKanban, show: can('project.view') },
+    { title: 'Forms', href: '/admin/forms', icon: ClipboardList, show: can('form.manage') || can('form.view') },
+    { title: 'Submissions', href: '/submissions', icon: Inbox, show: can('submission.view') },
+    { title: 'Tasks', href: '/tasks', icon: CheckSquare, show: can('task.view') },
+    { title: 'Clients', href: '/clients', icon: Users, show: can('client.view') },
+    { title: 'Team', href: '/team', icon: UsersRound, show: can('employee.view') },
+    { title: 'Files', href: '/files', icon: FileText, show: can('file.view') },
+    { title: 'Notifications', href: '/notifications', icon: Bell, show: can('notification.view') },
+    { title: 'Reports', href: '/reports', icon: BarChart3, show: can('report.view') },
+    { title: 'Administration', href: '/admin', icon: ShieldCheck, show: hasAny(...ADMIN_AREA_PERMISSIONS) },
+    { title: 'Settings', href: '/settings', icon: Settings, show: can('settings.view') },
+  ].filter((item) => item.show)
+  const isActive = (href: string) => {
+    if (href === '/dashboard') return pathname === '/dashboard'
+    if (href === '/admin') return pathname === '/admin' || (pathname.startsWith('/admin/') && !['/admin/forms', '/admin/portfolio', '/admin/roles', '/admin/team'].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)))
+    return pathname === href || pathname.startsWith(`${href}/`)
+  }
+  const mobileItems = navItems.filter((item) => ['/dashboard', '/projects', '/admin/forms', '/submissions', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
 
   return (
     <>
@@ -51,7 +57,7 @@ export function Sidebar() {
         </div>
       </aside>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 grid border-t border-border bg-surface/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" style={{ gridTemplateColumns: `repeat(${mobileItems.length}, minmax(0, 1fr))` }} aria-label="Mobile navigation">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 grid border-t border-border bg-surface/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" style={{ gridTemplateColumns: `repeat(${Math.max(mobileItems.length, 1)}, minmax(0, 1fr))` }} aria-label="Mobile navigation">
         {mobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.href); return <Link key={item.href} href={item.href} className={cn('flex flex-col items-center gap-1 py-2 text-[9px]', active ? 'text-accent' : 'text-text-tertiary')}><Icon className="h-4 w-4" /><span className="max-w-full truncate">{item.title === 'Administration' ? 'Admin' : item.title}</span></Link> })}
       </nav>
     </>

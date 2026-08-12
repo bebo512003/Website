@@ -14,7 +14,7 @@ import {
   updateAppRole,
 } from '@/lib/supabase/database'
 import type { AppRoleWithPermissions, Permission, Profile } from '@/lib/supabase/types'
-import { categoryLabel, categorySlug, compareCategories } from '@/lib/permissions'
+import { ROLE_CAPABILITY_MATRIX, ROLE_MATRIX_LABELS, categoryLabel, categorySlug, compareCategories, permissionName } from '@/lib/permissions'
 import { EmptyState, InlineAlert, LoadingState, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type PermissionGroup = { slug: string; label: string; items: Permission[] }
@@ -292,6 +292,43 @@ export function RolesPermissionsAdmin() {
     <div className="grid gap-5">
       {error && <InlineAlert>{error}</InlineAlert>}
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
+
+      <Panel title="Capability matrix" description="What the four system roles receive by default. Custom roles start empty — they get only the boxes you check. Role names never imply extra access.">
+        <div className="overflow-x-auto">
+          <table className="min-w-full divide-y divide-border text-left">
+            <thead className="bg-surface-raised">
+              <tr className="text-[11px] uppercase tracking-wide text-text-tertiary">
+                <th className="px-5 py-3 font-medium">Role</th>
+                <th className="px-5 py-3 font-medium">Default capabilities</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {(['admin', 'manager', 'employee', 'client'] as const).map((key) => (
+                <tr key={key}>
+                  <td className="align-top px-5 py-4">
+                    <p className="text-sm font-semibold text-fg">{ROLE_MATRIX_LABELS[key].name}</p>
+                    <p className="mt-1 max-w-xs text-xs text-text-tertiary">{ROLE_MATRIX_LABELS[key].summary}</p>
+                  </td>
+                  <td className="px-5 py-4">
+                    <div className="flex flex-wrap gap-1.5">
+                      {(key === 'admin' ? ['Every permission in the catalog'] : ROLE_CAPABILITY_MATRIX[key].map((permission) => permissionName(permission))).map((label) => (
+                        <span key={label} className="rounded border border-border bg-surface-raised px-2 py-0.5 text-[11px] text-text-secondary">{label}</span>
+                      ))}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              <tr>
+                <td className="align-top px-5 py-4">
+                  <p className="text-sm font-semibold text-fg">Custom roles</p>
+                  <p className="mt-1 max-w-xs text-xs text-text-tertiary">Created below. Nothing is granted until you tick the checkboxes and save.</p>
+                </td>
+                <td className="px-5 py-4 text-xs text-text-tertiary">Exactly the checked boxes. Opening the matching area no longer requires Manage system.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </Panel>
 
       <Panel
         title="Create a role"

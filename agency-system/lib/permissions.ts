@@ -1,7 +1,6 @@
 // Frontend copy of the permission catalog. The source of truth is the `permissions`
-// table in Postgres (see migration 20260810000000_role_permission_system.sql); this
-// module exists so the UI can label, group, and route-guard by permission without
-// hardcoding a role → permission map. Role names never imply permissions.
+// table in Postgres; this module labels, groups, and route-guards by permission
+// without hardcoding a role → permission map. Role names never imply permissions.
 
 export type PermissionDef = {
   key: string
@@ -42,6 +41,7 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'submission.edit', name: 'Edit submissions', category: 'Submissions', description: 'Update submission records.' },
   { key: 'submission.assign', name: 'Assign submissions', category: 'Submissions', description: 'Assign submissions to projects or people.' },
 
+  { key: 'form.view', name: 'View forms', category: 'Forms', description: 'Open the form inventory, including drafts that are not public.' },
   { key: 'form.manage', name: 'Manage forms', category: 'Forms', description: 'Create, edit, publish, duplicate, archive and delete dynamic forms and their questions.' },
 
   { key: 'portfolio.manage', name: 'Manage portfolio', category: 'Portfolio', description: 'Create, edit, reorder, publish, archive, and delete public portfolio projects and images.' },
@@ -67,51 +67,164 @@ export const PERMISSIONS: PermissionDef[] = [
   { key: 'portal.view', name: 'View client portal', category: 'Portal', description: 'Access the client portal.' },
 ]
 
-// Which permission is required to open each staff route. This is enforced in the
-// AppShell guard so manually typing a URL cannot bypass it; RLS enforces the same
-// rules at the database layer.
-export const ROUTE_PERMISSIONS: { prefix: string; permission: string; exact?: boolean }[] = [
-  { prefix: '/admin', permission: 'admin.manage' },
-  { prefix: '/team', permission: 'employee.view' },
-  { prefix: '/projects', permission: 'project.view' },
-  { prefix: '/clients', permission: 'client.view' },
-  { prefix: '/tasks', permission: 'task.view' },
-  { prefix: '/files', permission: 'file.view' },
-  { prefix: '/forms', permission: 'submission.view' },
-  { prefix: '/reports', permission: 'report.view' },
-  { prefix: '/notifications', permission: 'notification.view' },
-  { prefix: '/settings', permission: 'settings.view' },
-  { prefix: '/ai-assistant', permission: 'workspace.access' },
-  { prefix: '/templates', permission: 'workspace.access' },
-  { prefix: '/dashboard', permission: 'dashboard.view', exact: true },
+export const ALL_PERMISSION_KEYS = PERMISSIONS.map((permission) => permission.key)
+
+// Default seeded grants for the four system roles. Custom roles start empty and
+// receive only the boxes an administrator checks. Admin is every catalog key.
+export const ROLE_CAPABILITY_MATRIX: Record<'admin' | 'manager' | 'employee' | 'client', readonly string[]> = {
+  admin: ALL_PERMISSION_KEYS,
+  manager: [
+    'workspace.access', 'dashboard.view',
+    'project.view', 'project.view_all', 'project.create', 'project.edit', 'project.delete', 'project.assign',
+    'client.view', 'client.view_all', 'client.create', 'client.edit',
+    'task.view', 'task.create', 'task.edit', 'task.delete', 'task.assign',
+    'file.view', 'file.upload', 'file.edit', 'file.delete',
+    'submission.view', 'submission.edit', 'submission.assign',
+    'employee.view', 'employee.edit',
+    'role.view', 'permission.view',
+    'settings.view', 'report.view', 'notification.view',
+  ],
+  employee: [
+    'workspace.access', 'dashboard.view',
+    'project.view',
+    'task.view', 'task.edit',
+    'file.view', 'file.upload',
+    'employee.view',
+    'report.view', 'notification.view',
+  ],
+  client: [
+    'portal.view',
+  ],
+}
+
+export const ROLE_MATRIX_LABELS: Record<keyof typeof ROLE_CAPABILITY_MATRIX, { name: string; summary: string }> = {
+  admin: {
+    name: 'Admin',
+    summary: 'Every capability in the catalog, including role and permission management.',
+  },
+  manager: {
+    name: 'Manager',
+    summary: 'Full operational control of projects, clients, tasks, files, and submissions. Cannot manage roles, permissions, or employee accounts.',
+  },
+  employee: {
+    name: 'Employee',
+    summary: 'Assigned-project work only. No submissions or client records unless an administrator checks those boxes on a custom role.',
+  },
+  client: {
+    name: 'Client',
+    summary: 'Portal-only access. No staff workspace, submissions inbox, or CRM directory.',
+  },
+}
+
+// Any of these opens the administration hub. Individual tabs and sub-routes
+// still require their own capability — this list only prevents the old bug
+// where form.manage (or similar) was useless without admin.manage.
+export const ADMIN_AREA_PERMISSIONS = [
+  'admin.manage',
+  'form.view',
+  'form.manage',
+  'portfolio.manage',
+  'employee.edit',
+  'employee.delete',
+  'employee.manage',
+  'role.view',
+  'role.create',
+  'role.edit',
+  'role.delete',
+  'role.assign_permissions',
+  'permission.view',
+  'permission.manage',
+  'project.assign',
+  'project.create',
+  'project.delete',
+] as const
+
+export type RoutePermissionRule = {
+  prefix: string
+  anyOf: readonly string[]
+  exact?: boolean
+}
+
+// Longest matching prefix wins. Public pages (/forms, /f/*, /portfolio, /)
+// never consult this list because AppShell renders them outside the staff shell.
+export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
+  { prefix: '/admin/forms', anyOf: ['form.manage', 'form.view', 'submission.view'] },
+  { prefix: '/admin/portfolio', anyOf: ['portfolio.manage'] },
+  { prefix: '/admin/roles', anyOf: ['role.view', 'role.assign_permissions', 'permission.view', 'permission.manage'] },
+  { prefix: '/admin/team', anyOf: ['employee.manage', 'employee.edit'] },
+  { prefix: '/admin', anyOf: ADMIN_AREA_PERMISSIONS },
+  { prefix: '/submissions', anyOf: ['submission.view'] },
+  { prefix: '/team', anyOf: ['employee.view'] },
+  { prefix: '/projects', anyOf: ['project.view'] },
+  { prefix: '/clients', anyOf: ['client.view'] },
+  { prefix: '/tasks', anyOf: ['task.view'] },
+  { prefix: '/files', anyOf: ['file.view'] },
+  { prefix: '/reports', anyOf: ['report.view'] },
+  { prefix: '/notifications', anyOf: ['notification.view'] },
+  { prefix: '/settings', anyOf: ['settings.view'] },
+  { prefix: '/ai-assistant', anyOf: ['workspace.access'] },
+  { prefix: '/templates', anyOf: ['workspace.access'] },
+  { prefix: '/dashboard', anyOf: ['dashboard.view'], exact: true },
 ]
 
-export function permissionRequiredForPath(pathname: string): string | null {
-  // Longest matching prefix wins, so /projects/[id] inherits /projects.
-  let best: string | null = null
+export function matchRoutePermission(pathname: string): RoutePermissionRule | null {
+  let best: RoutePermissionRule | null = null
   let bestLength = -1
   for (const rule of ROUTE_PERMISSIONS) {
-    const matches = rule.exact ? pathname === rule.prefix : pathname === rule.prefix || pathname.startsWith(rule.prefix + '/')
+    const matches = rule.exact
+      ? pathname === rule.prefix
+      : pathname === rule.prefix || pathname.startsWith(`${rule.prefix}/`)
     if (matches && rule.prefix.length > bestLength) {
-      best = rule.permission
+      best = rule
       bestLength = rule.prefix.length
     }
   }
   return best
 }
 
+export function permissionsRequiredForPath(pathname: string): readonly string[] | null {
+  return matchRoutePermission(pathname)?.anyOf ?? null
+}
+
+/** @deprecated Use permissionsRequiredForPath — routes may accept any of several keys. */
+export function permissionRequiredForPath(pathname: string): string | null {
+  return permissionsRequiredForPath(pathname)?.[0] ?? null
+}
+
+export function pathAllowed(pathname: string, has: (permission: string) => boolean): boolean {
+  const required = permissionsRequiredForPath(pathname)
+  if (!required || required.length === 0) return true
+  return required.some((permission) => has(permission))
+}
+
+export function firstAllowedStaffPath(has: (permission: string) => boolean): string {
+  const candidates = [
+    '/dashboard',
+    '/projects',
+    '/tasks',
+    '/team',
+    '/files',
+    '/notifications',
+    '/reports',
+    '/submissions',
+    '/admin',
+    '/settings',
+    '/profile',
+  ]
+  for (const path of candidates) {
+    if (pathAllowed(path, has)) return path
+  }
+  return '/profile'
+}
+
 export function permissionName(key: string): string {
-  return PERMISSIONS.find((p) => p.key === key)?.name || key
+  return PERMISSIONS.find((permission) => permission.key === key)?.name || key
 }
 
 export function permissionCategories(): string[] {
-  return [...new Set(PERMISSIONS.map((p) => p.category))]
+  return [...new Set(PERMISSIONS.map((permission) => permission.category))]
 }
 
-// ── Category presentation for the role editor ────────────────────────────────
-// The `permissions` table stores category slugs in lowercase (e.g. 'access-control').
-// The admin UI groups checkboxes by category and shows these friendly labels so a
-// non-technical Admin never sees raw slugs or permission keys.
 export const CATEGORY_LABELS: Record<string, string> = {
   general: 'Workspace',
   projects: 'Projects',
@@ -130,8 +243,6 @@ export const CATEGORY_LABELS: Record<string, string> = {
   portal: 'Client Portal',
 }
 
-// Display order for the grouped checkbox grid. Categories missing from this list
-// are appended alphabetically afterwards, so new catalog rows still show up.
 export const CATEGORY_ORDER: string[] = [
   'general',
   'submissions',

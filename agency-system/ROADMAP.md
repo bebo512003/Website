@@ -15,6 +15,7 @@
 - Team Management (Admin-created Auth accounts with initial credentials, dynamic roles, extended profiles, job/department/specialization fields, and avatar storage)
 - Team Directory (permission-guarded /team page with member cards, full member profiles, search + role/department/status filters; clients excluded, inactive members hidden from regular staff)
 - Self-service profile editing (per-user /profile: personal & professional fields, social links, avatar upload/replace/remove, independent password changes, owner-only RPC with admin-protected role/status fields, full validation and inline loading/success/error states)
+- Roles & permissions enforcement (checkbox-driven capabilities actually open their management areas; employees cannot read submissions or client records unless granted; inactive users lose every permission)
 
 ## Next priorities
 

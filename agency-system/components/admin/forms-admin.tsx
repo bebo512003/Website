@@ -15,6 +15,7 @@ import {
   PowerOff,
   Trash2,
 } from 'lucide-react'
+import { useAuth } from '@/contexts/auth-context'
 import {
   createFormTemplate,
   deleteFormTemplate,
@@ -49,6 +50,8 @@ function countOf(rows: { count: number }[] | undefined): number {
 
 export function FormsAdmin() {
   const router = useRouter()
+  const { can } = useAuth()
+  const canManage = can('form.manage')
   const [templates, setTemplates] = useState<FormTemplateWithCounts[]>([])
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
@@ -137,9 +140,11 @@ export function FormsAdmin() {
     >
       <div className="flex items-center justify-between gap-3 border-b border-border p-5">
         <p className="text-xs text-text-tertiary">{templates.length} form{templates.length === 1 ? '' : 's'}</p>
-        <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}>
-          <Plus className="h-4 w-4" /> New form
-        </button>
+        {canManage && (
+          <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}>
+            <Plus className="h-4 w-4" /> New form
+          </button>
+        )}
       </div>
 
       {(error || message) && (
@@ -156,7 +161,7 @@ export function FormsAdmin() {
           icon={ClipboardList}
           title="No forms yet"
           description="Create your first form with the button above, add questions in the builder, then enable it and share its public link."
-          action={<button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Create the first form</button>}
+          action={canManage ? <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Create the first form</button> : undefined}
         />
       ) : (
         <div className="divide-y divide-border">
@@ -195,12 +200,16 @@ export function FormsAdmin() {
                       <ExternalLink className="h-4 w-4" /> Open
                     </a>
                   )}
-                  <button onClick={() => void toggleArchived(template)} disabled={isBusy} className="rounded-md border border-border p-2 text-text-tertiary hover:text-fg" aria-label={template.status === 'archived' ? `Restore ${template.title}` : `Archive ${template.title}`} title={template.status === 'archived' ? 'Restore to draft' : 'Archive (responses are kept)'}>
-                    {template.status === 'archived' ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
-                  </button>
-                  <button onClick={() => void remove(template)} disabled={isBusy} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Delete ${template.title}`} title={submissions > 0 ? 'Forms with responses cannot be deleted' : 'Delete permanently'}>
-                    <Trash2 className="h-4 w-4" />
-                  </button>
+                  {canManage && (
+                    <button onClick={() => void toggleArchived(template)} disabled={isBusy} className="rounded-md border border-border p-2 text-text-tertiary hover:text-fg" aria-label={template.status === 'archived' ? `Restore ${template.title}` : `Archive ${template.title}`} title={template.status === 'archived' ? 'Restore to draft' : 'Archive (responses are kept)'}>
+                      {template.status === 'archived' ? <ArchiveRestore className="h-4 w-4" /> : <Archive className="h-4 w-4" />}
+                    </button>
+                  )}
+                  {canManage && (
+                    <button onClick={() => void remove(template)} disabled={isBusy} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Delete ${template.title}`} title={submissions > 0 ? 'Forms with responses cannot be deleted' : 'Delete permanently'}>
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
                 </div>
               </div>
             )
