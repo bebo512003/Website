@@ -86,12 +86,13 @@ How it works:
 1. Database triggers (plus the admin provisioning route for invitations) enqueue rows
    into `email_outbox`. A unique `(template_key, dedupe_key)` index makes duplicate
    delivery structurally impossible.
-2. `GET /api/cron/emails` (Vercel Cron, every 5 minutes, protected by
+2. `GET /api/cron/emails` (Vercel Cron, once daily at 07:10 UTC, protected by
    `Authorization: Bearer $CRON_SECRET`) claims a batch with an optimistic status
    guard, renders the branded template, and sends via the Resend API. Transient
    failures back off exponentially (up to 6 attempts); stale rows expire after 72h.
    The form-submit and client-invitation server routes also flush immediately as a
-   best effort.
+   best effort. The daily reminders job flushes the same queue so Hobby-plan
+   deployments still deliver mail the same day.
 3. `POST /api/email/resend-webhook` verifies the Svix-style signature with
    `RESEND_WEBHOOK_SECRET` and records `sent`/`delivered`/`bounced`/`complained`
    events in `email_delivery_events`, updating the matching outbox row by
