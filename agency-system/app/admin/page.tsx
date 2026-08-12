@@ -24,7 +24,10 @@ import {
   setProfileStatus,
   updateEmployeeRole,
 } from '@/lib/supabase/database'
-import type { Client, EmployeeRole, Profile, ProfileStatus, ProjectMember, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
+import type { Client, EmployeeRole, Profile, ProfileStatus, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
+import {
+  PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS, PROJECT_STATUS_ORDER, projectStatusBadgeClass,
+} from '@/lib/project-lifecycle'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions' | 'forms' | 'portfolio'
@@ -35,10 +38,14 @@ const emptyProjectForm = {
   description: '',
   client_id: '',
   type: 'General',
-  status: 'active' as ProjectStatus,
+  status: 'draft' as ProjectStatus,
+  priority: 'medium' as ProjectPriority,
+  health: 'on-track' as ProjectHealth,
   due_date: '',
   budget: '',
   currency: 'USD',
+  owner_id: '',
+  manager_id: '',
 }
 
 const slugify = (value: string) =>
@@ -114,6 +121,10 @@ export default function AdminPage() {
   const clientNames = useMemo(() => new Map(clients.map((client) => [client.id, client.name])), [clients])
   const activeAssignableEmployees = useMemo(
     () => profiles.filter((profile) => profile.role === 'employee' && profile.status === 'active'),
+    [profiles],
+  )
+  const activeInternalProfiles = useMemo(
+    () => profiles.filter((profile) => profile.role !== 'client' && profile.status === 'active'),
     [profiles],
   )
 
@@ -211,6 +222,8 @@ export default function AdminPage() {
       description: projectForm.description || null,
       due_date: projectForm.due_date || null,
       budget: projectForm.budget ? Number(projectForm.budget) : null,
+      owner_id: projectForm.owner_id || null,
+      manager_id: projectForm.manager_id || null,
     })
     setSaving(false)
     if (result.error) {
@@ -352,7 +365,7 @@ export default function AdminPage() {
                 <div className="divide-y divide-border">
                   {projects.map((project) => (
                     <div key={project.id} className="flex items-center justify-between gap-4 px-5 py-4">
-                      <div className="min-w-0"><p className="truncate text-sm font-semibold text-fg">{project.name}</p><p className="mt-1 text-xs text-text-tertiary">{project.clients?.name || 'No client'} · {project.status} · {project.progress}%</p></div>
+                      <div className="min-w-0"><p className="truncate text-sm font-semibold text-fg">{project.name}</p><p className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-tertiary"><span>{project.clients?.name || 'No client'} · {project.progress}%</span><span className={`rounded border px-1.5 py-0.5 text-[10px] ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]}</span><span className="text-text-tertiary">{project.owner ? project.owner.full_name || project.owner.email : 'No owner'}</span></p></div>
                       <button onClick={() => void removeProject(project)} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Delete ${project.name}`}><Trash2 className="h-4 w-4" /></button>
                     </div>
                   ))}
@@ -379,7 +392,11 @@ export default function AdminPage() {
           <label className="text-xs text-text-secondary sm:col-span-2">Project name<input required className={`${inputClassName} mt-2`} value={projectForm.name} onChange={(event) => setProjectForm({ ...projectForm, name: event.target.value })} /></label>
           <label className="text-xs text-text-secondary">Client<select required className={`${inputClassName} mt-2`} value={projectForm.client_id} onChange={(event) => setProjectForm({ ...projectForm, client_id: event.target.value })}><option value="">Select client</option>{clients.map((client) => <option key={client.id} value={client.id}>{client.name}</option>)}</select></label>
           <label className="text-xs text-text-secondary">Type<input required className={`${inputClassName} mt-2`} value={projectForm.type} onChange={(event) => setProjectForm({ ...projectForm, type: event.target.value })} /></label>
-          <label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={projectForm.status} onChange={(event) => setProjectForm({ ...projectForm, status: event.target.value as ProjectStatus })}><option value="active">Active</option><option value="review">In review</option><option value="on-hold">On hold</option><option value="completed">Completed</option><option value="cancelled">Cancelled</option></select></label>
+          <label className="text-xs text-text-secondary">Owner<select className={`${inputClassName} mt-2`} value={projectForm.owner_id} onChange={(event) => setProjectForm({ ...projectForm, owner_id: event.target.value })}><option value="">No owner</option>{activeInternalProfiles.map((member) => <option key={member.id} value={member.id}>{member.full_name || member.email}</option>)}</select></label>
+          <label className="text-xs text-text-secondary">Manager<select className={`${inputClassName} mt-2`} value={projectForm.manager_id} onChange={(event) => setProjectForm({ ...projectForm, manager_id: event.target.value })}><option value="">No separate manager</option>{activeInternalProfiles.map((member) => <option key={member.id} value={member.id}>{member.full_name || member.email}</option>)}</select></label>
+          <label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={projectForm.status} onChange={(event) => setProjectForm({ ...projectForm, status: event.target.value as ProjectStatus })}>{PROJECT_STATUS_ORDER.map((value) => <option key={value} value={value}>{PROJECT_STATUS_LABELS[value]}</option>)}</select></label>
+          <label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={projectForm.priority} onChange={(event) => setProjectForm({ ...projectForm, priority: event.target.value as ProjectPriority })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="urgent">Urgent</option></select></label>
+          <label className="text-xs text-text-secondary">Health<select className={`${inputClassName} mt-2`} value={projectForm.health} onChange={(event) => setProjectForm({ ...projectForm, health: event.target.value as ProjectHealth })}>{PROJECT_HEALTH_ORDER.map((value) => <option key={value} value={value}>{PROJECT_HEALTH_LABELS[value]}</option>)}</select></label>
           <label className="text-xs text-text-secondary">Due date<input type="date" className={`${inputClassName} mt-2`} value={projectForm.due_date} onChange={(event) => setProjectForm({ ...projectForm, due_date: event.target.value })} /></label>
           <label className="text-xs text-text-secondary">Budget<input type="number" min="0" className={`${inputClassName} mt-2`} value={projectForm.budget} onChange={(event) => setProjectForm({ ...projectForm, budget: event.target.value })} /></label>
           <label className="text-xs text-text-secondary">Currency<input className={`${inputClassName} mt-2`} value={projectForm.currency} onChange={(event) => setProjectForm({ ...projectForm, currency: event.target.value.toUpperCase() })} /></label>

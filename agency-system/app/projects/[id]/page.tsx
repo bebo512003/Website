@@ -2,16 +2,22 @@
 
 import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Calendar, CheckCircle2, Clock, FileInput, Flag, FolderKanban, LoaderCircle, Plus, Trash2, UserRound, Users } from 'lucide-react'
+import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { createTask, deleteTask, getProjectById, getProjectMembers, getTasksByProjectId, updateProject, updateTask } from '@/lib/supabase/database'
-import type { Profile, ProjectMember, ProjectStatus, ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import { addProjectMember, createTask, deleteTask, getProfiles, getProjectById, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
+import type { Profile, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import {
+  PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
+  nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
+} from '@/lib/project-lifecycle'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type Member = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
 const taskStatuses: TaskStatus[] = ['todo', 'inprogress', 'review', 'done']
 const taskStatusLabels: Record<TaskStatus, string> = { todo: 'To do', inprogress: 'In progress', review: 'Review', done: 'Done' }
-const projectStatusLabels: Record<ProjectStatus, string> = { active: 'Active', review: 'In review', completed: 'Completed', 'on-hold': 'On hold', cancelled: 'Cancelled' }
+const PRIORITY_LABELS: Record<ProjectPriority, string> = {
+  low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent',
+}
 
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
@@ -19,13 +25,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [project, setProject] = useState<ProjectWithClient | null>(null)
   const [tasks, setTasks] = useState<TaskWithRelations[]>([])
   const [members, setMembers] = useState<Member[]>([])
+  const [team, setTeam] = useState<Profile[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [taskModal, setTaskModal] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [addMemberId, setAddMemberId] = useState('')
   const [taskForm, setTaskForm] = useState({ title: '', description: '', priority: 'medium' as TaskPriority, assignee_id: '', due_date: '' })
-  const [projectForm, setProjectForm] = useState({ status: 'active' as ProjectStatus, progress: '0', phase: '1', phase_name: '', due_date: '' })
+  const [projectForm, setProjectForm] = useState({
+    health: 'on-track' as ProjectHealth, priority: 'medium' as ProjectPriority,
+    progress: '0', phase: '1', phase_name: '', due_date: '', owner_id: '', manager_id: '',
+  })
   const [highlightTaskId, setHighlightTaskId] = useState<string | null>(null)
 
   useEffect(() => {
@@ -38,12 +49,22 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [projectResult, tasksResult, membersResult] = await Promise.all([getProjectById(id), getTasksByProjectId(id), getProjectMembers(id)])
+    const [projectResult, tasksResult, membersResult, teamResult] = await Promise.all([
+      getProjectById(id), getTasksByProjectId(id), getProjectMembers(id), getProfiles(),
+    ])
     setProject(projectResult.data)
     setTasks(tasksResult.data)
     setMembers(membersResult.data)
-    if (projectResult.data) setProjectForm({ status: projectResult.data.status, progress: String(projectResult.data.progress), phase: String(projectResult.data.phase), phase_name: projectResult.data.phase_name || '', due_date: projectResult.data.due_date || '' })
-    setError(projectResult.error || tasksResult.error || membersResult.error || '')
+    setTeam(teamResult.data)
+    if (projectResult.data) {
+      const p = projectResult.data
+      setProjectForm({
+        health: p.health, priority: p.priority,
+        progress: String(p.progress), phase: String(p.phase), phase_name: p.phase_name || '',
+        due_date: p.due_date || '', owner_id: p.owner_id || '', manager_id: p.manager_id || '',
+      })
+    }
+    setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || '')
     setLoading(false)
   }, [id])
 
@@ -54,6 +75,18 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     if (profile && !list.some((item) => item.id === profile.id)) list.push(profile)
     return list
   }, [members, profile])
+
+  const activeTeam = useMemo(
+    () => team.filter((member) => member.status === 'active' && member.role !== 'client'),
+    [team]
+  )
+
+  const addableMembers = useMemo(() => {
+    const existing = new Set(members.map((member) => member.user_id))
+    return activeTeam.filter((member) => !existing.has(member.id))
+  }, [activeTeam, members])
+
+  const nextStatuses = useMemo(() => (project ? nextProjectStatuses(project.status) : []), [project])
 
   const openTask = () => {
     setTaskForm({ title: '', description: '', priority: 'medium', assignee_id: user?.id || '', due_date: '' })
@@ -88,15 +121,48 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const saveProject = async (event: React.FormEvent) => {
     event.preventDefault()
     setSaving(true)
+    setError('')
     const result = await updateProject(id, {
-      status: projectForm.status, progress: Number(projectForm.progress), phase: Number(projectForm.phase),
-      phase_name: projectForm.phase_name.trim() || null, due_date: projectForm.due_date || null,
-      completed_date: projectForm.status === 'completed' ? new Date().toISOString().slice(0, 10) : null,
+      health: projectForm.health,
+      priority: projectForm.priority,
+      progress: Number(projectForm.progress),
+      phase: Number(projectForm.phase),
+      phase_name: projectForm.phase_name.trim() || null,
+      due_date: projectForm.due_date || null,
+      owner_id: projectForm.owner_id || null,
+      manager_id: projectForm.manager_id || null,
     })
     setSaving(false)
     if (result.error) setError(result.error)
-    else { setMessage('Project progress updated.'); await load() }
+    else { setMessage('Project updated.'); await load() }
   }
+
+  const changeStatus = async (status: ProjectStatus) => {
+    setSaving(true)
+    setError('')
+    const result = await updateProject(id, { status })
+    setSaving(false)
+    if (result.error) setError(result.error)
+    else { setMessage(`Status moved to ${PROJECT_STATUS_LABELS[status]}.`); await load() }
+  }
+
+  const addMember = async () => {
+    if (!addMemberId) return
+    setError('')
+    const result = await addProjectMember(id, addMemberId)
+    if (result.error) setError(result.error)
+    else { setAddMemberId(''); setMessage('Team member added.'); await load() }
+  }
+
+  const removeMember = async (member: Member) => {
+    if (!window.confirm(`Remove ${member.profiles?.full_name || member.profiles?.email || 'this member'} from the team?`)) return
+    setError('')
+    const result = await removeProjectMember(id, member.user_id)
+    if (result.error) setError(result.error)
+    else { setMessage('Team member removed.'); await load() }
+  }
+
+  const isLead = (member: Member) => project != null && (member.user_id === project.owner_id || member.user_id === project.manager_id)
 
   if (loading) return <Page><PageHeader eyebrow="PROJECTS / DETAIL" title="Project" /><Panel><LoadingState label="Loading project…" /></Panel></Page>
   if (!project) return <Page><PageHeader eyebrow="PROJECTS / DETAIL" title="Project" /><InlineAlert>{error || 'This project does not exist or your account is not assigned to it.'}</InlineAlert><Link href="/projects" className={secondaryButtonClassName}><ArrowLeft className="h-4 w-4" /> Back to projects</Link></Page>
@@ -109,12 +175,97 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <Panel className="p-5"><Users className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Client</p><p className="mt-1 text-sm font-semibold">{project.clients?.name || 'Unavailable'}</p></Panel>
-        <Panel className="p-5"><Calendar className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Due date</p><p className="mt-1 text-sm font-semibold">{project.due_date ? new Date(`${project.due_date}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : 'Not set'}</p></Panel>
-        <Panel className="p-5"><CheckCircle2 className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Status</p><p className="mt-1 text-sm font-semibold">{projectStatusLabels[project.status]}</p></Panel>
-        <Panel className="p-5"><Clock className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Current phase</p><p className="mt-1 text-sm font-semibold">{project.phase}/10 {project.phase_name && `· ${project.phase_name}`}</p></Panel>
-        <Panel className="p-5"><Flag className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Priority</p><p className="mt-1 text-sm font-semibold capitalize">{project.priority}</p></Panel>
+        <Panel className="p-5"><Calendar className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Deadline</p><p className="mt-1 text-sm font-semibold">{project.due_date ? new Date(`${project.due_date}T00:00:00`).toLocaleDateString('en-US', { dateStyle: 'medium' }) : 'Not set'}</p></Panel>
+        <Panel className="p-5"><CheckCircle2 className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Status</p><span className={`mt-2 inline-block rounded border px-2 py-1 text-sm font-semibold ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]}</span></Panel>
+        <Panel className="p-5"><HeartPulse className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Health</p><span className={`mt-2 inline-block rounded border px-2 py-1 text-sm font-semibold ${projectHealthBadgeClass(project.health)}`}>{PROJECT_HEALTH_LABELS[project.health]}</span></Panel>
+        <Panel className="p-5"><Flag className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Priority</p><p className="mt-1 text-sm font-semibold capitalize">{PRIORITY_LABELS[project.priority]}</p></Panel>
         <Panel className="p-5"><UserRound className="h-4 w-4 text-accent" /><p className="mt-4 text-xs text-text-tertiary">Owner / Manager</p><p className="mt-1 text-sm font-semibold">{project.owner?.full_name || project.owner?.email || 'No owner'}</p><p className="mt-1 text-xs text-text-tertiary">{project.manager?.full_name || project.manager?.email || 'No separate manager'}</p></Panel>
       </div>
+
+      <Panel title="Lifecycle" description="The ordered stages this project moves through. Only the highlighted next steps are valid transitions.">
+        <div className="flex flex-wrap items-center gap-2 p-5">
+          {PROJECT_FLOW.map((status, index) => {
+            const isCurrent = project.status === status
+            const isDone = PROJECT_FLOW.indexOf(project.status) > index
+            const isNext = nextStatuses.includes(status)
+            return (
+              <div key={status} className="flex items-center gap-2">
+                {index > 0 && <ChevronRight className="h-3.5 w-3.5 text-text-tertiary" />}
+                <span className={`rounded-full border px-3 py-1 text-xs ${isCurrent ? 'border-accent bg-accent/15 font-semibold text-accent' : isDone ? 'border-emerald-500/30 text-emerald-300' : isNext ? 'border-amber-500/30 text-amber-300' : 'border-border text-text-tertiary'}`}>
+                  {PROJECT_STATUS_LABELS[status]}
+                </span>
+              </div>
+            )
+          })}
+          {(project.status === 'on-hold' || project.status === 'cancelled') && (
+            <span className={`rounded-full border px-3 py-1 text-xs ${projectStatusBadgeClass(project.status)}`}>{PROJECT_STATUS_LABELS[project.status]} state</span>
+          )}
+        </div>
+      </Panel>
+
+      {can('project.edit') && (
+        <Panel title="Change status" description="Move this project to its next valid stage. Invalid jumps are rejected by the database.">
+          <div className="flex flex-wrap gap-2 p-5">
+            {nextStatuses.length === 0 ? (
+              <p className="text-xs text-text-tertiary">
+                {project.status === 'completed' ? 'Completed is a terminal state. No further transitions are available.' : 'This project has no further transitions.'}
+              </p>
+            ) : nextStatuses.map((status) => (
+              <button key={status} className={secondaryButtonClassName} onClick={() => void changeStatus(status)} disabled={saving}>
+                {saving && <LoaderCircle className="h-4 w-4 animate-spin" />}{PROJECT_STATUS_LABELS[status]}
+              </button>
+            ))}
+          </div>
+        </Panel>
+      )}
+
+      <Panel title="Overall progress" description={`${project.progress}% complete`}><div className="p-5"><div className="h-2 overflow-hidden rounded-full bg-border"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${project.progress}%` }} /></div></div></Panel>
+
+      {can('project.edit') && <Panel title="Manage project" description="Ownership, health, and scheduling changes notify assigned employees."><form onSubmit={saveProject} className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="text-xs text-text-secondary">Owner<select className={`${inputClassName} mt-2`} value={projectForm.owner_id} onChange={(event) => setProjectForm({ ...projectForm, owner_id: event.target.value })}><option value="">No owner</option>{activeTeam.map((member) => <option key={member.id} value={member.id}>{member.full_name || member.email}</option>)}</select></label>
+        <label className="text-xs text-text-secondary">Manager<select className={`${inputClassName} mt-2`} value={projectForm.manager_id} onChange={(event) => setProjectForm({ ...projectForm, manager_id: event.target.value })}><option value="">No separate manager</option>{activeTeam.map((member) => <option key={member.id} value={member.id}>{member.full_name || member.email}</option>)}</select></label>
+        <label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={projectForm.priority} onChange={(event) => setProjectForm({ ...projectForm, priority: event.target.value as ProjectPriority })}>{Object.entries(PRIORITY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+        <label className="text-xs text-text-secondary">Health<select className={`${inputClassName} mt-2`} value={projectForm.health} onChange={(event) => setProjectForm({ ...projectForm, health: event.target.value as ProjectHealth })}>{PROJECT_HEALTH_ORDER.map((value) => <option key={value} value={value}>{PROJECT_HEALTH_LABELS[value]}</option>)}</select></label>
+        <label className="text-xs text-text-secondary">Progress (%)<input type="number" min="0" max="100" className={`${inputClassName} mt-2`} value={projectForm.progress} onChange={(event) => setProjectForm({ ...projectForm, progress: event.target.value })} /></label>
+        <label className="text-xs text-text-secondary">Phase (1–10)<input type="number" min="1" max="10" className={`${inputClassName} mt-2`} value={projectForm.phase} onChange={(event) => setProjectForm({ ...projectForm, phase: event.target.value })} /></label>
+        <label className="text-xs text-text-secondary">Phase name<input className={`${inputClassName} mt-2`} value={projectForm.phase_name} onChange={(event) => setProjectForm({ ...projectForm, phase_name: event.target.value })} /></label>
+        <label className="text-xs text-text-secondary">Deadline<input type="date" className={`${inputClassName} mt-2`} value={projectForm.due_date} onChange={(event) => setProjectForm({ ...projectForm, due_date: event.target.value })} /></label>
+        <div className="sm:col-span-2 lg:col-span-4"><button className={primaryButtonClassName} disabled={saving}>{saving && <LoaderCircle className="h-4 w-4 animate-spin" />} Save changes</button></div>
+      </form></Panel>}
+
+      <Panel title="Team" description={`${members.length} member${members.length === 1 ? '' : 's'} assigned to this project`}>
+        {members.length === 0 ? <EmptyState icon={Users} title="No team members" description="Assign employees so they can access this project." /> : (
+          <div className="divide-y divide-border">
+            {members.map((member) => {
+              const lead = isLead(member)
+              return (
+                <div key={member.user_id} className="flex items-center justify-between gap-4 px-5 py-4">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-2 text-sm font-semibold">
+                      {member.profiles?.full_name || member.profiles?.email || 'Unknown user'}
+                      {member.user_id === project.owner_id && <span className="rounded border border-accent/40 bg-accent/10 px-1.5 py-0.5 font-mono-tech text-[9px] text-accent">OWNER</span>}
+                      {member.user_id === project.manager_id && <span className="rounded border border-border px-1.5 py-0.5 font-mono-tech text-[9px] text-text-tertiary">MANAGER</span>}
+                    </p>
+                    <p className="mt-1 text-xs text-text-tertiary">{member.profiles?.email || ''}</p>
+                  </div>
+                  {can('project.assign') && !lead && (
+                    <button onClick={() => void removeMember(member)} className="rounded-md border border-border p-2 text-text-tertiary hover:border-red-500/30 hover:text-red-400" aria-label={`Remove ${member.profiles?.full_name || member.profiles?.email}`}><Trash2 className="h-4 w-4" /></button>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        )}
+        {can('project.assign') && (
+          <div className="flex flex-col gap-2 border-t border-border p-5 sm:flex-row sm:items-center">
+            <select aria-label="Add a team member" className={`${inputClassName} sm:max-w-xs`} value={addMemberId} onChange={(event) => setAddMemberId(event.target.value)}>
+              <option value="">Add a team member…</option>
+              {addableMembers.map((member) => <option key={member.id} value={member.id}>{member.full_name || member.email}{member.job_title ? ` · ${member.job_title}` : ''}</option>)}
+            </select>
+            <button className={secondaryButtonClassName} onClick={() => void addMember()} disabled={!addMemberId || saving}><UserPlus className="h-4 w-4" /> Add</button>
+          </div>
+        )}
+      </Panel>
 
       {project.source_submission_id && can('submission.view') && (
         <Panel className="border-emerald-500/25 bg-emerald-500/[0.03] p-5">
@@ -124,10 +275,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
           </div>
         </Panel>
       )}
-
-      <Panel title="Overall progress" description={`${project.progress}% complete`}><div className="p-5"><div className="h-2 overflow-hidden rounded-full bg-border"><div className="h-full rounded-full bg-accent transition-all" style={{ width: `${project.progress}%` }} /></div></div></Panel>
-
-      {can('project.edit') && <Panel title="Manage progress" description="Saving a status or progress change notifies assigned employees."><form onSubmit={saveProject} className="grid gap-4 p-5 sm:grid-cols-2 lg:grid-cols-5"><label className="text-xs text-text-secondary">Status<select className={`${inputClassName} mt-2`} value={projectForm.status} onChange={(event) => setProjectForm({ ...projectForm, status: event.target.value as ProjectStatus })}>{Object.entries(projectStatusLabels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label><label className="text-xs text-text-secondary">Progress<input type="number" min="0" max="100" className={`${inputClassName} mt-2`} value={projectForm.progress} onChange={(event) => setProjectForm({ ...projectForm, progress: event.target.value })} /></label><label className="text-xs text-text-secondary">Phase<input type="number" min="1" max="10" className={`${inputClassName} mt-2`} value={projectForm.phase} onChange={(event) => setProjectForm({ ...projectForm, phase: event.target.value })} /></label><label className="text-xs text-text-secondary">Phase name<input className={`${inputClassName} mt-2`} value={projectForm.phase_name} onChange={(event) => setProjectForm({ ...projectForm, phase_name: event.target.value })} /></label><label className="text-xs text-text-secondary">Due date<input type="date" className={`${inputClassName} mt-2`} value={projectForm.due_date} onChange={(event) => setProjectForm({ ...projectForm, due_date: event.target.value })} /></label><div className="lg:col-span-5"><button className={primaryButtonClassName} disabled={saving}>{saving && <LoaderCircle className="h-4 w-4 animate-spin" />} Save progress</button></div></form></Panel>}
 
       <Panel title="Tasks" description={`${tasks.length} task${tasks.length === 1 ? '' : 's'} in this project`}>
         {tasks.length === 0 ? <EmptyState icon={FolderKanban} title="No tasks yet" description="Create the first task for this project." action={can('task.create') ? <button className={primaryButtonClassName} onClick={openTask}><Plus className="h-4 w-4" /> New task</button> : undefined} /> : <div className="divide-y divide-border">{tasks.map((task) => {
