@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { randomBytes } from 'node:crypto'
 import type { Database, Json, Profile, ProfileStatus } from '@/lib/supabase/types'
+import { flushEmailQueue } from '@/lib/email/flush'
 
 export const runtime = 'nodejs'
 
@@ -202,6 +203,31 @@ export async function POST(request: Request) {
     await cleanupPlaceholder()
     return errorResponse('The login could not be linked to its client profile. No account was kept.', 500)
   }
+
+  // Transactional email: portal invitation. The payload deliberately contains
+  // no credentials — the temporary password is shown to the administrator once
+  // above and shared out-of-band. Dedupe key prevents repeat invites from
+  // spamming the same account.
+  const { error: inviteEmailError } = await serviceClient.from('email_outbox').insert({
+    template_key: 'client-invitation',
+    recipient_email: parsed.email,
+    recipient_user_id: profile.id,
+    payload: {
+      client_name: parsed.fullName || undefined,
+      portal_path: '/auth',
+    },
+    dedupe_key: `client.invitation:${profile.id}`,
+    status: 'queued',
+    next_attempt_at: new Date().toISOString(),
+  })
+  if (inviteEmailError && inviteEmailError.code !== '23505') {
+    console.error('[email] client invitation enqueue failed:', inviteEmailError.message)
+  }
+
+  // Best-effort immediate flush; the scheduled /api/cron/emails job is the guarantee.
+  void flushEmailQueue().catch((error) => {
+    console.error('[email] immediate flush failed:', error)
+  })
 
   return Response.json(
     { data: profile as Profile, temporary_password: temporaryPassword },

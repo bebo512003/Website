@@ -29,6 +29,7 @@ The application contains no seeded users or placeholder business records. All da
 - Private file upload and download through Supabase Storage
 - Assignment and project update notifications
 - **Deadline & escalation reminders** (Session 20): a daily server job (not the browser) notifies assignees of tasks due soon / today / overdue, escalates overdue tasks to the project manager and owner, and reminds owner/manager when a project deadline is approaching or overdue. Deliveries are recorded in `reminder_events` and never duplicated.
+- **Transactional email notifications** (Session 21): server-side transactional email through Resend for the high-value events only. Client emails: submission received (with reference + tracking link), portal invitation (no credentials in email), delivery ready, and revision/approval confirmations. Internal emails: new submission (to staff with `submission.view`), important assignments (task / project owner-manager / team member), and important project updates (client feedback, approval, revision requests → owner + manager). Events are enqueued into a server-only `email_outbox` (dedupe-unique), flushed by a cron-protected server job, and delivery status is tracked via signed Resend webhooks into `email_delivery_events`. Every other in-app notification remains inbox-only for now.
 - Reports calculated from authorized live records
 - Dark/light themes and a responsive desktop/mobile shell
 
@@ -58,9 +59,64 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key # server only; never NEXT_PUBLIC
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
 CRON_SECRET=generate-a-long-random-string
+RESEND_API_KEY=                    # transactional email (Session 21)
+RESEND_WEBHOOK_SECRET=             # delivery-status webhooks (optional)
+EMAIL_FROM_ADDRESS=                # verified sender, e.g. notifications@yourdomain.com
 ```
 
 Deadline reminders run on the server. After deploy, set `CRON_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` in the host environment. Vercel Cron hits `GET /api/cron/reminders` every day at 07:00 UTC and sends `Authorization: Bearer $CRON_SECRET` automatically when `CRON_SECRET` is set. Apply `supabase/migrations/20260905000000_deadline_escalation_reminders.sql` (or regenerate `schema.sql`) first. You can also trigger the same route from any external scheduler.
+
+## Transactional email (Session 21)
+
+Email goes through **Resend**, triggered by a server-side queue — the browser never
+touches provider credentials.
+
+| Event | Template | Recipients | When |
+| --- | --- | --- | --- |
+| Submission received | `submission-received` | The submitter (respondent email) | Every public form submission (includes the reference number + public tracking link) |
+| Client invitation | `client-invitation` | The invited portal client | Admin provisions a portal account (never contains the password) |
+| Delivery ready | `delivery-ready` | Client portal accounts | A delivery package is marked delivered |
+| Revision / approval update | `revision-approval-update` | The acting client | The client approves or requests a revision (confirmation receipt) |
+| New submission | `new-submission` | Staff with `submission.view` | Every public form submission (no respondent email/phone in the mail) |
+| Important assignment | `task-assigned` / `project-assigned` | Task assignee · new owner/manager · new team member | Task assignment, ownership changes, team member added |
+| Important project update | `project-update` | Project owner + manager | Client feedback, approval, or revision request |
+
+How it works:
+
+1. Database triggers (plus the admin provisioning route for invitations) enqueue rows
+   into `email_outbox`. A unique `(template_key, dedupe_key)` index makes duplicate
+   delivery structurally impossible.
+2. `GET /api/cron/emails` (Vercel Cron, every 5 minutes, protected by
+   `Authorization: Bearer $CRON_SECRET`) claims a batch with an optimistic status
+   guard, renders the branded template, and sends via the Resend API. Transient
+   failures back off exponentially (up to 6 attempts); stale rows expire after 72h.
+   The form-submit and client-invitation server routes also flush immediately as a
+   best effort.
+3. `POST /api/email/resend-webhook` verifies the Svix-style signature with
+   `RESEND_WEBHOOK_SECRET` and records `sent`/`delivered`/`bounced`/`complained`
+   events in `email_delivery_events`, updating the matching outbox row by
+   `provider_message_id`.
+
+Setup:
+
+1. Apply `supabase/migrations/20260906000000_transactional_email.sql` (or regenerate
+   `schema.sql`).
+2. Create an API key at **resend.com → API Keys** and set `RESEND_API_KEY` in the
+   host environment. Until a sending domain is verified, Resend only delivers to
+   your own account email from `onboarding@resend.dev`.
+3. Verify your domain (Resend → Domains) and set
+   `EMAIL_FROM_ADDRESS=notifications@yourdomain.com` (and optionally
+   `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME`).
+4. Create a webhook at **resend.com → Webhooks** pointing at
+   `https://<your-deploy>/api/email/resend-webhook` for `sent`, `delivered`,
+   `bounced`, and `complained` events, copy its signing secret into
+   `RESEND_WEBHOOK_SECRET`.
+5. Confirm Vercel Cron runs `/api/cron/emails` (`vercel.json` ships a 5-minute
+   schedule; adjust for your plan — the Hobby plan only runs daily). Any external
+   scheduler that sends the cron secret works too.
+
+Until `RESEND_API_KEY` is set the queue simply accumulates and the cron route
+returns 503; nothing is ever sent from the client.
 
 For a new Supabase project, apply the generated `supabase/schema.sql` snapshot in the SQL Editor. For an existing project, apply every unapplied file in `supabase/migrations/` in filename order (or use the Supabase CLI migration workflow). The ordered migration directory is authoritative; `schema.sql` is generated from it and can be verified with `npm run db:schema:check`.
 
