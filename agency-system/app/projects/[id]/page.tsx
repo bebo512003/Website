@@ -4,13 +4,18 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addProjectMember, createTask, deleteTask, getProfiles, getProjectById, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
-import type { Profile, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import { addProjectMember, deleteTask, getProfiles, getProjectById, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
+import type { Profile, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
   nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
 } from '@/lib/project-lifecycle'
-import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import {
+  TASK_PRIORITY_LABELS, formatTaskDueDate, taskDueBadgeClass, taskPriorityBadgeClass,
+} from '@/lib/tasks'
+import { CreateTaskModal } from '@/components/tasks/create-task-modal'
+import { TaskDetailModal } from '@/components/tasks/task-detail-modal'
+import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 type Member = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
 const taskStatuses: TaskStatus[] = ['todo', 'inprogress', 'review', 'done']
@@ -21,7 +26,7 @@ const PRIORITY_LABELS: Record<ProjectPriority, string> = {
 
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
-  const { user, profile, can } = useAuth()
+  const { user, can } = useAuth()
   const [project, setProject] = useState<ProjectWithClient | null>(null)
   const [tasks, setTasks] = useState<TaskWithRelations[]>([])
   const [members, setMembers] = useState<Member[]>([])
@@ -32,7 +37,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [addMemberId, setAddMemberId] = useState('')
-  const [taskForm, setTaskForm] = useState({ title: '', description: '', priority: 'medium' as TaskPriority, assignee_id: '', due_date: '' })
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null)
   const [projectForm, setProjectForm] = useState({
     health: 'on-track' as ProjectHealth, priority: 'medium' as ProjectPriority,
     progress: '0', phase: '1', phase_name: '', due_date: '', owner_id: '', manager_id: '',
@@ -70,12 +75,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   useEffect(() => { void load() }, [load])
 
-  const assignees = useMemo(() => {
-    const list = members.map((member) => member.profiles).filter((item): item is NonNullable<typeof item> => Boolean(item))
-    if (profile && !list.some((item) => item.id === profile.id)) list.push(profile)
-    return list
-  }, [members, profile])
-
   const activeTeam = useMemo(
     () => team.filter((member) => member.status === 'active' && member.role !== 'client'),
     [team]
@@ -88,21 +87,10 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const nextStatuses = useMemo(() => (project ? nextProjectStatuses(project.status) : []), [project])
 
-  const openTask = () => {
-    setTaskForm({ title: '', description: '', priority: 'medium', assignee_id: user?.id || '', due_date: '' })
-    setTaskModal(true)
-  }
+  const detailTask = detailTaskId ? (tasks.find((task) => task.id === detailTaskId) ?? null) : null
 
-  const submitTask = async (event: React.FormEvent) => {
-    event.preventDefault()
-    setSaving(true)
-    const result = await createTask({
-      title: taskForm.title.trim(), description: taskForm.description.trim() || null, project_id: id,
-      priority: taskForm.priority, assignee_id: taskForm.assignee_id || null, due_date: taskForm.due_date || null,
-    })
-    setSaving(false)
-    if (result.error) setError(result.error)
-    else { setTaskModal(false); setMessage('Task created.'); await load() }
+  const openTask = () => {
+    setTaskModal(true)
   }
 
   const moveTask = async (task: TaskWithRelations, status: TaskStatus) => {
@@ -170,7 +158,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   return (
     <Page>
       <div><Link href="/projects" className="inline-flex items-center gap-2 text-xs text-text-tertiary hover:text-accent"><ArrowLeft className="h-3.5 w-3.5" /> Back to projects</Link></div>
-      <PageHeader eyebrow={`PROJECT / ${project.type.toUpperCase()}`} title={project.name} description={project.description || 'No description provided.'} action={<button className={primaryButtonClassName} onClick={openTask}><Plus className="h-4 w-4" /> New task</button>} />
+      <PageHeader eyebrow={`PROJECT / ${project.type.toUpperCase()}`} title={project.name} description={project.description || 'No description provided.'} action={can('task.create') ? <button className={primaryButtonClassName} onClick={openTask}><Plus className="h-4 w-4" /> New task</button> : undefined} />
       {error && <InlineAlert>{error}</InlineAlert>}{message && <InlineAlert tone="success">{message}</InlineAlert>}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
@@ -276,16 +264,79 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         </Panel>
       )}
 
-      <Panel title="Tasks" description={`${tasks.length} task${tasks.length === 1 ? '' : 's'} in this project`}>
+      <Panel title="Tasks" description={`${tasks.length} task${tasks.length === 1 ? '' : 's'} in this project — click a row for the full detail and activity`}>
         {tasks.length === 0 ? <EmptyState icon={FolderKanban} title="No tasks yet" description="Create the first task for this project." action={can('task.create') ? <button className={primaryButtonClassName} onClick={openTask}><Plus className="h-4 w-4" /> New task</button> : undefined} /> : <div className="divide-y divide-border">{tasks.map((task) => {
           const isHighlighted = highlightTaskId === task.id
           return (
-            <div key={task.id} id={`task-${task.id}`} className={`flex flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center transition ${isHighlighted ? 'bg-accent/[0.06] border-l-2 border-accent' : 'border-l-2 border-transparent'}`}><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-sm font-semibold">{task.title}</p><span className="rounded border border-border px-2 py-0.5 text-[10px] text-text-tertiary">{task.priority}</span>{isHighlighted && <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono-tech text-[9px] font-semibold text-accent">HIGHLIGHTED</span>}</div><p className="mt-1 text-xs text-text-tertiary">{task.profiles?.full_name || task.profiles?.email || 'Unassigned'}{task.due_date ? ` · Due ${new Date(`${task.due_date}T00:00:00`).toLocaleDateString()}` : ''}</p></div><select aria-label={`Status for ${task.title}`} className={`${inputClassName} lg:w-40`} value={task.status} onChange={(event) => void moveTask(task, event.target.value as TaskStatus)}>{taskStatuses.map((value) => <option value={value} key={value}>{taskStatusLabels[value]}</option>)}</select>{(can('task.delete') || task.created_by === user?.id) && <button onClick={() => void removeTask(task)} className="rounded-md border border-border p-2 text-text-tertiary hover:text-red-400" aria-label={`Delete ${task.title}`}><Trash2 className="h-4 w-4" /></button>}</div>
+            <div
+              key={task.id}
+              id={`task-${task.id}`}
+              role="button"
+              tabIndex={0}
+              onClick={() => setDetailTaskId(task.id)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                  event.preventDefault()
+                  setDetailTaskId(task.id)
+                }
+              }}
+              className={`flex cursor-pointer flex-col gap-4 px-5 py-4 lg:flex-row lg:items-center transition ${isHighlighted ? 'bg-accent/[0.06] border-l-2 border-accent' : 'border-l-2 border-transparent hover:bg-surface-raised'}`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="text-sm font-semibold">{task.title}</p>
+                  <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${taskPriorityBadgeClass(task.priority)}`}>{TASK_PRIORITY_LABELS[task.priority]}</span>
+                  <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${taskDueBadgeClass(task)}`}>{formatTaskDueDate(task.due_date)}</span>
+                  {isHighlighted && <span className="rounded bg-accent/15 px-1.5 py-0.5 font-mono-tech text-[9px] font-semibold text-accent">HIGHLIGHTED</span>}
+                </div>
+                <p className="mt-1 text-xs text-text-tertiary">{task.profiles?.full_name || task.profiles?.email || 'Unassigned'}</p>
+              </div>
+              <select
+                aria-label={`Status for ${task.title}`}
+                className={`${inputClassName} lg:w-40`}
+                value={task.status}
+                onClick={(event) => event.stopPropagation()}
+                onChange={(event) => void moveTask(task, event.target.value as TaskStatus)}
+              >
+                {taskStatuses.map((value) => <option value={value} key={value}>{taskStatusLabels[value]}</option>)}
+              </select>
+              {(can('task.delete') || task.created_by === user?.id) && (
+                <button
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void removeTask(task)
+                  }}
+                  className="rounded-md border border-border p-2 text-text-tertiary hover:text-red-400"
+                  aria-label={`Delete ${task.title}`}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              )}
+            </div>
           )
         })}</div>}
       </Panel>
 
-      <Modal open={taskModal} onClose={() => setTaskModal(false)} title="Create task" description="The task is saved to this project in Supabase."><form className="grid gap-4 sm:grid-cols-2" onSubmit={submitTask}><label className="text-xs text-text-secondary sm:col-span-2">Title<input required className={`${inputClassName} mt-2`} value={taskForm.title} onChange={(event) => setTaskForm({ ...taskForm, title: event.target.value })} /></label><label className="text-xs text-text-secondary">Assignee<select className={`${inputClassName} mt-2`} value={taskForm.assignee_id} onChange={(event) => setTaskForm({ ...taskForm, assignee_id: event.target.value })}><option value="">Unassigned</option>{assignees.map((assignee) => <option key={assignee.id} value={assignee.id}>{assignee.full_name || assignee.email}</option>)}</select></label><label className="text-xs text-text-secondary">Priority<select className={`${inputClassName} mt-2`} value={taskForm.priority} onChange={(event) => setTaskForm({ ...taskForm, priority: event.target.value as TaskPriority })}><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label><label className="text-xs text-text-secondary">Due date<input type="date" className={`${inputClassName} mt-2`} value={taskForm.due_date} onChange={(event) => setTaskForm({ ...taskForm, due_date: event.target.value })} /></label><label className="text-xs text-text-secondary sm:col-span-2">Description<textarea className={`${inputClassName} mt-2 min-h-24`} value={taskForm.description} onChange={(event) => setTaskForm({ ...taskForm, description: event.target.value })} /></label><div className="flex justify-end gap-2 sm:col-span-2"><button type="button" onClick={() => setTaskModal(false)} className={secondaryButtonClassName}>Cancel</button><button className={primaryButtonClassName} disabled={saving}>{saving && <LoaderCircle className="h-4 w-4 animate-spin" />}Create task</button></div></form></Modal>
+      {detailTask && (
+        <TaskDetailModal
+          task={detailTask}
+          projects={[project]}
+          onClose={() => setDetailTaskId(null)}
+          onChanged={load}
+        />
+      )}
+
+      <CreateTaskModal
+        open={taskModal}
+        projects={[project]}
+        fixedProjectId={project.id}
+        defaultAssigneeId={user?.id}
+        onClose={() => setTaskModal(false)}
+        onCreated={async () => {
+          setMessage('Task created.')
+          await load()
+        }}
+      />
     </Page>
   )
 }

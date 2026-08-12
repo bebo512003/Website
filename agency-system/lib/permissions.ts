@@ -157,6 +157,7 @@ export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
   { prefix: '/team', anyOf: ['employee.view'] },
   { prefix: '/projects', anyOf: ['project.view'] },
   { prefix: '/clients', anyOf: ['client.view'] },
+  { prefix: '/my-work', anyOf: ['task.view'] },
   { prefix: '/tasks', anyOf: ['task.view'] },
   { prefix: '/files', anyOf: ['file.view'] },
   { prefix: '/reports', anyOf: ['report.view'] },
@@ -200,6 +201,7 @@ export function pathAllowed(pathname: string, has: (permission: string) => boole
 export function firstAllowedStaffPath(has: (permission: string) => boolean): string {
   const candidates = [
     '/dashboard',
+    '/my-work',
     '/projects',
     '/tasks',
     '/team',

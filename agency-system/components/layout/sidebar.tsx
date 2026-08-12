@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, Inbox, ClipboardList, LayoutDashboard, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, Inbox, ClipboardList, LayoutDashboard, ListTodo, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/auth-context'
 import { ADMIN_AREA_PERMISSIONS } from '@/lib/permissions'
@@ -15,6 +15,7 @@ export function Sidebar() {
 
   const navItems = [
     { title: 'Dashboard', href: '/dashboard', icon: LayoutDashboard, show: can('dashboard.view') },
+    { title: 'My Work', href: '/my-work', icon: ListTodo, show: can('task.view') },
     { title: 'Projects', href: '/projects', icon: FolderKanban, show: can('project.view') },
     { title: 'Forms', href: '/admin/forms', icon: ClipboardList, show: can('form.manage') || can('form.view') },
     { title: 'Submissions', href: '/submissions', icon: Inbox, show: can('submission.view') },
@@ -32,7 +33,7 @@ export function Sidebar() {
     if (href === '/admin') return pathname === '/admin' || (pathname.startsWith('/admin/') && !['/admin/forms', '/admin/portfolio', '/admin/roles', '/admin/team'].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)))
     return pathname === href || pathname.startsWith(`${href}/`)
   }
-  const mobileItems = navItems.filter((item) => ['/dashboard', '/projects', '/admin/forms', '/submissions', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
+  const mobileItems = navItems.filter((item) => ['/dashboard', '/my-work', '/projects', '/admin/forms', '/submissions', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
 
   return (
     <>

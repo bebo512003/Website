@@ -51,6 +51,8 @@ Public sign-up must remain disabled. Apply `20260815000000_admin_only_account_cr
 
 Existing installations keep their current Admin. For a fresh empty database, use `npm run bootstrap:admin` once with the documented bootstrap environment variables. Afterwards, every internal Auth user is created by an authenticated Admin from **Administration → Team Management**. Newly provisioned team accounts are marked `must_change_password = true` until the owner replaces the temporary password; deleting a team member removes both the profile and matching Auth user transactionally. The protected Team Management create/e-mail-update route requires `SUPABASE_SERVICE_ROLE_KEY`; keep that key server-only and never expose it through a `NEXT_PUBLIC_*` variable.
 
+Later migrations include project ownership/lifecycle (`20260828000000`) and the My Work task system (`20260829000000`): project-scoped task assignees enforced by trigger, an append-only `task_activity` feed with note-only client inserts, and open-task release when a member leaves a project.
+
 ## Security model
 
 RLS is enabled for every application table:

@@ -498,8 +498,10 @@ async function runSuite(db, ids, label) {
   ok(`${label}: manager cannot deactivate users (admin only)`, managerDeactivatesFails)
 
   await asUser(db, alice)
-  await db.query(`insert into public.tasks (title, project_id, assignee_id) values ('Design logo concepts', $1, $2)`, [project.id, bob])
+  // Session 13: the assignee guard requires project membership before a task
+  // can be handed to an employee, so the member row goes in first.
   await db.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [project.id, bob])
+  await db.query(`insert into public.tasks (title, project_id, assignee_id) values ('Design logo concepts', $1, $2)`, [project.id, bob])
   await superUser(db) // notifications are trigger-only inserts in production
   await db.query(`insert into public.notifications (recipient_id, type, title, message) values ($1, 'info', 'Welcome', 'Hello Bob')`, [bob])
 
@@ -1173,7 +1175,8 @@ async function runNotificationSuite(db, ids, label) {
   const bobTaskNotif = (await db.query(`select * from public.notifications where recipient_id = $1 and task_id = $2`, [bob, taskId])).rows[0]
   ok(`${label}: employee receives notification on task assignment`, !!bobTaskNotif)
   ok(`${label}: task notification contains task title, project & due date`, bobTaskNotif?.title?.includes('Create wireframes') && bobTaskNotif?.message?.includes('2026-09-01'))
-  ok(`${label}: task notification links to project/task`, bobTaskNotif?.action_url?.includes(`/projects/${newProjId}`))
+  // Session 13: task-assignment notifications deep-link into My Work.
+  ok(`${label}: task notification deep-links into My Work`, bobTaskNotif?.action_url === `/my-work?task=${taskId}`)
 
   // 4. Mark as read / persistence across queries
   ok(`${label}: notification starts unread (read_at is null)`, bobTaskNotif?.read_at === null)
@@ -1639,6 +1642,178 @@ async function runSubmissionConversionSuite(db, ids, label) {
   await superUser(db)
 }
 
+// ── Session 13: My Work & task management ───────────────────────────────────
+// Proves the new task guards and the activity feed at the database layer:
+// project-scoped assignees (permission-model escape hatch), activity history,
+// work notes, and member-removal hygiene.
+async function runTaskManagementSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  // A second employee who never joins the project: the guard must reject her
+  // as an assignee everywhere.
+  await asUser(db, alice)
+  await db.query(`select public.admin_create_team_member('rania@agency.test', 'Rania Designer')`)
+  await superUser(db)
+  const rania = await addUser(db, 'rania@agency.test', { fullName: 'Rania Designer', adminProvisioned: true })
+  await asUser(db, rania)
+  await db.query(`select public.mark_password_changed($1)`, [rania])
+  const raniaIsActiveEmployee = (await scalar(db, `select public.has_permission('task.edit') v`)).v === true
+  ok(`${label}: second employee is a fully provisioned active employee`, raniaIsActiveEmployee)
+
+  await asUser(db, alice)
+  const anyClientId = (await db.query(`select id from public.clients order by created_at limit 1`)).rows[0]?.id
+  const project = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('My Work Redesign', $1, 'active', $2) returning id`,
+    [anyClientId, alice],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [project.id, bob, alice])
+
+  // ── Assignee directory mirrors the guard ──────────────────────────────
+  const assigneeRows = (await db.query(`select * from public.list_task_assignees($1)`, [project.id])).rows
+  ok(`${label}: assignee directory returns members and permission-allowed staff only`,
+    assigneeRows.some((row) => row.id === bob && row.is_member === true)
+      && assigneeRows.some((row) => row.id === alice)
+      && assigneeRows.some((row) => row.id === erin && row.is_member === false)
+      && !assigneeRows.some((row) => row.id === rania))
+  const memberCount = assigneeRows.filter((row) => row.is_member).length
+  // The project owner is auto-kept as a member (Session 12), so membership
+  // order — not a specific person — is what must hold: all members come first.
+  ok(`${label}: assignee directory lists project members first`,
+    memberCount >= 2 && assigneeRows.findIndex((row) => !row.is_member) === memberCount)
+
+  await asUser(db, rania)
+  const outsiderDirectoryFails = await expectError(db, () => db.query(`select * from public.list_task_assignees($1)`, [project.id]))
+  ok(`${label}: staff outside the project cannot list its assignees`, outsiderDirectoryFails)
+  await asUser(db, erin) // manager — project.view_all without membership
+  const managerDirectoryWorks = (await db.query(`select count(*)::int n from public.list_task_assignees($1)`, [project.id])).rows[0]?.n
+  ok(`${label}: project.view_all manager can list assignees without membership`, (managerDirectoryWorks ?? 0) >= 2)
+
+  // ── Assignee guard ────────────────────────────────────────────────────
+  await asUser(db, alice)
+  const outsiderAssignFails = await expectError(db, () => db.query(
+    `insert into public.tasks (title, project_id, assignee_id) values ('Outsider attempt', $1, $2)`, [project.id, rania]))
+  ok(`${label}: DB rejects creating a task assigned to a non-member employee`, outsiderAssignFails)
+
+  const homepageTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, priority, due_date) values ('Homepage design', $1, $2, 'high', current_date + 2) returning id`,
+    [project.id, bob],
+  )).rows[0]
+  const reassignToOutsiderFails = await expectError(db, () => db.query(
+    `update public.tasks set assignee_id = $1 where id = $2`, [rania, homepageTask.id]))
+  ok(`${label}: DB rejects reassigning a task to a non-member employee`, reassignToOutsiderFails)
+
+  const clientProfile = (await db.query(`select id from public.profiles where role = 'client' limit 1`)).rows[0]
+  const clientAssignFails = clientProfile && await expectError(db, () => db.query(
+    `insert into public.tasks (title, project_id, assignee_id) values ('Client attempt', $1, $2)`, [project.id, clientProfile.id]))
+  ok(`${label}: DB rejects assigning a task to a client account`, Boolean(clientProfile) && Boolean(clientAssignFails))
+
+  // The permission model explicitly allows view_all staff without membership.
+  await asUser(db, erin)
+  const managerSelfTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id) values ('Manager sign-off', $1, $2) returning id`,
+    [project.id, erin],
+  )).rows[0]
+  ok(`${label}: project.view_all manager can be assigned without project membership`, Boolean(managerSelfTask?.id))
+
+  // Reassigning to another person requires task.assign (employees may only
+  // pick tasks up for themselves). Employees also lack task.create entirely.
+  await asUser(db, bob)
+  const memberCreateFails = await expectError(db, () => db.query(
+    `insert into public.tasks (title, project_id, created_by) values ('Sneaky', $1, $2)`, [project.id, bob]))
+  ok(`${label}: default employee cannot create tasks (no task.create)`, memberCreateFails)
+  await asUser(db, alice)
+  const delegatedTask = (await db.query(
+    `insert into public.tasks (title, project_id) values ('Copy draft', $1) returning id`, [project.id])).rows[0]
+  await asUser(db, bob)
+  const selfPickup = await db.query(`update public.tasks set assignee_id = $1 where id = $2`, [bob, delegatedTask.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: employee can pick up an unassigned task for themselves`, selfPickup === 1)
+  const delegateBackFails = await expectError(db, () => db.query(
+    `update public.tasks set assignee_id = $1 where id = $2`, [alice, delegatedTask.id]))
+  ok(`${label}: employee cannot hand a task to someone else (no task.assign)`, delegateBackFails)
+  const handBack = await db.query(`update public.tasks set assignee_id = null where id = $1`, [delegatedTask.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: employee can release their own task back to unassigned`, handBack === 1)
+  await asUser(db, erin)
+  const managerDelegates = await db.query(`update public.tasks set assignee_id = $1 where id = $2`, [bob, delegatedTask.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: manager with task.assign reassigns to a project member`, managerDelegates === 1)
+
+  // ── Activity feed ─────────────────────────────────────────────────────
+  const createdEvents = (await db.query(
+    `select * from public.task_activity where task_id = $1 and event_type = 'created'`, [homepageTask.id])).rows
+  ok(`${label}: task creation records an activity event with actor`, createdEvents.length === 1 && createdEvents[0]?.actor_id === alice)
+
+  await asUser(db, bob)
+  await db.query(`update public.tasks set status = 'inprogress' where id = $1`, [homepageTask.id])
+  const statusEvents = (await db.query(
+    `select * from public.task_activity where task_id = $1 and event_type = 'status_changed'`, [homepageTask.id])).rows
+  ok(`${label}: status change is recorded with old/new values and the actor`,
+    statusEvents.length === 1 && statusEvents[0]?.old_value === 'todo' && statusEvents[0]?.new_value === 'inprogress' && statusEvents[0]?.actor_id === bob)
+
+  const note = (await db.query(`select * from public.add_task_note($1, 'Wireframes approved by the client.')`, [homepageTask.id])).rows[0]
+  ok(`${label}: member adds a work note via the guarded RPC`, note?.event_type === 'note' && note?.actor_id === bob && note?.new_value?.includes('Wireframes'))
+  const emptyNoteFails = await expectError(db, () => db.query(`select * from public.add_task_note($1, '   ')`, [homepageTask.id]))
+  ok(`${label}: empty work notes are rejected`, emptyNoteFails)
+
+  // The note-only insert policy: members can insert notes, but nobody may
+  // forge a system event through the table API.
+  const directNote = await db.query(
+    `insert into public.task_activity (task_id, project_id, event_type, new_value) values ($1, $2, 'note', 'Direct insert note')`,
+    [homepageTask.id, project.id]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: direct note insert passes the note-only RLS policy`, directNote === 1)
+  const forgedEventFails = await expectError(db, () => db.query(
+    `insert into public.task_activity (task_id, project_id, event_type, new_value) values ($1, $2, 'status_changed', 'done')`,
+    [homepageTask.id, project.id]))
+  ok(`${label}: system activity events cannot be forged through direct inserts`, forgedEventFails)
+
+  const feed = (await db.query(`select * from public.task_activity where task_id = $1 order by created_at`, [homepageTask.id])).rows
+  ok(`${label}: the full activity feed is visible to project members`, feed.length >= 4)
+
+  // The feed is append-only: no update or delete policies exist for anyone.
+  const activityUpdate = await db.query(`update public.task_activity set new_value = 'edited' where task_id = $1`, [homepageTask.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  const activityDelete = await db.query(`delete from public.task_activity where task_id = $1`, [homepageTask.id])
+    .then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: activity rows cannot be edited or deleted (append-only)`, activityUpdate === 0 && activityDelete === 0)
+
+  // ── Isolation ─────────────────────────────────────────────────────────
+  await asUser(db, rania)
+  ok(`${label}: non-member employee sees no task activity (RLS)`,
+    (await scalar(db, `select count(*)::int n from public.task_activity where task_id = $1`, [homepageTask.id])).n === 0)
+  const outsiderNoteFails = await expectError(db, () => db.query(`select * from public.add_task_note($1, 'Outsider note')`, [homepageTask.id]))
+  ok(`${label}: non-member employee cannot add work notes`, outsiderNoteFails)
+  ok(`${label}: non-member employee does not see the project tasks`,
+    (await scalar(db, `select count(*)::int n from public.tasks where project_id = $1`, [project.id])).n === 0)
+
+  // ── Member-removal hygiene ────────────────────────────────────────────
+  await asUser(db, alice)
+  const doneTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, status) values ('Finished piece', $1, $2, 'done') returning id`,
+    [project.id, bob],
+  )).rows[0]
+  await db.query(`delete from public.project_members where project_id = $1 and user_id = $2`, [project.id, bob])
+  const afterRemoval = await scalar(db,
+    `select
+       (select assignee_id from public.tasks where id = $1) open_assignee,
+       (select assignee_id from public.tasks where id = $2) done_assignee`,
+    [delegatedTask.id, doneTask.id])
+  ok(`${label}: removing a member releases their open tasks but keeps completed attribution`,
+    afterRemoval?.open_assignee === null && afterRemoval?.done_assignee === bob)
+  ok(`${label}: the unassignment itself is recorded in the activity feed`,
+    (await scalar(db,
+      `select count(*)::int n from public.task_activity where task_id = $1 and event_type = 'assignee_changed' and new_value is null`,
+      [delegatedTask.id])).n >= 1)
+
+  // After removal the former member loses access to the task AND its history.
+  await asUser(db, bob)
+  ok(`${label}: removed member can no longer read the task or its activity`,
+    (await scalar(db, `select count(*)::int n from public.tasks where id = $1`, [delegatedTask.id])).n === 0
+      && (await scalar(db, `select count(*)::int n from public.task_activity where task_id = $1`, [delegatedTask.id])).n === 0)
+
+  await superUser(db)
+}
+
 async function runStorageSecuritySuite(db, ids, label) {
   const { anonVisitor, alice, bob, carol } = ids
 
@@ -1749,6 +1924,7 @@ async function main() {
   await runStorageSecuritySuite(dbA, idsA, 'upgrade')
   await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
   await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
+  await runTaskManagementSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')

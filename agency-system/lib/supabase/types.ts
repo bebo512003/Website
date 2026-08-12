@@ -168,6 +168,40 @@ export type TaskRow = {
   updated_at: string
 }
 
+// ── Task activity (Session 13) ──────────────────────────────────────────────
+export type TaskActivityEventType =
+  | 'note'
+  | 'created'
+  | 'status_changed'
+  | 'priority_changed'
+  | 'assignee_changed'
+  | 'due_date_changed'
+  | 'title_changed'
+  | 'description_changed'
+  | 'project_changed'
+
+export type TaskActivityRow = {
+  id: string
+  task_id: string
+  project_id: string
+  actor_id: string | null
+  event_type: TaskActivityEventType
+  old_value: string | null
+  new_value: string | null
+  metadata: Json
+  created_at: string
+}
+
+/** One row of the list_task_assignees RPC: a valid task assignee candidate. */
+export type TaskAssigneeRow = {
+  id: string
+  full_name: string | null
+  email: string
+  job_title: string | null
+  role: AppRole
+  is_member: boolean
+}
+
 export type FileRow = {
   id: string
   name: string
@@ -488,6 +522,13 @@ export interface Database {
         { foreignKeyName: 'tasks_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
         { foreignKeyName: 'tasks_assignee_id_fkey'; columns: ['assignee_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
       ]>
+      task_activity: TableDefinition<TaskActivityRow, {
+        id?: string; task_id: string; project_id: string; actor_id?: string | null; event_type: TaskActivityEventType; old_value?: string | null; new_value?: string | null; metadata?: Json; created_at?: string
+      }, Partial<TaskActivityRow>, [
+        { foreignKeyName: 'task_activity_task_id_fkey'; columns: ['task_id']; isOneToOne: false; referencedRelation: 'tasks'; referencedColumns: ['id'] },
+        { foreignKeyName: 'task_activity_project_id_fkey'; columns: ['project_id']; isOneToOne: false; referencedRelation: 'projects'; referencedColumns: ['id'] },
+        { foreignKeyName: 'task_activity_actor_id_fkey'; columns: ['actor_id']; isOneToOne: false; referencedRelation: 'profiles'; referencedColumns: ['id'] },
+      ]>
       files: TableDefinition<FileRow, {
         id?: string; name: string; type?: FileRow['type']; size?: number; mime_type?: string | null; storage_path?: string | null; project_id?: string | null; client_id?: string | null; uploaded_by?: string | null; starred?: boolean; created_at?: string; updated_at?: string
       }, Partial<FileRow>, [
@@ -591,6 +632,10 @@ export interface Database {
       get_public_portfolio_projects: { Args: Record<string, never>; Returns: PortfolioPublicRpcRow[] }
       get_public_portfolio_project: { Args: { p_slug: string }; Returns: PortfolioPublicRpcRow[] }
       get_storage_audit_summary: { Args: Record<string, never>; Returns: Json }
+      user_has_permission: { Args: { p_user_id: string; p_permission: string }; Returns: boolean }
+      can_user_access_project: { Args: { p_user_id: string; p_project_id: string }; Returns: boolean }
+      add_task_note: { Args: { p_task_id: string; p_note: string }; Returns: TaskActivityRow }
+      list_task_assignees: { Args: { p_project_id: string }; Returns: TaskAssigneeRow[] }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -677,4 +722,8 @@ export type TaskWithRelations = Task & {
   projects: Pick<Project, 'id' | 'name'> | null
   profiles: Pick<Profile, 'id' | 'full_name' | 'email'> | null
 }
+export type TaskActivity = TaskActivityRow & {
+  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
+}
+export type TaskAssignee = TaskAssigneeRow
 export type FileWithProject = FileItem & { projects: Pick<Project, 'id' | 'name'> | null }
