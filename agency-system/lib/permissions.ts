@@ -94,6 +94,7 @@ export const ROLE_CAPABILITY_MATRIX: Record<'admin' | 'manager' | 'employee' | '
   ],
   client: [
     'portal.view',
+    'notification.view',
   ],
 }
 

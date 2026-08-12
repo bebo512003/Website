@@ -26,7 +26,17 @@ import {
   markNotificationRead,
   markNotificationUnread,
 } from '@/lib/supabase/database'
-import type { Notification, NotificationMetadata, NotificationType } from '@/lib/supabase/types'
+import type { Notification } from '@/lib/supabase/types'
+import {
+  getNotificationMetadata,
+  isClientCollaborationNotification,
+  isProjectNotification,
+  isSubmissionNotification,
+  isTaskNotification,
+  notificationEvent,
+  notificationTypeLabel,
+  type NotificationFilterTab,
+} from '@/lib/notifications'
 import {
   EmptyState,
   InlineAlert,
@@ -39,48 +49,47 @@ import {
   secondaryButtonClassName,
 } from '@/components/ui/page'
 
-type FilterTab = 'all' | 'unread' | 'submissions' | 'projects' | 'tasks'
-
-function getMetadata(notification: Notification): NotificationMetadata {
-  if (notification.metadata && typeof notification.metadata === 'object' && !Array.isArray(notification.metadata)) {
-    return notification.metadata as NotificationMetadata
+function getNotificationTypeBadge(notification: Notification) {
+  const event = notificationEvent(notification)
+  if (isSubmissionNotification(notification)) {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FileText,
+      badgeStyle: 'border-accent/40 bg-accent/10 text-accent',
+    }
   }
-  return {}
-}
-
-function getNotificationTypeBadge(type: NotificationType) {
-  switch (type) {
-    case 'form_submission':
-    case 'submission':
-      return {
-        label: 'FORM SUBMISSION',
-        icon: FileText,
-        badgeStyle: 'border-accent/40 bg-accent/10 text-accent',
-        dotStyle: 'bg-accent',
-      }
-    case 'assignment':
-    case 'project_update':
-      return {
-        label: type === 'assignment' ? 'PROJECT ASSIGNMENT' : 'PROJECT UPDATE',
-        icon: FolderKanban,
-        badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
-        dotStyle: 'bg-emerald-400',
-      }
-    case 'task_assignment':
-    case 'task_update':
-      return {
-        label: type === 'task_assignment' ? 'TASK ASSIGNMENT' : 'TASK UPDATE',
-        icon: CheckSquare,
-        badgeStyle: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
-        dotStyle: 'bg-sky-400',
-      }
-    default:
-      return {
-        label: 'SYSTEM INFO',
-        icon: Info,
-        badgeStyle: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
-        dotStyle: 'bg-amber-400',
-      }
+  if (isTaskNotification(notification)) {
+    return {
+      label: notificationTypeLabel(event),
+      icon: CheckSquare,
+      badgeStyle: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
+    }
+  }
+  if (event.startsWith('client.') || notification.type === 'client_feedback' || notification.type === 'client_approval' || notification.type === 'client_revision') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: Info,
+      badgeStyle: 'border-violet-500/40 bg-violet-500/10 text-violet-400',
+    }
+  }
+  if (event === 'file.shared' || notification.type === 'file_shared') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FileText,
+      badgeStyle: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
+    }
+  }
+  if (event === 'delivery.ready' || notification.type === 'delivery_ready') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FolderKanban,
+      badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
+    }
+  }
+  return {
+    label: notificationTypeLabel(event),
+    icon: FolderKanban,
+    badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
   }
 }
 
@@ -89,7 +98,7 @@ export default function NotificationsPage() {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<FilterTab>('all')
+  const [tab, setTab] = useState<NotificationFilterTab>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
@@ -112,15 +121,19 @@ export default function NotificationsPage() {
   const unreadCount = useMemo(() => notifications.filter((n) => !n.read_at).length, [notifications])
   const readCount = useMemo(() => notifications.filter((n) => !!n.read_at).length, [notifications])
   const submissionCount = useMemo(
-    () => notifications.filter((n) => n.type === 'form_submission' || n.type === 'submission').length,
+    () => notifications.filter((n) => isSubmissionNotification(n)).length,
     [notifications]
   )
   const projectCount = useMemo(
-    () => notifications.filter((n) => n.type === 'assignment' || n.type === 'project_update').length,
+    () => notifications.filter((n) => isProjectNotification(n) && !isClientCollaborationNotification(n)).length,
     [notifications]
   )
   const taskCount = useMemo(
-    () => notifications.filter((n) => n.type === 'task_assignment' || n.type === 'task_update').length,
+    () => notifications.filter((n) => isTaskNotification(n)).length,
+    [notifications]
+  )
+  const clientCount = useMemo(
+    () => notifications.filter((n) => isClientCollaborationNotification(n)).length,
     [notifications]
   )
 
@@ -131,18 +144,20 @@ export default function NotificationsPage() {
     if (tab === 'unread') {
       list = list.filter((n) => !n.read_at)
     } else if (tab === 'submissions') {
-      list = list.filter((n) => n.type === 'form_submission' || n.type === 'submission')
+      list = list.filter((n) => isSubmissionNotification(n))
     } else if (tab === 'projects') {
-      list = list.filter((n) => n.type === 'assignment' || n.type === 'project_update')
+      list = list.filter((n) => isProjectNotification(n) && !isClientCollaborationNotification(n))
     } else if (tab === 'tasks') {
-      list = list.filter((n) => n.type === 'task_assignment' || n.type === 'task_update')
+      list = list.filter((n) => isTaskNotification(n))
+    } else if (tab === 'client') {
+      list = list.filter((n) => isClientCollaborationNotification(n))
     }
 
     // Filter by search query
     const q = searchQuery.trim().toLowerCase()
     if (q) {
       list = list.filter((n) => {
-        const meta = getMetadata(n)
+        const meta = getNotificationMetadata(n)
         return (
           n.title.toLowerCase().includes(q) ||
           n.message.toLowerCase().includes(q) ||
@@ -232,7 +247,7 @@ export default function NotificationsPage() {
       <PageHeader
         eyebrow="NOTIFICATIONS / INBOX"
         title="Notifications"
-        description="Internal notifications for form submissions, project assignments, and task updates."
+        description="In-app inbox for domain events: submissions, assignments, tasks, client feedback, shared files, and deliveries."
         action={
           <div className="flex items-center gap-2">
             {readCount > 0 && (
@@ -321,6 +336,17 @@ export default function NotificationsPage() {
           >
             Tasks <span className="font-mono-tech text-[10px] text-text-tertiary">({taskCount})</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setTab('client')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
+              tab === 'client'
+                ? 'border-accent bg-accent/10 text-accent font-semibold'
+                : 'border-border bg-surface text-text-secondary hover:border-line-light hover:text-fg'
+            }`}
+          >
+            Client <span className="font-mono-tech text-[10px] text-text-tertiary">({clientCount})</span>
+          </button>
         </div>
 
         {/* Search Input */}
@@ -387,8 +413,8 @@ export default function NotificationsPage() {
           <div className="divide-y divide-border">
             {filteredNotifications.map((notification) => {
               const isUnread = !notification.read_at
-              const meta = getMetadata(notification)
-              const badge = getNotificationTypeBadge(notification.type)
+              const meta = getNotificationMetadata(notification)
+              const badge = getNotificationTypeBadge(notification)
               const BadgeIcon = badge.icon
               const isBusy = busyActionId === notification.id
               const dateObj = new Date(notification.created_at)

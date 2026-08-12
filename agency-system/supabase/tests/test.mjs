@@ -1125,7 +1125,7 @@ async function runCapabilityEnforcementSuite(db, ids, label) {
 }
 
 async function runNotificationSuite(db, ids, label) {
-  const { anonVisitor, alice, bob } = ids
+  const { anonVisitor, alice, bob, erin } = ids
 
   // 1. Dynamic Form Submission -> Admin receives notification
   await asUser(db, alice)
@@ -1191,6 +1191,82 @@ async function runNotificationSuite(db, ids, label) {
   ok(`${label}: employee cannot update admin notifications (RLS)`, bobUpdatesAlice <= 0)
   const bobDeletesAlice = await db.query(`delete from public.notifications where recipient_id = $1`, [alice]).then((r) => r.affectedRows ?? 0).catch(() => -1)
   ok(`${label}: employee cannot delete admin notifications (RLS)`, bobDeletesAlice <= 0)
+
+  // 6. Domain-event catalog + dedupe
+  await asUser(db, alice)
+  await scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submission.id, erin])
+  await scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submission.id, erin])
+  await superUser(db)
+  const erinAssign = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.assigned'`,
+    [erin, submission.id],
+  )).rows
+  ok(`${label}: submission assignment notifies the reviewer once (deduped)`, erinAssign.length === 1)
+  ok(`${label}: submission assignment carries a domain event key`, erinAssign[0]?.event === 'submission.assigned' && !!erinAssign[0]?.dedupe_key)
+
+  await asUser(db, alice)
+  await scalar(db, `select public.update_form_submission_status($1, 'reviewing')`, [submission.id])
+  await superUser(db)
+  const erinStatus = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.status_changed'`,
+    [erin, submission.id],
+  )).rows
+  ok(`${label}: submission status change notifies the assigned reviewer`, erinStatus.length === 1 && erinStatus[0].action_url === `/submissions?submission=${submission.id}`)
+  const aliceStatus = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.status_changed'`,
+    [alice, submission.id],
+  )).rows
+  ok(`${label}: actor does not receive their own submission status notification`, aliceStatus.length === 0)
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id = $1`, [bob])
+  await asUser(db, alice)
+  const ownedProj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id) select 'Owned by Bob', id, 'active', $1 from public.clients limit 1 returning id`,
+    [bob],
+  )).rows[0]
+  await asUser(db, bob)
+  const bobCreated = (await db.query(
+    `select event, type from public.notifications where recipient_id = $1 and project_id = $2`,
+    [bob, ownedProj.id],
+  )).rows
+  ok(`${label}: project created notifies the owner once as project.created`,
+    bobCreated.length === 1 && bobCreated[0].event === 'project.created')
+  ok(`${label}: owner is not also emailed a duplicate team_member.assigned row`,
+    !bobCreated.some((row) => row.event === 'team_member.assigned'))
+
+  await asUser(db, alice)
+  await db.query(`update public.projects set manager_id = $1 where id = $2`, [erin, ownedProj.id])
+  await superUser(db)
+  const erinAssigned = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and project_id = $2 and event = 'project.assigned'`,
+    [erin, ownedProj.id],
+  )).rows
+  ok(`${label}: changing the manager emits project.assigned once`, erinAssigned.length === 1)
+
+  await asUser(db, alice)
+  await db.query(`update public.tasks set status = 'inprogress' where id = $1`, [taskId])
+  await superUser(db)
+  const bobTaskUpdate = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.updated'`,
+    [bob, taskId],
+  )).rows
+  ok(`${label}: task update notifies the assignee`, bobTaskUpdate.length === 1 && bobTaskUpdate[0].action_url === `/my-work?task=${taskId}`)
+  await asUser(db, alice)
+  await db.query(`update public.tasks set status = 'inprogress' where id = $1`, [taskId])
+  await superUser(db)
+  const bobTaskUpdateAgain = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.updated'`,
+    [bob, taskId],
+  )).rows
+  ok(`${label}: repeating the same task update does not create a second notification`, bobTaskUpdateAgain.length === 1)
+
+  await asUser(db, alice)
+  const selfCreated = (await db.query(
+    `select count(*)::int n from public.notifications where recipient_id = $1 and event = 'project.created' and project_id = $2`,
+    [alice, ownedProj.id],
+  )).rows[0]
+  ok(`${label}: creator does not notify themself of project.created`, selfCreated.n === 0)
 
   await superUser(db)
 }
@@ -2566,6 +2642,21 @@ async function runClientFeedbackSuite(db, ids, label) {
 
   await asUser(db, alice)
   await db.query(`select public.mark_project_delivered($1, 'Handoff for client review')`, [projectA.id])
+  await superUser(db)
+  const staffDeliveryNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and event = 'delivery.ready' and project_id = $2`,
+    [erin, projectA.id],
+  )).rows
+  ok(`${label}: marking delivery ready notifies the project manager`,
+    staffDeliveryNotifs.length >= 1 && staffDeliveryNotifs[0].action_url === `/projects/${projectA.id}`)
+
+  await asUser(db, clientUserA)
+  const clientDeliveryNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and event = 'delivery.ready' and project_id = $2`,
+    [clientUserA, projectA.id],
+  )).rows
+  ok(`${label}: a delivered package notifies the client that delivery is ready`,
+    clientDeliveryNotifs.length === 1 && clientDeliveryNotifs[0].action_url === `/portal/projects/${projectA.id}`)
 
   await asUser(db, clientUserA)
   const deliveredCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c

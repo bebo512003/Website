@@ -4,6 +4,7 @@ import { useRouter } from 'next/navigation'
 import { LogOut, Zap } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { secondaryButtonClassName } from '@/components/ui/page'
+import { NotificationDropdown } from '@/components/layout/notification-dropdown'
 
 /**
  * Shared chrome for the authenticated client portal. Unlike the staff shell, the
@@ -29,9 +30,12 @@ export default function ClientPortalLayout({ children }: { children: React.React
             </div>
             <span className="font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / CLIENT PORTAL</span>
           </div>
-          <button onClick={() => void leave()} className={secondaryButtonClassName}>
-            <LogOut className="h-4 w-4" /> Sign out
-          </button>
+          <div className="flex items-center gap-2">
+            <NotificationDropdown viewAllHref="/portal" />
+            <button onClick={() => void leave()} className={secondaryButtonClassName}>
+              <LogOut className="h-4 w-4" /> Sign out
+            </button>
+          </div>
         </div>
       </div>
 
