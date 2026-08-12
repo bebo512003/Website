@@ -836,28 +836,3 @@ export type FileWithProject = FileItem & {
   projects: Pick<Project, 'id' | 'name'> | null
   is_delivery?: boolean
 }
-folio_project_images']['Insert']
-
-export type PortfolioImageWithUrl = PortfolioProjectImage & { image_url: string | null }
-export type PortfolioProjectWithRelations = PortfolioProject & {
-  portfolio_categories: Pick<PortfolioCategory, 'id' | 'name' | 'slug' | 'is_active'> | null
-  portfolio_project_images: PortfolioImageWithUrl[]
-}
-
-export type ProjectWithClient = Project & {
-  clients: Pick<Client, 'id' | 'name'> | null
-  owner?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
-  manager?: Pick<Profile, 'id' | 'full_name' | 'email'> | null
-}
-export type TaskWithRelations = Task & {
-  projects: Pick<Project, 'id' | 'name'> | null
-  profiles: Pick<Profile, 'id' | 'full_name' | 'email'> | null
-}
-export type TaskActivity = TaskActivityRow & {
-  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
-}
-export type TaskAssignee = TaskAssigneeRow
-export type ProjectActivity = ProjectActivityRow & {
-  actor: Pick<Profile, 'id' | 'full_name' | 'email' | 'avatar_url' | 'job_title'> | null
-}
-export type FileWithProject = FileItem & { projects: Pick<Project, 'id' | 'name'> | null }
