@@ -18,6 +18,22 @@ export async function signIn(email: string, password: string): Promise<AuthResul
   return { error: error ? new Error(error.message) : null }
 }
 
+/**
+ * Re-authenticates against Supabase Auth to prove the caller knows the current
+ * password. Used before replacing a temporary password; it also refreshes the
+ * active session as a side effect.
+ */
+export async function verifyCurrentPassword(email: string, password: string): Promise<AuthResult> {
+  if (!supabase) return { error: unavailableError() }
+
+  const { error } = await supabase.auth.signInWithPassword({
+    email: email.trim(),
+    password,
+  })
+
+  return { error: error ? new Error('The current password is incorrect.') : null }
+}
+
 export async function signInAnonymously(): Promise<AuthResult> {
   if (!supabase) return { error: unavailableError() }
 

@@ -31,6 +31,8 @@ create table auth.users (
   raw_user_meta_data jsonb not null default '{}'::jsonb,
   created_at timestamptz not null default now()
 );
+-- GoTrue enforces one account per e-mail; mirror that invariant in the stub.
+create unique index auth_users_email_unique on auth.users (lower(email)) where email is not null;
 create or replace function auth.uid() returns uuid
 language sql stable as $$ select nullif(current_setting('app.request.uid', true), '')::uuid $$;
 
@@ -133,6 +135,17 @@ async function runSuite(db, ids, label) {
   const pErin = await scalar(db, 'select role, must_change_password from public.profiles where id = $1', [erin])
   ok(`${label}: Admin can provision a Manager without changing RBAC architecture`, pErin?.role === 'manager', pErin?.role)
   ok(`${label}: bootstrap Admin is not incorrectly forced through the team-account password flow`, pAlice?.role === 'admin' && (await scalar(db, 'select must_change_password v from public.profiles where id = $1', [alice])).v === false)
+
+  // The temporary-password state is a real authorization gate, not a UI hint:
+  // until the first-login change happens the account exercises no permissions.
+  await asUser(db, erin)
+  const erinPendingPerms = (await scalar(db, `select public.get_user_permissions() perms`)).perms
+  ok(`${label}: provisioned manager exercises no permissions before the first password change`,
+    erinPendingPerms.length === 0 && (await scalar(db, `select public.has_permission('project.view_all') v`)).v === false)
+  await db.query(`select public.mark_password_changed($1)`, [erin])
+  ok(`${label}: first-login password change unlocks the manager's role permissions`,
+    (await scalar(db, `select public.has_permission('project.view_all') v`)).v === true)
+  await superUser(db)
   let existingAccountAuthUpdateWorks = true
   try {
     await db.query(`update auth.users set raw_user_meta_data = raw_user_meta_data || '{"auth_refresh_test":true}'::jsonb where id = $1`, [bob])
@@ -165,8 +178,12 @@ async function runSuite(db, ids, label) {
   ok(`${label}: enhanced profile RPC rejects updates to another profile`, updateOtherProfileBlocked)
   const clearOtherPasswordFlagBlocked = await expectError(db, () => db.query(`select public.mark_password_changed($1)`, [erin]))
   ok(`${label}: password flag RPC rejects a caller-supplied different user id`, clearOtherPasswordFlagBlocked)
+  ok(`${label}: pending temporary password returns an empty permission set for the employee`,
+    (await scalar(db, `select public.get_user_permissions() perms`)).perms.length === 0)
   await db.query(`select public.mark_password_changed($1)`, [bob])
   ok(`${label}: user can clear their own temporary-password flag`, (await scalar(db, 'select must_change_password v from public.profiles where id = $1', [bob])).v === false)
+  ok(`${label}: clearing the flag restores the employee's permissions`,
+    (await scalar(db, `select public.get_user_permissions() perms`)).perms.length > 0)
 
   await asUser(db, alice)
   const profileOnlyEmailChangeBlocked = await expectError(db, () => db.query(
@@ -204,6 +221,18 @@ async function runSuite(db, ids, label) {
   )
   ok(`${label}: team deletion removes both profile and Auth account atomically`, removedAccount.profile_count === 0 && removedAccount.auth_count === 0)
 
+  // Full lifecycle: a deleted member's e-mail is fully released and can be
+  // provisioned again from scratch (no stale profile, placeholder or ban left).
+  await asUser(db, alice)
+  await db.query(`select public.admin_create_team_member('remove-me@agency.test', 'Remove Me Reborn')`)
+  await superUser(db)
+  const reborn = await addUser(db, 'remove-me@agency.test', { fullName: 'Remove Me Reborn', adminProvisioned: true })
+  const rebornRow = await scalar(db, 'select role, status, must_change_password from public.profiles where id = $1', [reborn])
+  ok(`${label}: deleted member e-mail can be provisioned again with a fresh temporary password`,
+    rebornRow?.role === 'employee' && rebornRow?.status === 'active' && rebornRow?.must_change_password === true)
+  ok(`${label}: re-provisioning leaves exactly one profile for the e-mail`,
+    (await scalar(db, `select count(*)::int n from public.profiles where lower(email) = 'remove-me@agency.test'`)).n === 1)
+
   // Admin sets up a CRM client + project, erin becomes manager.
   await asUser(db, alice)
   await db.query(`insert into public.clients (name, email, contact_person) values ('Acme Corp', 'carol@acme.test', 'Carol')`)
@@ -227,6 +256,24 @@ async function runSuite(db, ids, label) {
        (select count(*)::int from public.employee_roles where key = 'preserved_role' and created_by is null) role_count`,
   )
   ok(`${label}: nullable attribution FKs preserve business rows when a profile is removed`, preservedAttribution.task_count === 1 && preservedAttribution.role_count === 1)
+
+  // Placeholder assignments made before the login exists must survive the Auth
+  // claim (the claim snapshots them, frees the e-mail, inserts the claimed
+  // profile, then restores the assignments around the unique e-mail index).
+  await asUser(db, alice)
+  const lifecyclePlaceholder = (await db.query(
+    `select * from public.admin_create_team_member('lifecycle@agency.test', 'Lifecycle Tester')`)).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [project.id, lifecyclePlaceholder.id, alice])
+  await superUser(db)
+  const lifecycleUser = await addUser(db, 'lifecycle@agency.test', { fullName: 'Lifecycle Tester', adminProvisioned: true })
+  const claimedLifecycle = await scalar(db,
+    `select
+       (select count(*)::int from public.project_members where user_id = $1) assignments,
+       (select count(*)::int from public.profiles where lower(email) = 'lifecycle@agency.test') profiles,
+       (select must_change_password from public.profiles where id = $1) flag`,
+    [lifecycleUser])
+  ok(`${label}: placeholder project assignments survive the Auth claim`,
+    claimedLifecycle.assignments === 1 && claimedLifecycle.profiles === 1 && claimedLifecycle.flag === true)
 
   // Form submission flow: anonymous submit creates a CLIENT row, never an employee.
   const anonIntakeId = crypto.randomUUID()
@@ -265,6 +312,22 @@ async function runSuite(db, ids, label) {
 
   const unmatchedSignupBlocked = await expectError(db, () => addUser(db, 'frank@agency.test'))
   ok(`${label}: unmatched e-mail cannot self-register as an employee`, unmatchedSignupBlocked)
+
+  // ── Duplicate e-mail handling ─────────────────────────────────────
+  // The provisioning RPC rejects e-mails that are already taken by another
+  // profile (team member OR client) and the unique index backstops the rule.
+  await asUser(db, alice)
+  const duplicateTeamEmailRejected = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('bob.updated@agency.test', 'Bob Clone')`))
+  ok(`${label}: duplicate team member e-mail is rejected by the provisioning RPC`, duplicateTeamEmailRejected)
+  const duplicateClientEmailRejected = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('dina@newco.test', 'Dina Clone')`))
+  ok(`${label}: e-mail already used by a client profile is rejected`, duplicateClientEmailRejected)
+  const directDuplicateInsertRejected = await expectError(db, () => db.query(
+    `insert into public.profiles (id, email, full_name, role) values (gen_random_uuid(), 'BOB.UPDATED@agency.test', 'Duplicate Insert', 'employee')`))
+  ok(`${label}: unique e-mail index blocks duplicate profiles at the database (case-insensitive)`, directDuplicateInsertRejected)
+  ok(`${label}: rejected duplicates leave no extra profile behind`,
+    (await scalar(db, `select count(*)::int n from public.profiles where lower(email) = 'bob.updated@agency.test'`)).n === 1)
 
   // ── Client restrictions ─────────────────────────────────────────────
   await asUser(db, dina)
@@ -318,12 +381,27 @@ async function runSuite(db, ids, label) {
   ok(`${label}: submission.view includes legacy intake attachment metadata`, (await scalar(db, 'select count(*)::int n from public.intake_attachments')).n === 1)
   ok(`${label}: submission.view includes legacy intake file storage reads`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'intake-files'`)).n === 1)
 
+  // Forced password change with REAL data: while the temporary password is
+  // still pending, the assigned employee sees nothing and can write nothing —
+  // exactly what the AppShell gate enforces in the UI, proven at the DB layer.
+  await superUser(db)
+  await db.query(`update public.profiles set must_change_password = true where id = $1`, [bob])
+  await asUser(db, bob)
+  ok(`${label}: pending temporary password blocks access to assigned projects (RLS)`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 0)
+  const pendingTaskRows = await db.query(`update public.tasks set status = 'done' where assignee_id = $1`, [bob]).then((r) => r.affectedRows ?? 0).catch(() => -1)
+  ok(`${label}: pending temporary password blocks task writes`, pendingTaskRows === 0, `${pendingTaskRows} rows`)
+  ok(`${label}: pending temporary password still allows reading the own profile`, (await scalar(db, 'select count(*)::int n from public.profiles')).n === 1)
+  await db.query(`select public.mark_password_changed($1)`, [bob])
+  ok(`${label}: replacing the temporary password restores the assigned workspace`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 1)
+
   await asUser(db, alice)
   await db.query(`select public.set_user_status($1, 'inactive')`, [bob])
   const bobStatus = (await db.query('select status from public.profiles where id = $1', [bob])).rows[0]
   ok(`${label}: admin deactivates an employee`, bobStatus?.status === 'inactive')
 
   await asUser(db, bob)
+  ok(`${label}: inactive employee has no workspace permission`, (await scalar(db, `select public.has_permission('workspace.access') v`)).v === false)
+  ok(`${label}: inactive employee has an empty effective permission set`, (await scalar(db, `select public.get_user_permissions() perms`)).perms.length === 0)
   ok(`${label}: inactive employee sees 0 projects`, (await scalar(db, 'select count(*)::int n from public.projects')).n === 0)
   ok(`${label}: inactive employee sees 0 tasks`, (await scalar(db, 'select count(*)::int n from public.tasks')).n === 0)
   ok(`${label}: inactive employee sees 0 notifications`, (await scalar(db, 'select count(*)::int n from public.notifications')).n === 0)
@@ -698,6 +776,30 @@ async function runTeamDirectorySuite(db, ids, label) {
   const grace = (await db.query(`select * from public.profiles where id = $1`, [graceId])).rows[0]
   ok(`${label}: Admin-created employee receives a real login-linked profile`, grace?.role === 'employee' && grace?.status === 'active' && grace?.job_title === 'Senior Designer' && grace?.department === 'Design' && grace?.id !== gracePlaceholder?.id)
   ok(`${label}: Admin placeholder is claimed and removed during Auth provisioning`, (await scalar(db, `select count(*)::int n from public.profiles where id = $1`, [gracePlaceholder.id])).n === 0)
+
+  // Grace replaces her temporary password on first login (simulated), which is
+  // what unlocks her workspace access in the real flow.
+  await asUser(db, grace.id)
+  await db.query(`select public.mark_password_changed($1)`, [grace.id])
+  ok(`${label}: first-login password change unlocks the provisioned member`, (await scalar(db, `select public.has_permission('workspace.access') v`)).v === true)
+  await asUser(db, alice)
+
+  // An e-mail that already exists in Supabase Auth must be rejected even when
+  // its profile row is gone (e.g. removed by manual data surgery). Removing
+  // Grace's profile temporarily reproduces that state; it is restored below.
+  await superUser(db)
+  await db.query(`delete from public.profiles where id = $1`, [grace.id])
+  await asUser(db, alice)
+  const authOnlyDuplicateRejected = await expectError(db, () => db.query(
+    `select public.admin_create_team_member('grace@agency.test', 'Grace Clone')`))
+  ok(`${label}: e-mail already present in Auth is rejected even without a matching profile`, authOnlyDuplicateRejected)
+  await superUser(db)
+  const graceRoleId = (await db.query(`select id from public.app_roles where key = 'employee'`)).rows[0].id
+  await db.query(
+    `insert into public.profiles (id, email, full_name, role, role_id, status, must_change_password, job_title, department, specialization, bio)
+     values ($1, 'grace@agency.test', 'Grace Designer', 'employee', $2, 'active', false, 'Senior Designer', 'Design', 'Brand Identity', 'Leads brand identity work')`,
+    [grace.id, graceRoleId],
+  )
   await asUser(db, alice)
 
   const clientRoleId = (await db.query(`select id from public.app_roles where key = 'client'`)).rows[0].id

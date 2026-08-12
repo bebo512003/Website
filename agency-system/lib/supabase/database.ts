@@ -779,7 +779,7 @@ export async function getTeamMemberById(id: string): Promise<Result<Profile | nu
   return ok(data)
 }
 
-export async function createTeamMember(payload: TeamMemberPayload, initialPassword: string): Promise<Result<Profile | null>> {
+export async function createTeamMember(payload: TeamMemberPayload): Promise<Result<{ profile: Profile; temporaryPassword: string } | null>> {
   if (!supabase) return fail(null)
 
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
@@ -793,24 +793,57 @@ export async function createTeamMember(payload: TeamMemberPayload, initialPasswo
         Authorization: `Bearer ${accessToken}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ member: payload, password: initialPassword }),
+      // The temporary password is generated on the server and returned once;
+      // the browser never chooses or sends it.
+      body: JSON.stringify({ member: payload }),
       cache: 'no-store',
     })
-    const result = await response.json() as { data?: Profile; error?: string }
-    if (!response.ok || !result.data) return fail(null, result.error || 'Unable to create the team account.')
-    return ok(result.data)
+    const result = await response.json() as { data?: Profile; temporary_password?: string; error?: string }
+    if (!response.ok || !result.data || !result.temporary_password) {
+      return fail(null, result.error || 'Unable to create the team account.')
+    }
+    return ok({ profile: result.data, temporaryPassword: result.temporary_password })
   } catch {
     return fail(null, 'Unable to reach the account provisioning service.')
+  }
+}
+
+export async function setTeamMemberStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/team-members', {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ member: { id: userId, status } }),
+      cache: 'no-store',
+    })
+    // The server route additionally syncs the Supabase Auth sign-in ban. When
+    // the service role is not configured on the server, fall back to the
+    // permission-checked RPC: the workspace is still blocked through RLS/UI.
+    if (response.status === 503) return setProfileStatus(userId, status)
+    const result = await response.json() as { data?: Profile; error?: string }
+    if (!response.ok || !result.data) return fail(null, result.error || 'Unable to update the member status.')
+    return ok(result.data)
+  } catch {
+    return setProfileStatus(userId, status)
   }
 }
 
 export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
 
-  // Status toggles already have a dedicated permission-checked RPC and do not
-  // need the service-role route used to synchronize login e-mail changes.
+  // Status toggles go through the protected route so the profile status and the
+  // Supabase Auth sign-in ban stay in sync.
   if (payload.email === undefined && payload.status !== undefined) {
-    return setProfileStatus(payload.id, payload.status)
+    return setTeamMemberStatus(payload.id, payload.status)
   }
 
   if (payload.email !== undefined) {

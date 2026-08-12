@@ -20,11 +20,13 @@ interface AuthContextType {
   user: User | null
   profile: Profile | null
   loading: boolean
+  profileLoaded: boolean
   configured: boolean
   isAdmin: boolean
   isManager: boolean
   isClient: boolean
   isDeactivated: boolean
+  mustChangePassword: boolean
   isAnonymous: boolean
   permissions: string[]
   permissionsLoaded: boolean
@@ -45,6 +47,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined)
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [profileLoaded, setProfileLoaded] = useState(false)
   const [permissions, setPermissions] = useState<string[]>([])
   const [permissionsLoaded, setPermissionsLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -52,12 +55,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const loadProfile = useCallback(async (activeUser: User) => {
     if (activeUser.is_anonymous) {
       setProfile(null)
+      setProfileLoaded(true)
       setPermissions([])
       setPermissionsLoaded(true)
       return
     }
     const profile = await getProfile(activeUser.id)
     setProfile(profile)
+    setProfileLoaded(true)
     const result = await getCurrentUserPermissions()
     if (result.error) {
       setPermissions([])
@@ -65,12 +70,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setPermissions(result.data)
     }
     setPermissionsLoaded(true)
-    
-    // Check if user needs to change password
-    if (profile?.must_change_password) {
-      // Redirect to profile page to force password change
-      window.location.href = '/profile'
-    }
+    // The forced temporary-password change is enforced by the AppShell gate
+    // (and by the database itself), not by a redirect from this provider.
   }, [])
 
   useEffect(() => {
@@ -99,6 +100,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       setUser(activeUser)
       if (!activeUser || activeUser.is_anonymous) {
         setProfile(null)
+        setProfileLoaded(true)
         setPermissions([])
         setPermissionsLoaded(true)
         setLoading(false)
@@ -122,6 +124,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (!result.error) {
       setUser(null)
       setProfile(null)
+      setProfileLoaded(false)
     }
     return result
   }, [])
@@ -153,11 +156,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user,
     profile,
     loading,
+    profileLoaded,
     configured: isDatabaseConnected,
     isAdmin: permissions.includes('admin.manage'),
     isManager: permissions.includes('admin.manage') || permissions.includes('project.view_all'),
     isClient: profile?.role === 'client',
     isDeactivated: !!profile && profile.status === 'inactive',
+    mustChangePassword: !!profile && profile.must_change_password,
     isAnonymous,
     permissions,
     permissionsLoaded,
@@ -171,7 +176,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     updateProfile: handleUpdateProfile,
     refreshProfile,
     refreshPermissions,
-  }), [user, profile, loading, permissions, permissionsLoaded, isAnonymous, can, hasAny, handleSignOut, handleUpdateProfile, refreshProfile, refreshPermissions])
+  }), [user, profile, loading, profileLoaded, permissions, permissionsLoaded, isAnonymous, can, hasAny, handleSignOut, handleUpdateProfile, refreshProfile, refreshPermissions])
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

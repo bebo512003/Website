@@ -8,7 +8,7 @@ import {
   updateOwnEnhancedProfile,
   uploadTeamAvatar,
 } from '@/lib/supabase/database'
-import { updatePasswordAndMarkChanged } from '@/lib/supabase/auth'
+import { updatePasswordAndMarkChanged, verifyCurrentPassword } from '@/lib/supabase/auth'
 import type { Profile } from '@/lib/supabase/types'
 import { InlineAlert, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -147,12 +147,21 @@ export default function UserProfilePage() {
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!user) return
+    if (!currentPassword) { setError('Enter your current password'); return }
     if (newPassword !== confirmPassword) { setError('New passwords do not match'); return }
     if (newPassword.length < 8) { setError('Password must be at least 8 characters'); return }
-    
+    if (newPassword === currentPassword) { setError('The new password must be different from the current one'); return }
+
+    const loginEmail = user.email || profile?.email
+    if (!loginEmail) { setError('Unable to determine your login email.'); return }
+
     setSaving(true); setError(''); setMessage('')
+    // Prove the caller knows the current password before replacing it.
+    const verification = await verifyCurrentPassword(loginEmail, currentPassword)
+    if (verification.error) { setError(verification.error.message); setSaving(false); return }
+
     const result = await updatePasswordAndMarkChanged(newPassword)
-    
+
     if (result.error) setError(result.error.message)
     else {
       setMessage('Password changed successfully')
@@ -303,7 +312,7 @@ export default function UserProfilePage() {
             {showPasswordForm && (
               <form onSubmit={handlePasswordChange} className="mt-4 space-y-4">
                 <label className="text-xs text-text-secondary">Current Password
-                  <input type="password" className={`${inputClassName} mt-2`} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Enter current password" required={!mustChangePassword} />
+                  <input type="password" className={`${inputClassName} mt-2`} value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} placeholder="Enter current password" required autoComplete="current-password" />
                 </label>
                 <label className="text-xs text-text-secondary">New Password
                   <input type="password" className={`${inputClassName} mt-2`} value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="Enter new password" required minLength={8} />

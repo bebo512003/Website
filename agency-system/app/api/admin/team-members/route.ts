@@ -1,10 +1,14 @@
 import { createClient } from '@supabase/supabase-js'
+import { randomBytes } from 'node:crypto'
 import type { Database, Json, Profile, ProfileStatus } from '@/lib/supabase/types'
 
 export const runtime = 'nodejs'
 
 const NO_STORE_HEADERS = { 'Cache-Control': 'no-store' }
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+// Far beyond any practical password lifetime; GoTrue treats the account as
+// banned until an administrator explicitly lifts it.
+const DEACTIVATION_BAN_DURATION = '876600h'
 
 type TeamMemberRequest = {
   password?: unknown
@@ -37,6 +41,15 @@ function cleanSocialLinks(value: unknown): Record<string, string> {
   )
 }
 
+/**
+ * Temporary passwords are generated on the server, shown to the administrator
+ * exactly once in the creation response, and never persisted anywhere: the Auth
+ * user stores only its hash. base64url over 18 random bytes ≈ 144 bits entropy.
+ */
+function generateTemporaryPassword() {
+  return randomBytes(18).toString('base64url')
+}
+
 function getConfiguration() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
@@ -63,18 +76,44 @@ function createRequestClients(configuration: NonNullable<ReturnType<typeof getCo
   }
 }
 
+async function verifyCaller(callerClient: ReturnType<typeof createRequestClients>['callerClient'], token: string) {
+  const { data: callerData, error: callerError } = await callerClient.auth.getUser(token)
+  if (callerError || !callerData.user) return { error: errorResponse('Your session is invalid or has expired.', 401) }
+  return { userId: callerData.user.id }
+}
+
 async function verifyAdmin(
   callerClient: ReturnType<typeof createRequestClients>['callerClient'],
   token: string,
 ) {
-  const { data: callerData, error: callerError } = await callerClient.auth.getUser(token)
-  if (callerError || !callerData.user) return { error: errorResponse('Your session is invalid or has expired.', 401) }
+  const caller = await verifyCaller(callerClient, token)
+  if ('error' in caller) return caller
 
   const { data: permissions, error: permissionsError } = await callerClient.rpc('get_user_permissions')
   if (permissionsError) return { error: errorResponse('Unable to verify administrator permissions.', 403) }
   if (!permissions.includes('admin.manage')) return { error: errorResponse('Administrator access required.', 403) }
 
-  return { userId: callerData.user.id }
+  return caller
+}
+
+/**
+ * Keeps Supabase Auth sign-in ability in sync with the profile status.
+ * Deactivated members are rejected at login (and on token refresh) in addition
+ * to losing every permission through RLS. Best effort: the database-level
+ * blocks remain authoritative if the GoTrue call fails.
+ */
+async function syncAuthAccessBan(
+  serviceClient: ReturnType<typeof createRequestClients>['serviceClient'],
+  userId: string,
+  status: ProfileStatus,
+) {
+  const { error } = await serviceClient.auth.admin.updateUserById(userId, {
+    ban_duration: status === 'inactive' ? DEACTIVATION_BAN_DURATION : 'none',
+  })
+  if (error) {
+    console.error(`Unable to sync the Auth access ban for ${userId}: ${error.message}`)
+  }
+  return !error
 }
 
 function parseMember(member: Record<string, unknown>) {
@@ -113,12 +152,27 @@ function parseMember(member: Record<string, unknown>) {
   }
 }
 
+function friendlyAuthCreateError(message: string) {
+  const normalized = message.toLowerCase()
+  if (normalized.includes('already registered') || normalized.includes('already exists')) {
+    return 'An account with this email already exists.'
+  }
+  if (normalized.includes('password')) {
+    return 'The generated temporary password was rejected by the authentication service.'
+  }
+  return message
+}
+
 /**
  * Creates a real Supabase Auth user and its internal profile.
  *
  * The service-role key is used only after the caller's JWT has been verified and
  * the database confirms the caller has `admin.manage`. It must never be moved to
  * a NEXT_PUBLIC environment variable or returned to the browser.
+ *
+ * The temporary password is generated here, returned once in the response, and
+ * never stored — a client-supplied password is ignored on purpose: internal
+ * accounts always start from a system-generated credential.
  */
 export async function POST(request: Request) {
   const configuration = getConfiguration()
@@ -137,13 +191,10 @@ export async function POST(request: Request) {
 
   const body = parsedBody as TeamMemberRequest
   const member = body.member
-  const password = typeof body.password === 'string' ? body.password : ''
   if (!member || typeof member !== 'object' || Array.isArray(member)) return errorResponse('Team member details are required.', 400)
 
   const parsedMember = parseMember(member)
   if ('error' in parsedMember) return parsedMember.error
-  if (password.length < 8) return errorResponse('The initial password must contain at least 8 characters.', 400)
-  if (password.length > 128) return errorResponse('The initial password must not exceed 128 characters.', 400)
 
   const { callerClient, serviceClient } = createRequestClients(configuration, token)
   const authorization = await verifyAdmin(callerClient, token)
@@ -151,18 +202,24 @@ export async function POST(request: Request) {
 
   // Create the permission-checked placeholder first. The auth.users trigger will
   // atomically claim it by e-mail when the trusted server creates the Auth user.
+  // admin_create_team_member rejects duplicate e-mails (including ones that only
+  // exist in auth.users) before inserting, so a failed attempt leaves nothing to
+  // clean up.
   const { data: placeholder, error: placeholderError } = await callerClient.rpc('admin_create_team_member', parsedMember.rpcArgs)
   if (placeholderError || !placeholder) {
-    return errorResponse(placeholderError?.message || 'Unable to create the team member profile.', 400)
+    const message = placeholderError?.message || 'Unable to create the team member profile.'
+    const duplicate = message.toLowerCase().includes('already exists')
+    return errorResponse(message, duplicate ? 409 : 400)
   }
 
   const cleanupPlaceholder = async () => {
     await serviceClient.from('profiles').delete().eq('id', placeholder.id)
   }
 
+  const temporaryPassword = generateTemporaryPassword()
   const { data: created, error: createError } = await serviceClient.auth.admin.createUser({
     email: parsedMember.email,
-    password,
+    password: temporaryPassword,
     email_confirm: true,
     user_metadata: { full_name: parsedMember.fullName },
     app_metadata: {
@@ -172,8 +229,9 @@ export async function POST(request: Request) {
   })
 
   if (createError || !created.user) {
+    // Never leave an orphaned placeholder behind a failed Auth creation.
     await cleanupPlaceholder()
-    return errorResponse(createError?.message || 'Unable to create the login account.', 400)
+    return errorResponse(friendlyAuthCreateError(createError?.message || 'Unable to create the login account.'), 409)
   }
 
   const { data: profile, error: profileError } = await serviceClient
@@ -189,12 +247,19 @@ export async function POST(request: Request) {
     return errorResponse('The login could not be linked to its team profile. No account was kept.', 500)
   }
 
-  return Response.json({ data: profile as Profile }, { status: 201, headers: NO_STORE_HEADERS })
+  return Response.json(
+    { data: profile as Profile, temporary_password: temporaryPassword },
+    { status: 201, headers: NO_STORE_HEADERS },
+  )
 }
 
 /**
  * Updates a team member while keeping auth.users.email and profiles.email in sync.
  * Other profile fields remain permission-checked by admin_update_team_member().
+ *
+ * Also accepts a minimal `{ id, status }` payload: status changes go through the
+ * permission-checked set_user_status RPC and then sync the Supabase Auth ban so
+ * deactivated members cannot sign in at all.
  */
 export async function PATCH(request: Request) {
   const configuration = getConfiguration()
@@ -218,12 +283,33 @@ export async function PATCH(request: Request) {
   const userId = typeof member.id === 'string' && UUID_PATTERN.test(member.id) ? member.id : ''
   if (!userId) return errorResponse('A valid team member identifier is required.', 400)
 
+  const { callerClient, serviceClient } = createRequestClients(configuration, token)
+  const authorization = await verifyCaller(callerClient, token)
+  if ('error' in authorization) return authorization.error
+
+  // ── Status-only toggle: permission-checked RPC + Auth ban synchronization ──
+  const statusOnly = typeof member.status === 'string'
+    && member.email === undefined
+    && member.full_name === undefined
+  if (statusOnly) {
+    const newStatus = member.status === 'inactive' ? 'inactive' : 'active'
+    const { data: updated, error: statusError } = await callerClient.rpc('set_user_status', {
+      target_user_id: userId,
+      new_status: newStatus,
+    })
+    if (statusError || !updated) {
+      return errorResponse(statusError?.message || 'Unable to update the member status.', 403)
+    }
+    await syncAuthAccessBan(serviceClient, userId, newStatus)
+    return Response.json({ data: updated as Profile }, { status: 200, headers: NO_STORE_HEADERS })
+  }
+
+  const { data: callerPermissions, error: permissionsError } = await callerClient.rpc('get_user_permissions')
+  if (permissionsError) return errorResponse('Unable to verify administrator permissions.', 403)
+  if (!callerPermissions.includes('admin.manage')) return errorResponse('Administrator access required.', 403)
+
   const parsedMember = parseMember(member)
   if ('error' in parsedMember) return parsedMember.error
-
-  const { callerClient, serviceClient } = createRequestClients(configuration, token)
-  const authorization = await verifyAdmin(callerClient, token)
-  if ('error' in authorization) return authorization.error
 
   const { data: currentAuth, error: currentAuthError } = await serviceClient.auth.admin.getUserById(userId)
   if (currentAuthError || !currentAuth.user) return errorResponse('The team member Auth account was not found.', 404)
@@ -264,6 +350,9 @@ export async function PATCH(request: Request) {
     }
     finalProfile = clearedProfile
   }
+
+  // Keep the sign-in ban aligned with whatever status the full update produced.
+  await syncAuthAccessBan(serviceClient, userId, finalProfile.status)
 
   return Response.json({ data: finalProfile as Profile }, { status: 200, headers: NO_STORE_HEADERS })
 }

@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Eye, LoaderCircle, Pencil, Plus, Search, Trash2, UserCog, Users } from 'lucide-react'
+import { Copy, Eye, EyeOff, LoaderCircle, Pencil, Plus, Search, Trash2, UserCog, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   createTeamMember,
@@ -11,7 +11,6 @@ import {
   getTeamMembers,
   updateTeamMember,
   uploadTeamAvatar,
-  setProfileStatus,
 } from '@/lib/supabase/database'
 import type { AppRoleWithPermissions, EmployeeRole, Profile, ProfileStatus } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
@@ -55,12 +54,14 @@ export function TeamManagement() {
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Profile | null>(null)
   const [form, setForm] = useState(emptyForm)
-  const [initialPassword, setInitialPassword] = useState('')
   const [viewing, setViewing] = useState<Profile | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [avatarPreview, setAvatarPreview] = useState('')
-  // Credentials display state
+  // One-time credentials display state. The temporary password is generated on
+  // the server, shown here exactly once, and never persisted anywhere.
   const [showCredentials, setShowCredentials] = useState(false)
+  const [revealPassword, setRevealPassword] = useState(false)
+  const [copied, setCopied] = useState('')
   const [newMemberCredentials, setNewMemberCredentials] = useState<{ email: string; password: string } | null>(null)
 
   const canManage = can('employee.manage') || can('admin.manage')
@@ -99,7 +100,6 @@ export function TeamManagement() {
 
   const resetForm = () => {
     setForm(emptyForm)
-    setInitialPassword('')
     setAvatarFile(null)
     setAvatarPreview('')
     setEditing(null)
@@ -152,8 +152,8 @@ export function TeamManagement() {
       setError('Full Name and Email are required')
       return
     }
-    if (!editing && initialPassword.length < 8) {
-      setError('The initial password must contain at least 8 characters')
+    if (!editing && !form.role_id) {
+      setError('Please select a role for the new team member')
       return
     }
     if (!canManage) {
@@ -198,29 +198,53 @@ export function TeamManagement() {
     let result
     if (editing) {
       result = await updateTeamMember({ id: editing.id, ...payload })
+      setSaving(false)
+      if (result.error) {
+        setError(result.error)
+        return
+      }
+      setMessage('Team member updated successfully')
     } else {
       // For new members, ensure role_id defaults to employee if not set
       if (!payload.role_id) {
         const employeeSystem = roles.find(r => r.key === 'employee')
         if (employeeSystem) payload.role_id = employeeSystem.id
       }
-      result = await createTeamMember(payload, initialPassword)
-    }
-
-    setSaving(false)
-    if (result.error) {
-      setError(result.error)
-      return
-    }
-
-    if (!editing && result.data) {
-      setNewMemberCredentials({ email: result.data.email, password: initialPassword })
+      const created = await createTeamMember(payload)
+      setSaving(false)
+      if (created.error || !created.data) {
+        setError(created.error || 'Unable to create the team account.')
+        return
+      }
+      setNewMemberCredentials({ email: created.data.profile.email, password: created.data.temporaryPassword })
+      setRevealPassword(false)
+      setCopied('')
       setShowCredentials(true)
+      setMessage('Login account created. Share the one-time credentials below with the team member securely.')
     }
-    setMessage(editing ? 'Team member updated successfully' : 'Login account created. Give the team member the email and initial password you set.')
+
     setModalOpen(false)
     resetForm()
     await load()
+  }
+
+  const copyText = async (value: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(value)
+      setCopied(key)
+      setTimeout(() => setCopied(''), 2000)
+    } catch {
+      setCopied('')
+    }
+  }
+
+  const closeCredentials = () => {
+    // The temporary password is shown exactly once; dropping it from state
+    // guarantees it cannot be recovered from the UI afterwards.
+    setShowCredentials(false)
+    setNewMemberCredentials(null)
+    setRevealPassword(false)
+    setCopied('')
   }
 
   const toggleStatus = async (member: Profile) => {
@@ -230,16 +254,14 @@ export function TeamManagement() {
     }
     const newStatus = member.status === 'active' ? 'inactive' : 'active'
     setError('')
-    const res = await setProfileStatus(member.id, newStatus)
+    // Status-only update: the protected route keeps the profile status and the
+    // Supabase Auth sign-in ban in sync (deactivated members cannot log in).
+    const res = await updateTeamMember({ id: member.id, status: newStatus })
     if (res.error) {
-      // Fallback to direct update
-      const upd = await updateTeamMember({ id: member.id, status: newStatus })
-      if (upd.error) {
-        setError(upd.error)
-        return
-      }
+      setError(res.error)
+      return
     }
-    setMessage(`Member ${newStatus === 'active' ? 'activated' : 'deactivated'}`)
+    setMessage(`Member ${newStatus === 'active' ? 'activated' : 'deactivated'}${newStatus === 'inactive' ? ' — sign-in is now blocked' : ''}`)
     await load()
   }
 
@@ -415,10 +437,10 @@ export function TeamManagement() {
               <input required type="email" className={`${inputClassName} mt-2`} value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="alex@agency.com" />
             </label>
             {!editing && (
-              <label className="text-xs text-text-secondary sm:col-span-2">Initial Password *
-                <input required type="password" minLength={8} maxLength={128} autoComplete="new-password" className={`${inputClassName} mt-2`} value={initialPassword} onChange={(e) => setInitialPassword(e.target.value)} placeholder="At least 8 characters" />
-                <span className="mt-1.5 block text-[11px] text-text-tertiary">This password is not stored in the profile or shown again. Give it securely to the new team member.</span>
-              </label>
+              <div className="rounded-md border border-border bg-surface-raised/50 p-3 text-[11px] text-text-secondary sm:col-span-2">
+                A strong temporary password is generated automatically when the account is created.
+                You will see it once on the next screen — the team member must replace it at first login.
+              </div>
             )}
             <label className="text-xs text-text-secondary">Phone / WhatsApp
               <input className={`${inputClassName} mt-2`} value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} placeholder="+1 234 567 890" />
@@ -561,36 +583,65 @@ export function TeamManagement() {
         )}
       </Modal>
 
-      {/* Credentials Modal */}
-      <Modal open={showCredentials} onClose={() => setShowCredentials(false)} title="Team Member Credentials" description="Share these credentials with the new team member securely.">
+      {/* One-time Credentials Modal */}
+      <Modal open={showCredentials} onClose={closeCredentials} title="One-time credentials" description="Share these with the new team member over a secure channel.">
         {newMemberCredentials && (
           <div className="space-y-4">
             <div className="rounded-md border border-border bg-surface-raised p-4">
               <p className="mb-2 text-xs font-semibold text-fg">Login Information</p>
               <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-border pb-2">
-                  <span className="text-sm text-text-tertiary">Email:</span>
-                  <span className="text-sm font-medium text-fg break-all">{newMemberCredentials.email}</span>
+                <div className="flex items-center justify-between gap-2 border-b border-border pb-2">
+                  <div className="min-w-0">
+                    <span className="block text-[11px] uppercase tracking-wide text-text-tertiary">Email</span>
+                    <span className="block break-all text-sm font-medium text-fg">{newMemberCredentials.email}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void copyText(newMemberCredentials.email, 'email')}
+                    className="flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary hover:text-fg"
+                  >
+                    <Copy className="h-3.5 w-3.5" /> {copied === 'email' ? 'Copied' : 'Copy'}
+                  </button>
                 </div>
-                <div className="flex items-center justify-between border-b border-border pb-2">
-                  <span className="text-sm text-text-tertiary">Temporary Password:</span>
-                  <span className="text-sm font-mono font-medium text-fg break-all">{newMemberCredentials.password}</span>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="block text-[11px] uppercase tracking-wide text-text-tertiary">Temporary password</span>
+                    <span className="block break-all font-mono text-sm font-medium text-fg">
+                      {revealPassword ? newMemberCredentials.password : '•'.repeat(Math.min(newMemberCredentials.password.length, 16))}
+                    </span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setRevealPassword((value) => !value)}
+                      className="rounded-md border border-border p-1.5 text-text-secondary hover:text-fg"
+                      aria-label={revealPassword ? 'Hide password' : 'Reveal password'}
+                    >
+                      {revealPassword ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void copyText(newMemberCredentials.password, 'password')}
+                      className="flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-text-secondary hover:text-fg"
+                    >
+                      <Copy className="h-3.5 w-3.5" /> {copied === 'password' ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
             <div className="rounded-md border border-yellow-500/30 bg-yellow-500/5 p-4">
               <p className="text-sm text-yellow-400">
-                <strong>Important:</strong> This is the only time the password will be shown. The team member will be required to change it on first login.
+                <strong>Important:</strong> This password is shown only once and is never stored in a readable form.
+                The team member is forced to replace it before they can access the workspace. If you close this
+                window without copying it, deactivate the account and create a fresh one.
               </p>
             </div>
-            <div className="flex justify-end gap-2">
-              <button onClick={() => setShowCredentials(false)} className={secondaryButtonClassName}>Close</button>
-              <button onClick={() => {
-                navigator.clipboard.writeText(newMemberCredentials.email)
-                setShowCredentials(false)
-              }} className={primaryButtonClassName}>
-                Copy Email
+            <div className="flex flex-wrap justify-end gap-2">
+              <button onClick={() => void copyText(`${newMemberCredentials.email}\n${newMemberCredentials.password}`, 'both')} className={secondaryButtonClassName}>
+                <Copy className="h-4 w-4" /> {copied === 'both' ? 'Copied' : 'Copy both'}
               </button>
+              <button onClick={closeCredentials} className={primaryButtonClassName}>I have saved them</button>
             </div>
           </div>
         )}

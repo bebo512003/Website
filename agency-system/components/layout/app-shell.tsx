@@ -3,9 +3,10 @@
 import { useEffect } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { LoaderCircle, ShieldOff, ShieldAlert, LogOut, Home } from 'lucide-react'
+import { LoaderCircle, ShieldOff, ShieldAlert, UserX, LogOut, Home } from 'lucide-react'
 import { Sidebar } from './sidebar'
 import { TopBar } from './topbar'
+import { ForcedPasswordChangeScreen } from './forced-password-change'
 import { useAccent } from '@/contexts/accent-context'
 import { useAuth } from '@/contexts/auth-context'
 import { secondaryButtonClassName, primaryButtonClassName } from '@/components/ui/page'
@@ -48,6 +49,34 @@ function DeactivatedScreen({ style }: { style: Record<string, string> }) {
   )
 }
 
+function AccountRemovedScreen({ style }: { style: Record<string, string> }) {
+  const router = useRouter()
+  const { signOut } = useAuth()
+
+  const leave = async () => {
+    await signOut()
+    router.replace('/auth')
+  }
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+      <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
+          <UserX className="h-6 w-6 text-accent" />
+        </div>
+        <h1 className="text-xl font-semibold text-fg">Account removed</h1>
+        <p className="mt-3 text-sm text-text-secondary">
+          Your workspace account has been removed by an administrator. If you believe this is a
+          mistake, contact your team lead.
+        </p>
+        <button onClick={() => void leave()} className={`${secondaryButtonClassName} mt-6`}>
+          <LogOut className="h-4 w-4" /> Sign out
+        </button>
+      </section>
+    </main>
+  )
+}
+
 function RestrictedScreen({ style }: { style: Record<string, string> }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
@@ -72,7 +101,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const { accent } = useAccent()
-  const { user, profile, isClient, isDeactivated, isAnonymous, loading, can, permissionsLoaded } = useAuth()
+  const { user, profile, profileLoaded, isClient, isDeactivated, mustChangePassword, isAnonymous, loading, can, permissionsLoaded } = useAuth()
   const isAuthPage = pathname === '/auth'
   // Published dynamic forms are public respondent pages (/f/<slug>).
   const isPublicFormPage = pathname.startsWith('/f/')
@@ -129,8 +158,18 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 
-  // Inactive accounts lose all workspace functionality (RLS blocks the data too).
+  // A signed-in, non-anonymous user whose profile is gone was removed from the
+  // workspace (deletion deletes profile + Auth account; this covers live sessions).
+  if (profileLoaded && !profile) return <AccountRemovedScreen style={style} />
+
+  // Inactive accounts lose all workspace functionality (RLS blocks the data too,
+  // and the Auth sign-in ban rejects new logins).
   if (isDeactivated) return <DeactivatedScreen style={style} />
+
+  // Accounts still holding their temporary password cannot reach any workspace
+  // page — including /profile — until they replace it. The database enforces the
+  // same block by withholding all permissions while the flag is pending.
+  if (!isClient && mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
 
   if (isPortalPage) {
     if (isClient) return <div style={style}>{children}</div>
