@@ -10,6 +10,7 @@ import type {
   ProjectDelivery,
   ProjectDeliveryApprovalState,
   ProjectDeliveryStatus,
+  ProjectDeliveryWithFiles,
   ProjectStatus,
 } from '@/lib/supabase/types'
 
@@ -104,7 +105,7 @@ export function approvalStateBadgeClass(state: ProjectDeliveryApprovalState): st
 }
 
 /** Latest non-superseded package — same rule as `current_project_delivery`. */
-export function currentDelivery(deliveries: ProjectDelivery[]): ProjectDelivery | null {
+export function currentDelivery(deliveries: ProjectDeliveryWithFiles[]): ProjectDeliveryWithFiles | null {
   const open = deliveries.filter((item) => item.status !== 'superseded')
   if (open.length === 0) return null
   return open.reduce((latest, item) => (item.version > latest.version ? item : latest))
