@@ -109,7 +109,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isFormsPage = pathname === '/forms'
   // The company portfolio is intentionally outside the authenticated staff shell.
   const isPortfolioPage = pathname === '/portfolio' || pathname.startsWith('/portfolio/')
-  const isPortalPage = pathname === '/portal'
+  const isPortalPage = pathname === '/portal' || pathname.startsWith('/portal/')
   // The root is a public Client Landing Page. Staff users are routed to the
   // dashboard so the landing stays client-focused for visitors.
   const isLandingPage = pathname === '/'
@@ -168,8 +168,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Accounts still holding their temporary password cannot reach any workspace
   // page — including /profile — until they replace it. The database enforces the
-  // same block by withholding all permissions while the flag is pending.
-  if (!isClient && mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
+  // same block by withholding all permissions while the flag is pending. Client
+  // portal accounts go through the same gate so a temporary password is never
+  // left in place.
+  if (mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
 
   if (isPortalPage) {
     if (isClient) return <div style={style}>{children}</div>

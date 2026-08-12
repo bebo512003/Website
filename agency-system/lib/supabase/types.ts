@@ -747,6 +747,12 @@ export interface Database {
       project_completion_blockers: { Args: { p_project_id: string }; Returns: string[] }
       get_public_submission_tracking: { Args: { p_tracking_key: string }; Returns: PublicSubmissionTracking | null }
       generate_submission_reference: { Args: Record<string, never>; Returns: string }
+      get_client_portal_projects: { Args: Record<string, never>; Returns: ClientPortalProjectRow[] }
+      get_client_portal_project: { Args: { p_project_id: string }; Returns: ClientPortalProjectRow[] }
+      get_client_portal_client: { Args: Record<string, never>; Returns: ClientPortalClientRow[] }
+      admin_create_client_account: { Args: { p_client_id: string; p_email: string; p_full_name?: string | null; p_status?: string }; Returns: ProfileRow }
+      admin_update_client_account: { Args: { p_user_id: string; p_email?: string | null; p_full_name?: string | null; p_client_id?: string | null }; Returns: ProfileRow }
+      admin_delete_client_account: { Args: { p_user_id: string }; Returns: boolean }
     }
     Enums: { app_role: AppRole }
     CompositeTypes: { [_ in never]: never }
@@ -804,6 +810,34 @@ export type PublicFormTemplateSummary = PublicFormTemplate & {
 }
 export type ClientFormSubmission = FormSubmission & {
   form_templates?: { title: string; slug: string } | null
+}
+
+// ── Client portal (Session 17) ──────────────────────────────────────────────
+// Sanitized rows returned by the client-scoped, SECURITY DEFINER portal RPCs.
+// Deliberately narrower than ProjectRow: no owner, manager, team, budget, health,
+// priority, archive state, or internal audit columns are exposed to clients.
+export type ClientPortalProjectRow = {
+  id: string
+  name: string
+  description: string | null
+  type: string
+  status: ProjectStatus
+  progress: number
+  phase: number
+  phase_name: string | null
+  start_date: string | null
+  due_date: string | null
+  reference_number: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ClientPortalClientRow = {
+  id: string
+  name: string
+  email: string | null
+  contact_person: string | null
+  contact_position: string | null
 }
 export type PublicSubmissionTracking = {
   id: string
@@ -872,3 +906,5 @@ export type FileWithProject = FileItem & {
   projects: Pick<Project, 'id' | 'name'> | null
   is_delivery?: boolean
 }
+export type ClientPortalProject = ClientPortalProjectRow
+export type ClientPortalClient = ClientPortalClientRow

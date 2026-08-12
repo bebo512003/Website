@@ -6,6 +6,8 @@ import type {
   AppRoleWithPermissions,
   Client,
   ClientInsert,
+  ClientPortalClient,
+  ClientPortalProject,
   ClientUpdate,
   EmployeeRole,
   EmployeeRoleInsert,
@@ -158,6 +160,174 @@ export async function getClientFormSubmissions(): Promise<Result<ClientFormSubmi
     .select('*, form_templates(title, slug)')
     .order('submitted_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as ClientFormSubmission[])
+}
+
+// Client portal — projects owned by the signed-in client record. These go
+// through sanitized SECURITY DEFINER RPCs so the browser client never reads the
+// raw `projects` table (no owner/manager/team/budget/health/internal fields).
+export async function getClientPortalProjects(): Promise<Result<ClientPortalProject[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase.rpc('get_client_portal_projects')
+  return error ? fail([], error.message) : ok((data || []) as unknown as ClientPortalProject[])
+}
+
+export async function getClientPortalProject(id: string): Promise<Result<ClientPortalProject | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('get_client_portal_project', { p_project_id: id })
+  if (error) return fail(null, error.message)
+  const row = (data || [])[0] as ClientPortalProject | undefined
+  return ok(row || null)
+}
+
+export async function getClientPortalClient(): Promise<Result<ClientPortalClient | null>> {
+  if (!supabase) return fail(null)
+  const { data, error } = await supabase.rpc('get_client_portal_client')
+  if (error) return fail(null, error.message)
+  const row = (data || [])[0] as ClientPortalClient | undefined
+  return ok(row || null)
+}
+
+// Client account management (Admin only). Mirrors the team-member account
+// provisioning flow but for portal accounts linked to a CRM client record.
+export type ClientAccountPayload = {
+  client_id: string
+  email: string
+  full_name?: string | null
+  status?: ProfileStatus
+}
+
+export type ClientAccountUpdatePayload = Partial<ClientAccountPayload> & { id: string }
+
+export async function getClientAccounts(): Promise<Result<Profile[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('role', 'client')
+    .order('full_name')
+  return error ? fail([], error.message) : ok((data as Profile[]) || [])
+}
+
+export async function getClientAccountsByClientId(clientId: string): Promise<Result<Profile[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('role', 'client')
+    .eq('client_id', clientId)
+    .order('created_at')
+  return error ? fail([], error.message) : ok((data as Profile[]) || [])
+}
+
+export async function createClientAccount(payload: ClientAccountPayload): Promise<Result<{ profile: Profile; temporaryPassword: string } | null>> {
+  if (!supabase) return fail(null)
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/client-accounts', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ account: payload }),
+      cache: 'no-store',
+    })
+    const result = await response.json() as { data?: Profile; temporary_password?: string; error?: string }
+    if (!response.ok || !result.data || !result.temporary_password) {
+      return fail(null, result.error || 'Unable to create the client portal account.')
+    }
+    return ok({ profile: result.data, temporaryPassword: result.temporary_password })
+  } catch {
+    return fail(null, 'Unable to reach the account provisioning service.')
+  }
+}
+
+export async function setClientAccountStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/client-accounts', {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ account: { id: userId, status } }),
+      cache: 'no-store',
+    })
+    if (response.status === 503) return setProfileStatus(userId, status)
+    const result = await response.json() as { data?: Profile; error?: string }
+    if (!response.ok || !result.data) return fail(null, result.error || 'Unable to update the client account status.')
+    return ok(result.data)
+  } catch {
+    return setProfileStatus(userId, status)
+  }
+}
+
+export async function updateClientAccount(payload: ClientAccountUpdatePayload): Promise<Result<Profile | null>> {
+  if (!supabase) return fail(null)
+
+  if (payload.email === undefined && payload.client_id === undefined && payload.status !== undefined) {
+    return setClientAccountStatus(payload.id, payload.status)
+  }
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(null, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/client-accounts', {
+      method: 'PATCH',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ account: payload }),
+      cache: 'no-store',
+    })
+    const result = await response.json() as { data?: Profile; error?: string }
+    if (!response.ok || !result.data) return fail(null, result.error || 'Unable to update the client portal account.')
+    return ok(result.data)
+  } catch {
+    return fail(null, 'Unable to reach the account management service.')
+  }
+}
+
+export async function deleteClientAccount(userId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession()
+  const accessToken = sessionData.session?.access_token
+  if (sessionError || !accessToken) return fail(false, 'Your session has expired. Please login again.')
+
+  try {
+    const response = await fetch('/api/admin/client-accounts', {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ account: { id: userId } }),
+      cache: 'no-store',
+    })
+    if (response.status === 503) {
+      const { error } = await supabase.rpc('admin_delete_client_account', { p_user_id: userId })
+      return error ? fail(false, error.message) : ok(true)
+    }
+    const result = await response.json() as { data?: boolean; error?: string }
+    if (!response.ok) return fail(false, result.error || 'Unable to remove the client portal account.')
+    return ok(true)
+  } catch {
+    return fail(false, 'Unable to reach the account management service.')
+  }
 }
 export async function getClients(): Promise<Result<Client[]>> {
   if (!supabase) return fail([])
