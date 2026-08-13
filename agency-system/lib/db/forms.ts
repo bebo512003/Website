@@ -400,13 +400,16 @@ export async function assignFormSubmissionReviewer(
 }
 
 
-export async function uploadFormFile(userId: string, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
+export async function uploadFormFile(userId: string | null | undefined, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
   if (!supabase) return fail(null)
   const validation = validateFile(file, 'form-files')
   if (!validation.valid) return fail(null, validation.error || 'Invalid form attachment.')
 
   const safeName = validation.sanitizedName || sanitizeFileName(file.name)
-  const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
+  // When no anonymous session is available (older GoTrue without Anonymous
+  // Sign-ins) files land in the shared `anon/` folder permitted by RLS.
+  const folder = userId || 'anon'
+  const storagePath = `${folder}/${crypto.randomUUID()}-${safeName}`
   const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
   if (upload.error) return fail(null, upload.error.message)
   return ok({ storage_path: storagePath, name: file.name, size: file.size, mime_type: file.type || null })
