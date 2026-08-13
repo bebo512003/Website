@@ -27,6 +27,17 @@ const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
+function decodeJwtRole(token: string): string | null {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { role?: string }
+    return typeof json.role === 'string' ? json.role : null
+  } catch {
+    return null
+  }
+}
+
 // ── In-memory IP rate limiter ────────────────────────────────────────────────
 // Sliding window: max 10 submissions per IP per minute, 30 per hour.
 // Entries are pruned lazily. This is intentionally simple — for high-traffic
@@ -215,6 +226,15 @@ export async function POST(request: NextRequest) {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       })
 
+      const keyRole = decodeJwtRole(SERVICE_ROLE_KEY)
+      if (keyRole && keyRole !== 'service_role') {
+        console.error('[forms/submit] SUPABASE_SERVICE_ROLE_KEY has role', keyRole)
+        return NextResponse.json({
+          error: 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.',
+          debug: `key role=${keyRole}`,
+        }, { status: 503 })
+      }
+
       try {
         const data = await persistPublicFormSubmission({
           supabase: service,
@@ -230,12 +250,15 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ data, error: null })
       } catch (error) {
         if (error instanceof PublicFormSubmitError) {
-          console.error('[forms/submit] persist rejected:', error.message)
-          return NextResponse.json({ error: error.message }, { status: error.status })
+          console.error('[forms/submit] persist rejected:', error.message, error.debug)
+          return NextResponse.json(
+            { error: error.debug ? `${error.message} (${error.debug})` : error.message, debug: error.debug },
+            { status: error.status },
+          )
         }
         const message = error instanceof Error ? error.message : String(error)
         console.error('[forms/submit] persist failed:', message)
-        return NextResponse.json({ error: mapPublicFormSubmitError(message) }, { status: 400 })
+        return NextResponse.json({ error: `${mapPublicFormSubmitError(message)} (${message})`, debug: message }, { status: 400 })
       }
     }
 

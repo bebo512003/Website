@@ -31,11 +31,27 @@ const UNSAFE_EXTENSIONS = new Set([
 
 export class PublicFormSubmitError extends Error {
   status: number
-  constructor(message: string, status = 400) {
+  debug?: string
+  constructor(message: string, status = 400, debug?: string) {
     super(message)
     this.name = 'PublicFormSubmitError'
     this.status = status
+    this.debug = debug
   }
+}
+
+export function describePersistFailure(message: string): string {
+  const msg = message || ''
+  if (/row-level security/i.test(msg)) {
+    return 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.'
+  }
+  if (/form_submissions_status_check|invalid input value for enum/i.test(msg)) {
+    return 'The form status column rejected the save. Please try again in a moment.'
+  }
+  if (/created_by|foreign key/i.test(msg)) {
+    return 'A related record blocked the save. Please try again in a moment.'
+  }
+  return mapPublicFormSubmitError(msg)
 }
 
 export function mapPublicFormSubmitError(message: string): string {
@@ -53,6 +69,9 @@ export function mapPublicFormSubmitError(message: string): string {
   if (/Invalid rating/i.test(msg)) return 'Please provide a valid rating.'
   if (/Invalid file|unsafe file|exceeds maximum allowed size/i.test(msg)) return 'There was a problem with your file upload.'
   if (/Too many files/i.test(msg)) return 'You have uploaded too many files. Maximum is 10 per question.'
+  if (/row-level security/i.test(msg)) {
+    return 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.'
+  }
   if (/null value|not-null|foreign key|violates/i.test(msg)) return 'Your answers could not be saved. Please try again in a moment.'
   if (/No API key/i.test(msg)) return 'Submissions are temporarily unavailable. Please refresh and try again.'
   if (/JWT|expired|invalid claim|invalid token/i.test(msg)) return 'Your session expired. Refresh the page and try again.'
@@ -251,9 +270,6 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
     if (!fingerprintReadError && recent && recent.length > 0) {
       throw new PublicFormSubmitError('You have already submitted a response recently. Please wait a few minutes.')
     }
-    if (!fingerprintReadError) {
-      await supabase.from('form_submission_fingerprints').insert({ form_id: formId, fingerprint })
-    }
   }
 
   if (callerId) {
@@ -282,7 +298,6 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
           email: validated.respondentEmail,
           phone: validated.respondentPhone,
           notes: `Created automatically from form "${form.title}"`,
-          created_by: callerId,
         })
         .select('id')
         .maybeSingle()
@@ -292,52 +307,76 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
 
   const referenceNumber = generateSubmissionReference()
   const trackingToken = generateTrackingToken()
-  const basePayload = {
+  const contact = {
     form_id: formId,
-    form_version: form.version,
-    status: 'new',
     respondent_name: validated.respondentName,
     respondent_email: validated.respondentEmail,
     respondent_phone: validated.respondentPhone,
     company_name: validated.companyName,
-    client_id: clientId,
-    created_by: callerId,
   }
 
-  let submission = await insertSubmission(supabase, {
-    ...basePayload,
-    reference_number: referenceNumber,
-    tracking_token: trackingToken,
-  })
+  // Never stamp created_by: an anonymous JWT is not a profiles row, and some
+  // live databases still FK that column to profiles. Public saves must not
+  // depend on it. Try modern columns first, then older shapes.
+  const attempts: Database['public']['Tables']['form_submissions']['Insert'][] = [
+    { ...contact, form_version: form.version, status: 'new', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
+    { ...contact, form_version: form.version, status: 'submitted', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
+    { ...contact, form_version: form.version, status: 'new', reference_number: referenceNumber, tracking_token: trackingToken },
+    { ...contact, form_version: form.version, status: 'submitted', reference_number: referenceNumber, tracking_token: trackingToken },
+    { ...contact, form_version: form.version, status: 'new', client_id: clientId },
+    { ...contact, form_version: form.version, status: 'submitted', client_id: clientId },
+    { ...contact, status: 'new' },
+    { ...contact, status: 'submitted' },
+    { form_id: formId, respondent_email: validated.respondentEmail, respondent_name: validated.respondentName },
+  ]
 
-  if (!submission.ok && /reference_number|tracking_token|Could not find/i.test(submission.error)) {
-    submission = await insertSubmission(supabase, basePayload)
-  }
-  if (!submission.ok && /status|check constraint/i.test(submission.error)) {
-    submission = await insertSubmission(supabase, {
-      ...basePayload,
-      status: 'submitted',
-      reference_number: referenceNumber,
-      tracking_token: trackingToken,
-    })
+  let submission: { ok: true; row: FormSubmissionRow } | { ok: false; error: string } = { ok: false, error: 'Insert failed' }
+  for (const payload of attempts) {
+    submission = await insertSubmission(supabase, payload)
+    if (submission.ok) break
+    console.error('[forms/persist] insert attempt failed:', payload.status || 'default', submission.error)
   }
   if (!submission.ok) {
-    throw new PublicFormSubmitError(mapPublicFormSubmitError(submission.error))
+    throw new PublicFormSubmitError(describePersistFailure(submission.error), 400, submission.error)
   }
 
   const answerRows = validated.visibleQuestions.map((question) => ({
     submission_id: submission.row.id,
     question_id: question.id,
-    question_snapshot: question as unknown as Json,
+    question_snapshot: {
+      id: question.id,
+      label: question.label,
+      question_type: question.question_type,
+      required: question.required,
+      options: question.options,
+      map_to: question.map_to,
+    } as unknown as Json,
     value: (answers[question.id] ?? null) as Json,
   }))
 
   if (answerRows.length) {
     const { error: answerError } = await supabase.from('form_submission_answers').insert(answerRows)
     if (answerError) {
-      await supabase.from('form_submissions').delete().eq('id', submission.row.id)
-      throw new PublicFormSubmitError(mapPublicFormSubmitError(answerError.message))
+      console.error('[forms/persist] answers insert failed:', answerError.message)
+      const { error: simpleError } = await supabase.from('form_submission_answers').insert(
+        validated.visibleQuestions.map((question) => ({
+          submission_id: submission.row.id,
+          question_id: question.id,
+          question_snapshot: { label: question.label, question_type: question.question_type } as unknown as Json,
+          value: (answers[question.id] ?? null) as Json,
+        })),
+      )
+      if (simpleError) {
+        console.error('[forms/persist] simplified answers insert failed:', simpleError.message)
+      }
     }
+  }
+
+  if (validated.respondentEmail) {
+    await supabase.from('form_submission_fingerprints').insert({
+      form_id: formId,
+      fingerprint: fingerprintEmail(validated.respondentEmail, formId),
+    })
   }
 
   await supabase.from('form_submission_events').insert({
