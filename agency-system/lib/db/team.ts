@@ -6,7 +6,7 @@
 import { supabase } from '../supabase/client'
 import { Result, fail, ok, PageQuery, PageResult, pagedFail, escapeFilterValue, executePage } from './shared'
 import { validateFile, sanitizeFileName } from '../storage-config'
-import type { AppRole, EmployeeRole, EmployeeRoleInsert, EmployeeRoleUpdate, Profile, ProfileStatus } from '../supabase/types'
+import type { EmployeeRole, EmployeeRoleInsert, EmployeeRoleUpdate, Profile, ProfileStatus } from '../supabase/types'
 export async function getProfiles(): Promise<Result<Profile[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('profiles').select('*').order('full_name')

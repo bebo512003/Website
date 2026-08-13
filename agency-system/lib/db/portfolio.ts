@@ -6,7 +6,7 @@
 import { supabase } from '../supabase/client'
 import { Result, fail, ok, PageQuery, PageResult, pagedFail, escapeFilterValue, executePage } from './shared'
 import { validateFile, sanitizeFileName, STORAGE_RULES } from '../storage-config'
-import type { PortfolioCategory, PortfolioCategoryInsert, PortfolioCategoryUpdate, PortfolioProject, PortfolioProjectImage, PortfolioProjectInsert, PortfolioProjectUpdate, PortfolioProjectWithRelations, PortfolioPublicRpcRow } from '../supabase/types'
+import type { PortfolioCategory, PortfolioCategoryInsert, PortfolioCategoryUpdate, PortfolioProject, PortfolioProjectImage, PortfolioProjectInsert, PortfolioProjectUpdate, PortfolioProjectWithRelations } from '../supabase/types'
 // Public company portfolio
 
 const PORTFOLIO_ADMIN_SELECT = `id, title, slug, cover_image_path, description, client_name, category_id, services, project_date, external_url, featured, published, archived, display_order, portfolio_categories(id, name, slug, is_active), portfolio_project_images(id, project_id, storage_path, alt_text, display_order)`
@@ -15,49 +15,6 @@ const PORTFOLIO_ADMIN_SELECT = `id, title, slug, cover_image_path, description, 
 const slugifyPortfolio = (value: string) => {
   const base = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64)
   return `${base || 'project'}-${crypto.randomUUID().replace(/-/g, '').slice(0, 8)}`
-}
-
-
-function publicRpcRowToProject(row: PortfolioPublicRpcRow): PortfolioProjectWithRelations {
-  const images = Array.isArray(row.images) ? row.images.flatMap((value) => {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
-    const image = value as Record<string, unknown>
-    if (typeof image.id !== 'string' || typeof image.project_id !== 'string' || typeof image.storage_path !== 'string') return []
-    return [{
-      id: image.id,
-      project_id: image.project_id,
-      storage_path: image.storage_path,
-      alt_text: typeof image.alt_text === 'string' ? image.alt_text : null,
-      display_order: typeof image.display_order === 'number' ? image.display_order : 0,
-      uploaded_by: null,
-      created_at: '',
-      image_url: null,
-    }]
-  }) : []
-
-  return {
-    id: row.id,
-    title: row.title,
-    slug: row.slug,
-    cover_image_path: row.cover_image_path,
-    description: row.description,
-    client_name: row.client_name,
-    category_id: row.category_id,
-    services: row.services || [],
-    project_date: row.project_date,
-    external_url: row.external_url,
-    featured: row.featured,
-    published: true,
-    archived: false,
-    display_order: row.display_order,
-    created_by: null,
-    created_at: '',
-    updated_at: '',
-    portfolio_categories: row.category_id && row.category_name && row.category_slug
-      ? { id: row.category_id, name: row.category_name, slug: row.category_slug, is_active: true }
-      : null,
-    portfolio_project_images: images,
-  }
 }
 
 

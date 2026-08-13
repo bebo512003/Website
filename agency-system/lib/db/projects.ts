@@ -6,7 +6,7 @@
 import { supabase } from '../supabase/client'
 import { Result, fail, ok, PageQuery, PageResult, pagedFail, escapeFilterValue, executePage } from './shared'
 import { taskActivitySelect } from './tasks'
-import type { Comment, CommentWithAuthor, Profile, Project, ProjectActivity, ProjectDelivery, ProjectDeliveryApprovalState, ProjectDeliveryFile, ProjectDeliveryWithFiles, ProjectInsert, ProjectMember, ProjectStatus, ProjectUpdate, ProjectWithClient, TaskActivity } from '../supabase/types'
+import type { Comment, Profile, Project, ProjectActivity, ProjectDelivery, ProjectDeliveryApprovalState, ProjectDeliveryFile, ProjectDeliveryWithFiles, ProjectInsert, ProjectMember, ProjectStatus, ProjectUpdate, ProjectWithClient, TaskActivity } from '../supabase/types'
 
 
 export async function addProjectComment(projectId: string, content: string): Promise<Result<Comment | null>> {

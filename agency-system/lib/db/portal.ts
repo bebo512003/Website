@@ -5,7 +5,7 @@
 
 import { supabase } from '../supabase/client'
 import { Result, fail, ok } from './shared'
-import type { ClientApproval, ClientFormSubmission, ClientMessage, ClientMessageWithAuthor, ClientPortalClient, ClientPortalCollaboration, ClientPortalProject, ClientSharedFile, ClientSharedFileWithFile } from '../supabase/types'
+import type { ClientApproval, ClientFormSubmission, ClientMessage, ClientPortalClient, ClientPortalProject, ClientSharedFile } from '../supabase/types'
 // Client portal — Dynamic Form submissions linked to the signed-in client record
 
 export async function getClientFormSubmissions(): Promise<Result<ClientFormSubmission[]>> {
