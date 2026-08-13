@@ -945,6 +945,7 @@ export interface Database {
       add_permission: { Args: { p_key: string; p_name: string; p_category: string; p_description: string }; Returns: PermissionRow }
       get_public_portfolio_projects: { Args: Record<string, never>; Returns: PortfolioPublicRpcRow[] }
       get_public_portfolio_project: { Args: { p_slug: string }; Returns: PortfolioPublicRpcRow[] }
+      is_public_portfolio_image: { Args: { object_name: string }; Returns: boolean }
       get_storage_audit_summary: { Args: Record<string, never>; Returns: Json }
       user_has_permission: { Args: { p_user_id: string; p_permission: string }; Returns: boolean }
       can_user_access_project: { Args: { p_user_id: string; p_project_id: string }; Returns: boolean }

@@ -20,7 +20,8 @@ The application contains no seeded users or placeholder business records. All da
 - **Controlled Submission → Project Conversion**: Admins deliberately convert only Qualified/Approved submissions through client selection/creation, project configuration, owner/manager/team assignment, and a final confirmation; the database keeps immutable submission provenance and rejects duplicate/concurrent conversions
 - **Project ownership, status & lifecycle** (Session 12): every project carries an Owner, Manager, priority, deadline, health (`On track` / `At risk` / `Off track` / `Blocked`), and an assigned team. Projects move through a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — where only valid transitions are accepted, the owner and manager are always project members, and ownership is shown across the project list, project detail, dashboard, and reports
 - **Project delivery & closure** (Session 15): after Active / In Review, staff assemble a **final delivery package**, mark it Ready / Delivered, record **revision required**, record an **internal client-approval placeholder**, then Complete and Archive. The database rejects Complete unless those delivery conditions are met. Delivery data is internal and kept separate from any future client-facing approval UI
-- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
+- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing. Public pages are server-rendered and cached; unpublished work stays private.
+- **Public performance & SEO** (Session 27): landing, forms, and portfolio pages fetch published data on the server (session-less anon client + 120s cache), emit Open Graph / Twitter metadata, a sitemap, and robots rules, and serve portfolio images through a published-only proxy with responsive `next/image` sizes and alt text.
 - **Client Portal** (Session 17–18) at `/portal`: an invitation-only, authenticated area for the Client role. Admins invite a client from the client detail page (creating a linked login with a temporary password); the invited client sees a dashboard with their own projects, live lifecycle status and progress, **selected/shared files**, **deliverables**, a **client-visible conversation**, and **approve / request revision** actions. All portal reads and writes go through SECURITY DEFINER RPCs scoped to the client's own CRM record — internal notes, employee tasks, staff permissions, internal activity, private working files, and other clients/projects are never exposed. Client feedback notifies the project owner; approval updates the delivery state; a revision request is a first-class operational event
 - Project and client create, read, update, and delete workflows
 - **Employee My Work workspace** (Session 13) at `/my-work`: every task assigned to the signed-in user across authorized projects, with live Open / Due today / Upcoming (7 days) / Overdue / High-priority summaries that act as one-click filters, a per-project grouping with completion progress, an inline status control, and a completed-work archive; task-assignment notifications deep-link straight into it
@@ -254,7 +255,8 @@ Apply `supabase/migrations/20260831000000_project_delivery_closure.sql` and `sup
 
 The public portfolio is deliberately separate from the internal employee workspace:
 
-- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in.
+- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in. Those pages are server-rendered from the public RPC (published + not archived only) and cached for two minutes.
+- Portfolio images stay in the private `portfolio-images` bucket. The public site never embeds a signed URL in HTML; it requests `/api/public/portfolio-image/<path>`, which 404s unless `is_public_portfolio_image` is true.
 - Admins open **Administration → Portfolio Management** to create and edit portfolio projects, manage categories, upload images, choose a cover image, reorder projects, feature projects, and publish/unpublish them.
 - A project is visible publicly only when `published = true` and `archived = false`. Drafts, unpublished projects, archived projects, and their images remain private through PostgreSQL RLS and the private `portfolio-images` Storage bucket.
 - The migration `supabase/migrations/20260814000000_public_portfolio.sql` creates the portfolio tables, default categories, the `portfolio.manage` permission, RLS policies, and storage policies. Apply all migrations (or the complete `supabase/schema.sql`) before using this feature.
@@ -301,7 +303,7 @@ Before production launch:
 4. Apply every migration in `supabase/migrations/` (or `supabase/schema.sql` for a fresh project).
 5. Set the deployment values from `.env.local.example`, especially the Supabase URL/anon key and the real `NEXT_PUBLIC_SITE_URL`.
 6. Publish at least one form in **Administration → Forms** and, optionally, portfolio projects in **Administration → Portfolio Management**.
-7. Smoke-test `/forms`, one `/f/<slug>`, and `/portfolio` in an incognito window.
+7. Smoke-test `/forms`, one `/f/<slug>`, `/portfolio`, and `/track` in an incognito window. After a publish/unpublish, wait up to two minutes (or redeploy) for the public cache to refresh.
 
 ## Client portal
 
