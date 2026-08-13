@@ -22,13 +22,7 @@ export default async function PublicFormsPage() {
 
   return (
     <div className="min-h-screen overflow-hidden bg-bg text-fg">
-      <PublicSiteHeader
-        links={[
-          { href: '/portfolio', label: 'Portfolio' },
-          { href: '/forms', label: 'Available forms', current: true },
-          { href: '/track', label: 'Track request' },
-        ]}
-      />
+      <PublicSiteHeader />
 
       <div className="mx-auto max-w-5xl px-5 py-12 sm:px-8 lg:px-10 lg:py-16">
         <Link href="/" className="inline-flex items-center gap-2 text-xs text-text-secondary transition hover:text-fg">

@@ -18,18 +18,9 @@ export function PortfolioLandingPage({
 
   return (
     <div className="min-h-screen overflow-hidden bg-[#080808] text-white">
-      <PublicSiteHeader
-        variant="dark"
-        links={[
-          { href: '/', label: 'Home' },
-          { href: '#work', label: 'Selected work' },
-          { href: '#about', label: 'About' },
-          { href: '/auth', label: 'Login' },
-        ]}
-        cta={{ href: '/forms', label: 'Request a New Project' }}
-      />
+      <PublicSiteHeader variant="dark" />
 
-      <section className="relative flex min-h-[720px] items-end bg-[radial-gradient(circle_at_80%_15%,rgba(185,40,45,0.24),transparent_35%),linear-gradient(135deg,#080808_0%,#101010_60%,#16090a_100%)] px-5 pb-20 pt-36 sm:min-h-[800px] sm:px-8 lg:px-10">
+      <section className="relative flex min-h-[720px] items-end bg-[radial-gradient(circle_at_80%_15%,rgba(185,40,45,0.24),transparent_35%),linear-gradient(135deg,#080808_0%,#101010_60%,#16090a_100%)] px-5 pb-20 pt-24 sm:min-h-[800px] sm:px-8 lg:px-10">
         <div className="pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(255,255,255,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.05)_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_85%)]" />
         <div className="pointer-events-none absolute right-[12%] top-[25%] hidden h-56 w-56 rounded-full border border-accent/30 sm:block" />
         <div className="pointer-events-none absolute right-[15%] top-[31%] hidden h-40 w-40 rounded-full border border-accent/20 sm:block" />

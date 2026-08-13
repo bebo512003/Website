@@ -80,16 +80,7 @@ export function ClientLandingPage({
 
   return (
     <div className="min-h-screen overflow-hidden bg-bg text-fg">
-      <PublicSiteHeader
-        links={[
-          { href: '#services', label: 'Services' },
-          { href: '#how', label: 'How it works' },
-          { href: '/portfolio', label: 'Portfolio' },
-          { href: '/forms', label: 'Available forms' },
-          { href: '/track', label: 'Track request' },
-        ]}
-        cta={{ href: '/forms', label: 'Request a project' }}
-      />
+      <PublicSiteHeader />
 
       <section className="relative overflow-hidden border-b border-border bg-[radial-gradient(circle_at_85%_15%,hsl(var(--accent)/0.18),transparent_40%),linear-gradient(135deg,hsl(var(--color-bg))_0%,hsl(var(--surface))_60%,hsl(var(--surface-raised))_100%)] px-5 pb-20 pt-16 sm:px-8 sm:pt-24 lg:px-10 lg:pt-32">
         <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(hsl(var(--border))_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border))_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_85%)]" />

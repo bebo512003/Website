@@ -5,21 +5,18 @@ import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import {
   ArrowLeft,
-  Globe,
   LoaderCircle,
-  LogIn,
-  Menu,
   Search,
   ShieldCheck,
   Sparkles,
-  X,
-  Zap,
   HelpCircle,
 } from 'lucide-react'
 import { getPublicSubmissionTracking } from '@/lib/supabase/database'
 import type { PublicSubmissionTracking } from '@/lib/supabase/types'
 import { SubmissionTrackingView } from '@/components/forms/submission-tracking-view'
 import { primaryButtonClassName, InlineAlert } from '@/components/ui/page'
+import { PublicSiteHeader } from '@/components/public/public-site-header'
+import { PublicSiteFooter } from '@/components/public/public-site-footer'
 
 type Lang = 'ar' | 'en'
 const HEADING = 'AGENCY OS / REQUEST TRACKING'
@@ -33,7 +30,6 @@ function TrackContent() {
   const [trackingData, setTrackingData] = useState<PublicSubmissionTracking | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
 
   const isAr = lang === 'ar'
 
@@ -98,74 +94,17 @@ function TrackContent() {
   }
 
   return (
-    <main className="min-h-screen bg-bg text-fg">
-      {/* ── Header / Nav ──────────────────────────────────────────────── */}
-      <header className="sticky inset-x-0 top-0 z-40 border-b border-border bg-bg/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-8 lg:px-10">
-          <Link href="/" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)}>
-            <span className="flex h-9 w-9 items-center justify-center border border-line-light bg-surface-raised text-accent transition group-hover:border-accent">
-              <Zap className="h-4 w-4" />
-            </span>
-            <span className="hidden sm:inline">
-              <span className="block text-sm font-bold tracking-[0.22em] text-fg">AGENCY OS</span>
-              <span className="font-mono-tech text-[8px] text-text-tertiary">CREATIVE STUDIO</span>
-            </span>
-          </Link>
-
-          <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
-            <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
-            <Link href="/forms" className="text-xs text-text-secondary transition hover:text-fg">Available forms</Link>
-            <Link href="/track" className="text-xs text-fg font-medium transition">Track request</Link>
-          </nav>
-
-          <div className="hidden items-center gap-3 md:flex">
-            <button
-              type="button"
-              onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-              className="flex min-h-10 items-center gap-1.5 rounded-md border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg"
-            >
-              <Globe className="h-3.5 w-3.5" />
-              {lang === 'ar' ? 'English' : 'العربية'}
-            </button>
-            <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
-              <LogIn className="h-3.5 w-3.5" /> Login
-            </Link>
-          </div>
-
-          <button
-            type="button"
-            className="rounded-md border border-border p-2 text-fg md:hidden"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            aria-expanded={menuOpen}
-          >
-            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-        </div>
-
-        {menuOpen && (
-          <nav className="border-t border-border bg-surface px-5 py-4 md:hidden" aria-label="Mobile primary">
-            <div className="grid gap-1">
-              <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
-              <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Available forms</Link>
-              <Link href="/track" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-fg hover:bg-surface-raised">Track request</Link>
-            </div>
-            <div className="mt-3 flex items-center justify-between border-t border-border pt-3">
-              <button
-                type="button"
-                onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')}
-                className="flex items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary"
-              >
-                <Globe className="h-3.5 w-3.5" />
-                {lang === 'ar' ? 'English' : 'العربية'}
-              </button>
-              <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-4 py-2 text-xs font-medium text-text-secondary">
-                <LogIn className="h-3.5 w-3.5" /> Login
-              </Link>
-            </div>
-          </nav>
-        )}
-      </header>
+    <div className="min-h-screen bg-bg text-fg">
+      {/* ── Canonical Header / Nav ──────────────────────────────────────── */}
+      <PublicSiteHeader
+        activeKey="track"
+        lang={lang}
+        onLangChange={setLang}
+        backLink={{
+          href: '/forms',
+          label: isAr ? 'العودة للنماذج المتاحة' : 'Back to available forms',
+        }}
+      />
 
       {/* ── Page Body ─────────────────────────────────────────────────── */}
       <div className="mx-auto max-w-4xl px-4 py-10 sm:px-6 sm:py-16" dir={isAr ? 'rtl' : 'ltr'}>
@@ -286,7 +225,9 @@ function TrackContent() {
           </div>
         ) : null}
       </div>
-    </main>
+
+      <PublicSiteFooter />
+    </div>
   )
 }
 
