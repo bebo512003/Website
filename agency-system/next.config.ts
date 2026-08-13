@@ -17,6 +17,7 @@ const nextConfig: NextConfig = {
     return [
       { source: '/intake', destination: '/forms', permanent: true },
       { source: '/intake/:path*', destination: '/forms', permanent: true },
+      { source: '/services', destination: '/#services', permanent: false },
     ]
   },
 };

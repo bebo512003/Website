@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowLeft, Globe, LoaderCircle, Send, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowLeft, LoaderCircle, Send, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { uploadFormFile } from '@/lib/supabase/database'
 import type { FormQuestion, FormSubmissionRow, PublicFormTemplate } from '@/lib/supabase/types'
@@ -12,6 +12,8 @@ import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
 import { validateFile } from '@/lib/storage-config'
 import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
+import { PublicSiteHeader } from '@/components/public/public-site-header'
+import { PublicSiteFooter } from '@/components/public/public-site-footer'
 
 // ── Public dynamic form page ─────────────────────────────────────────────────
 // Renders any published form straight from the database. An admin can create a
@@ -29,7 +31,6 @@ import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
 //   • Duplicate submission protection (same email → same form within 5 min)
 
 type Lang = 'ar' | 'en'
-const HEADING = 'AGENCY OS / FORM'
 
 // Honeypot field name — looks real to bots but is hidden via CSS.
 // Bots that fill every field will populate this, causing silent rejection.
@@ -307,24 +308,15 @@ export function PublicFormClient({
   if (done) {
     return (
       <div className="relative min-h-screen bg-bg">
-        <div className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
-          <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-3 sm:px-5">
-            <Link href="/" className="flex min-h-10 items-center gap-3 text-fg" aria-label="Agency OS home">
-              <span className="flex h-9 w-9 items-center justify-center rounded border border-border bg-surface text-accent">
-                <Sparkles className="h-4 w-4" />
-              </span>
-              <span className="hidden font-mono-tech text-[10px] text-text-tertiary sm:inline">{HEADING}</span>
-            </Link>
-            <div className="flex items-center gap-2">
-              <Link href="/forms" className="hidden min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg sm:inline-flex">
-                <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
-              </Link>
-              <button type="button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="flex min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg">
-                <Globe className="h-3.5 w-3.5" /> {lang === 'ar' ? 'English' : 'العربية'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PublicSiteHeader
+          activeKey="forms"
+          lang={lang}
+          onLangChange={setLang}
+          backLink={{
+            href: '/forms',
+            label: i18n.backToForms,
+          }}
+        />
 
         <SubmissionConfirmation
           submission={submittedData || {
@@ -338,6 +330,7 @@ export function PublicFormClient({
           onReset={reset}
           cooldownRemaining={cooldownRemaining}
         />
+        <PublicSiteFooter />
       </div>
     )
   }
@@ -345,24 +338,15 @@ export function PublicFormClient({
   // ── Form ─────────────────────────────────────────────────────────────────
   return (
     <div className="relative min-h-screen bg-bg">
-      <div className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
-        <div className="mx-auto flex max-w-4xl items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <Link href="/" className="flex min-h-10 items-center gap-3 text-fg" aria-label="Agency OS home">
-            <span className="flex h-9 w-9 items-center justify-center rounded border border-border bg-surface text-accent">
-              <Sparkles className="h-4 w-4" />
-            </span>
-            <span className="hidden font-mono-tech text-[10px] text-text-tertiary sm:inline">{HEADING}</span>
-          </Link>
-          <div className="flex items-center gap-2">
-            <Link href="/forms" className="hidden min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg sm:inline-flex">
-              <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
-            </Link>
-            <button type="button" onClick={() => setLang(lang === 'ar' ? 'en' : 'ar')} className="flex min-h-10 items-center gap-1.5 rounded border border-border px-3 py-2 text-xs text-text-secondary hover:border-line-light hover:text-fg">
-              <Globe className="h-3.5 w-3.5" /> {lang === 'ar' ? 'English' : 'العربية'}
-            </button>
-          </div>
-        </div>
-      </div>
+      <PublicSiteHeader
+        activeKey="forms"
+        lang={lang}
+        onLangChange={setLang}
+        backLink={{
+          href: '/forms',
+          label: i18n.backToForms,
+        }}
+      />
 
       <div className="mx-auto max-w-3xl px-4 py-7 sm:px-5 sm:py-9" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
         <Link href="/forms" className="inline-flex min-h-10 items-center gap-2 text-xs text-text-secondary transition hover:text-fg sm:hidden">
@@ -462,6 +446,8 @@ export function PublicFormClient({
           </div>
         </form>
       </div>
+
+      <PublicSiteFooter />
     </div>
   )
 }

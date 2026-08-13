@@ -115,10 +115,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // dashboard so the landing stays client-focused for visitors.
   const isLandingPage = pathname === '/'
   const isStaffDashboard = pathname === '/dashboard'
+  const isServicesPage = pathname === '/services'
   // The client landing page, public portfolio, public forms listing, public forms,
-  // public tracking, and the auth screen are the only publicly reachable pages.
+  // public tracking, services redirect, and the auth screen are the only publicly reachable pages.
   // Everything else sits behind the staff shell.
-  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage || isTrackPage
+  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage || isTrackPage || isServicesPage
 
   useEffect(() => {
     if (loading) return
@@ -139,14 +140,14 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage && !isTrackPage) {
+    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage && !isTrackPage && !isServicesPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
     if (!isClient && isPortalPage) router.replace('/dashboard')
-  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isStaffDashboard, isTrackPage, loading, profile, router, user])
+  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isServicesPage, isStaffDashboard, isTrackPage, loading, profile, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
@@ -157,7 +158,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // landmark so a screen reader (or the skip link) can jump straight to the
   // primary content.
   if (isAuthPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
-  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
+  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage || isTrackPage || isServicesPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 
