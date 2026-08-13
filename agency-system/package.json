@@ -14,7 +14,8 @@
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "db:types:generate": "node scripts/generate-types.mjs",
     "db:types:check": "node scripts/generate-types.mjs --check",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ci": "npm run lint && npm run typecheck && npm run build && npm test"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
