@@ -33,7 +33,10 @@ export function Sidebar() {
     if (href === '/admin') return pathname === '/admin' || (pathname.startsWith('/admin/') && !['/admin/forms', '/admin/portfolio', '/admin/roles', '/admin/team'].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)))
     return pathname === href || pathname.startsWith(`${href}/`)
   }
-  const mobileItems = navItems.filter((item) => ['/dashboard', '/my-work', '/projects', '/admin/forms', '/submissions', '/tasks', '/team', '/notifications', '/admin', '/settings'].includes(item.href))
+  // A fixed bottom bar has room for five reliable touch targets, not every
+  // desktop destination. Profile and search remain in the top bar; the most
+  // useful work areas are kept here without squeezing labels into unreadability.
+  const mobileItems = navItems.filter((item) => ['/dashboard', '/projects', '/tasks', '/notifications', '/admin'].includes(item.href)).slice(0, 5)
 
   return (
     <>
@@ -58,8 +61,8 @@ export function Sidebar() {
         </div>
       </aside>
 
-      <nav className="fixed bottom-0 left-0 right-0 z-40 grid border-t border-border bg-surface/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden" style={{ gridTemplateColumns: `repeat(${Math.max(mobileItems.length, 1)}, minmax(0, 1fr))` }} aria-label="Mobile navigation">
-        {mobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.href); return <Link key={item.href} href={item.href} className={cn('flex flex-col items-center gap-1 py-2 text-[9px]', active ? 'text-accent' : 'text-text-tertiary')}><Icon className="h-4 w-4" /><span className="max-w-full truncate">{item.title === 'Administration' ? 'Admin' : item.title}</span></Link> })}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 grid min-h-16 border-t border-border bg-surface/95 px-1 pb-[env(safe-area-inset-bottom)] shadow-[0_-8px_24px_rgba(0,0,0,0.18)] backdrop-blur md:hidden" style={{ gridTemplateColumns: `repeat(${Math.max(mobileItems.length, 1)}, minmax(0, 1fr))` }} aria-label="Mobile navigation">
+        {mobileItems.map((item) => { const Icon = item.icon; const active = isActive(item.href); return <Link key={item.href} href={item.href} className={cn('flex min-h-15 min-w-0 flex-col items-center justify-center gap-1 px-1 py-2 text-[11px] font-medium', active ? 'text-accent' : 'text-text-tertiary')}><Icon className="h-[18px] w-[18px] shrink-0" /><span className="max-w-full truncate">{item.title === 'Administration' ? 'Admin' : item.title}</span></Link> })}
       </nav>
     </>
   )

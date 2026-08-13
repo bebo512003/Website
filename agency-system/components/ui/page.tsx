@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 
 export function Page({ children, className }: { children: React.ReactNode; className?: string }) {
   return (
-    <div className={cn('min-h-full bg-bg p-5 pb-24 sm:p-8 md:pb-8', className)}>
+    <div className={cn('min-h-full bg-bg p-4 pb-28 sm:p-8 md:pb-8', className)}>
       <div className="mx-auto max-w-7xl space-y-7">{children}</div>
     </div>
   )
@@ -22,20 +22,20 @@ export function PageHeader({
   action?: React.ReactNode
 }) {
   return (
-    <header className="flex flex-col gap-5 border-b border-border pb-7 sm:flex-row sm:items-end sm:justify-between">
-      <div>
+    <header className="flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between sm:pb-7">
+      <div className="min-w-0">
         {eyebrow && (
-          <div className="mb-3 flex items-center gap-3 font-mono-tech text-[10px] text-text-tertiary">
+          <div className="mb-3 flex items-center gap-3 font-mono-tech text-[11px] text-text-tertiary">
             <span className="h-px w-7 bg-accent" />
             {eyebrow}
           </div>
         )}
-        <h1 className="font-display text-5xl leading-none tracking-tight text-fg sm:text-7xl">
+        <h1 className="break-words font-display text-4xl leading-none tracking-tight text-fg sm:text-7xl">
           {title}<span className="text-text-tertiary">.</span>
         </h1>
-        {description && <p className="mt-3 max-w-2xl text-sm text-text-secondary">{description}</p>}
+        {description && <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">{description}</p>}
       </div>
-      {action && <div className="flex shrink-0 items-center gap-2">{action}</div>}
+      {action && <div className="flex w-full shrink-0 items-center gap-2 sm:w-auto">{action}</div>}
     </header>
   )
 }
@@ -137,20 +137,20 @@ export function Modal({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="presentation" onMouseDown={onClose}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center overflow-y-auto bg-black/70 p-3 pt-12 sm:items-center sm:p-5" role="presentation" onMouseDown={onClose}>
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="modal-title"
-        className={`max-h-[90vh] w-full ${maxWidthClassName} overflow-y-auto rounded-md border border-border bg-surface p-6 shadow-2xl`}
+        className={`max-h-[calc(100dvh-1.5rem)] w-full ${maxWidthClassName} overflow-y-auto rounded-md border border-border bg-surface p-4 shadow-2xl sm:max-h-[90dvh] sm:p-6`}
         onMouseDown={(event) => event.stopPropagation()}
       >
-        <div className="mb-5 flex items-start justify-between gap-4">
-          <div>
-            <h2 id="modal-title" className="text-lg font-semibold text-fg">{title}</h2>
-            {description && <p className="mt-1 text-sm text-text-tertiary">{description}</p>}
+        <div className="mb-5 flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h2 id="modal-title" className="break-words text-lg font-semibold text-fg">{title}</h2>
+            {description && <p className="mt-1 text-sm leading-5 text-text-tertiary">{description}</p>}
           </div>
-          <button type="button" onClick={onClose} className="text-sm text-text-tertiary hover:text-fg" aria-label="Close dialog">
+          <button type="button" onClick={onClose} className="inline-flex min-h-10 shrink-0 items-center px-2 text-sm text-text-tertiary hover:text-fg" aria-label="Close dialog">
             Close
           </button>
         </div>
@@ -160,6 +160,6 @@ export function Modal({
   )
 }
 
-export const inputClassName = 'w-full rounded-md border border-border bg-surface-raised px-3 py-2.5 text-sm text-fg outline-none placeholder:text-text-tertiary focus:border-accent disabled:cursor-not-allowed disabled:opacity-60'
-export const primaryButtonClassName = 'inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50'
-export const secondaryButtonClassName = 'inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary transition hover:border-line-light hover:text-fg disabled:cursor-not-allowed disabled:opacity-50'
+export const inputClassName = 'min-h-11 w-full rounded-md border border-border bg-surface-raised px-3 py-2.5 text-base text-fg outline-none placeholder:text-text-tertiary focus:border-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm'
+export const primaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50'
+export const secondaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary transition hover:border-line-light hover:text-fg disabled:cursor-not-allowed disabled:opacity-50'

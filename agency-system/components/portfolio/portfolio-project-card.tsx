@@ -24,7 +24,7 @@ export function PortfolioProjectCard({ project, featured = false }: { project: P
         ) : (
           <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface-raised via-surface-overlay to-accent/20"><ImageIcon className="h-8 w-8 text-white/30" strokeWidth={1} /></div>
         )}
-        <span className="absolute left-4 top-4 border border-white/20 bg-black/60 px-2.5 py-1 font-mono-tech text-[9px] text-white/80 backdrop-blur-sm">
+        <span className="absolute left-4 top-4 border border-white/20 bg-black/60 px-2.5 py-1 font-mono-tech text-[10px] text-white/80 backdrop-blur-sm">
           {project.portfolio_categories?.name || 'Selected work'}
         </span>
         <span className="absolute bottom-4 right-4 flex h-9 w-9 translate-y-2 items-center justify-center rounded-full bg-accent text-accent-foreground opacity-0 transition duration-300 group-hover:translate-y-0 group-hover:opacity-100">

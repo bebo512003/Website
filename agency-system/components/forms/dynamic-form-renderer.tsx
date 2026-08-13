@@ -127,11 +127,11 @@ export function DynamicFormRenderer({
       {/* Progress + current section */}
       {sections.length > 0 && (
         <div className="sm:col-span-2">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-text-tertiary">
-            <span>
+          <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-text-tertiary">
+            <span className="min-w-0 truncate">
               {lang === 'ar' ? 'القسم' : 'Section'} {currentSection + 1} / {sections.length} · {sections[currentSection]?.name || (lang === 'ar' ? 'استبيان' : 'Form')}
             </span>
-            <span>{progress}%</span>
+            <span className="shrink-0">{progress}%</span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
             <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${progress}%` }} />

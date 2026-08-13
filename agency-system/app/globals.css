@@ -99,12 +99,23 @@ html:not(.dark) {
     border-color: hsl(var(--border));
   }
   
+  html {
+    overflow-x: hidden;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
+    min-width: 320px;
+    overflow-x: hidden;
     background-color: hsl(var(--color-bg));
     color: hsl(var(--color-fg));
     font-family: 'Space Grotesk', sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+  }
+
+  button, a, input, select, textarea {
+    -webkit-tap-highlight-color: transparent;
   }
 }
 

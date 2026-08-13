@@ -322,7 +322,7 @@ export default function ReportsPage() {
               {report.team_workload.length === 0 ? (
                 <EmptyState icon={UsersRound} title="No assigned operational work" description="Assign open tasks or active projects to see team workload." />
               ) : (
-                <div className="overflow-x-auto">
+                <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable team workload table">
                   <table className="w-full min-w-[720px] text-left">
                     <thead className="border-b border-border bg-surface-raised text-[10px] uppercase tracking-wider text-text-tertiary">
                       <tr>
