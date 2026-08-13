@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Database } from './types'
+import type { Database } from './database.types'
 
 // Check if env vars are set
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL

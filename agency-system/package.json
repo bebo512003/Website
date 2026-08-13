@@ -11,7 +11,10 @@
     "test:db": "npm --prefix supabase/tests test",
     "db:schema:generate": "node scripts/generate-schema.mjs",
     "db:schema:check": "node scripts/generate-schema.mjs --check",
-    "bootstrap:admin": "node scripts/bootstrap-admin.mjs"
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
+    "db:types:generate": "node scripts/generate-types.mjs",
+    "db:types:check": "node scripts/generate-types.mjs --check",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.6",
@@ -32,6 +35,7 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.4",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

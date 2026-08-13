@@ -3,7 +3,8 @@ import { unstable_cache } from 'next/cache'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { PUBLIC_REVALIDATE_SECONDS } from '@/lib/site'
 import { isSafePortfolioStoragePath, portfolioImageSrc } from '@/lib/public/portfolio-media'
-import type { Database, FormQuestion, PortfolioPublicRpcRow, PortfolioProjectWithRelations, PublicFormTemplate, PublicFormTemplateSummary } from './types'
+import type { Database } from './database.types'
+import type { FormQuestion, PortfolioPublicRpcRow, PortfolioProjectWithRelations, PublicFormTemplate, PublicFormTemplateSummary } from './types'
 
 /**
  * Session-less public catalog client.
@@ -125,7 +126,7 @@ async function loadPublishedFormBySlug(slug: string): Promise<{
     .order('position')
     .order('created_at')
   if (questionsError) return { template: null, questions: [], error: questionsError.message }
-  return { template, questions: questions || [], error: null }
+  return { template: template as PublicFormTemplate, questions: (questions || []) as unknown as FormQuestion[], error: null }
 }
 
 export const getCachedPublicPortfolioProjects = cache(async () =>

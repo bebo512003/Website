@@ -23,7 +23,11 @@ import type {
   FileItem,
   ClientFormSubmission,
   FileWithProject,
+  FormQuestion,
+  FormSubmission,
+  FormTemplate,
   Notification,
+  PublicFormTemplate,
   OperationalAnalytics,
   Permission,
   PortfolioCategory,
@@ -151,27 +155,27 @@ export async function getOperationalAnalytics(days = 30): Promise<Result<Operati
 export async function getProfiles(): Promise<Result<Profile[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('profiles').select('*').order('full_name')
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as Profile[])
 }
 export async function setProfileRole(userId: string, role: AppRole): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: role })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 export async function setProfileStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_status', { target_user_id: userId, new_status: status })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 export async function setProfileEmployeeRole(userId: string, employeeRoleId: string | null): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_employee_role', { target_user_id: userId, new_employee_role_id: employeeRoleId })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 export async function setProfileClientLink(userId: string, clientId: string | null): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('set_user_client_link', { target_user_id: userId, new_client_id: clientId })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 export async function getEmployeeRoles(): Promise<Result<EmployeeRole[]>> {
   if (!supabase) return fail([])
@@ -367,7 +371,7 @@ export async function addProjectComment(projectId: string, content: string): Pro
     .insert({ content, entity_type: 'project', entity_id: projectId })
     .select()
     .single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Comment | null)
 }
 
 // Client account management (Admin only). Mirrors the team-member account
@@ -515,7 +519,7 @@ export async function deleteClientAccount(userId: string): Promise<Result<boolea
 export async function getClients(): Promise<Result<Client[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('clients').select('*').order('name')
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as Client[])
 }
 
 export type ClientListFilter = {
@@ -552,17 +556,17 @@ export async function getClientsPage(
 export async function getClientById(id: string): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').select('*').eq('id', id).maybeSingle()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Client | null)
 }
 export async function createClient(client: ClientInsert): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').insert(client).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Client | null)
 }
 export async function updateClient(id: string, updates: ClientUpdate): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').update(updates).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Client | null)
 }
 export async function deleteClient(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
@@ -672,12 +676,12 @@ export async function getProjectById(id: string): Promise<Result<ProjectWithClie
 export async function getProjectsByClientId(clientId: string): Promise<Result<Project[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('projects').select('*').eq('client_id', clientId).order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as Project[])
 }
 export async function createProject(project: ProjectInsert): Promise<Result<Project | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').insert(project).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Project | null)
 }
 /**
  * Creates a project and assigns its initial team in one go. The owner and
@@ -700,14 +704,14 @@ export async function createProjectWithTeam(
     const { error: memberError } = await supabase
       .from('project_members')
       .insert(extras.map((userId) => ({ project_id: data.id, user_id: userId })))
-    if (memberError) return fail(data, memberError.message)
+    if (memberError) return fail(data as unknown as Project | null, memberError.message)
   }
-  return ok(data)
+  return ok(data as unknown as Project | null)
 }
 export async function updateProject(id: string, updates: ProjectUpdate): Promise<Result<Project | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('projects').update(updates).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Project | null)
 }
 export async function deleteProject(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
@@ -1128,7 +1132,7 @@ export async function getProjectDeliveries(projectId: string): Promise<Result<Pr
 export async function getFilesByProjectId(projectId: string): Promise<Result<FileItem[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('files').select('*').eq('project_id', projectId).order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as FileItem[])
 }
 
 export async function prepareProjectDelivery(projectId: string, notes?: string | null): Promise<Result<ProjectDelivery | null>> {
@@ -1219,13 +1223,13 @@ export async function getProjectTaskActivity(projectId: string): Promise<Result<
 export async function createTask(task: TaskInsert): Promise<Result<Task | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('tasks').insert(task).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Task | null)
 }
 
 export async function updateTask(id: string, updates: TaskUpdate): Promise<Result<Task | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('tasks').update(updates).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Task | null)
 }
 
 export async function deleteTask(id: string): Promise<Result<boolean>> {
@@ -1295,9 +1299,9 @@ export async function uploadProjectFile(projectId: string, userId: string, file:
   }
   if (options?.asDelivery && data) {
     const marked = await addProjectDeliveryFile(projectId, data.id)
-    if (marked.error) return fail(data, marked.error)
+    if (marked.error) return fail(data as unknown as FileItem | null, marked.error)
   }
-  return ok(data)
+  return ok(data as unknown as FileItem | null)
 }
 
 export async function getFileDownloadUrl(storagePath: string, expiresIn = STORAGE_RULES['project-files'].signedUrlDurationSeconds || 120): Promise<Result<string | null>> {
@@ -1319,7 +1323,7 @@ export async function deleteFile(file: Pick<FileItem, 'id' | 'storage_path'>): P
 export async function getNotifications(limit = 100): Promise<Result<Notification[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('notifications').select('*').order('created_at', { ascending: false }).limit(limit)
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as Notification[])
 }
 
 // Notification inbox tabs map onto the domain `event` / UI `type` catalog in
@@ -1520,7 +1524,7 @@ export async function getPublishedFormTemplates(): Promise<Result<import('./type
 export async function getFormTemplateById(id: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_templates').select('*').eq('id', id).maybeSingle()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormTemplate | null)
 }
 
 /** Resolve a public form link only while the form is published.
@@ -1534,7 +1538,7 @@ export async function getPublishedFormTemplateBySlug(slug: string): Promise<Resu
     .eq('slug', slug)
     .eq('status', 'published')
     .maybeSingle()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as PublicFormTemplate | null)
 }
 
 export async function createFormTemplate(input: { title: string; description?: string | null }): Promise<Result<import('./types').FormTemplate | null>> {
@@ -1545,13 +1549,13 @@ export async function createFormTemplate(input: { title: string; description?: s
     slug: slugifyForm(input.title),
   }
   const { data, error } = await supabase.from('form_templates').insert(payload).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormTemplate | null)
 }
 
 export async function updateFormTemplate(id: string, updates: import('./types').FormTemplateUpdate): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_templates').update(updates).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormTemplate | null)
 }
 
 export async function deleteFormTemplate(id: string): Promise<Result<boolean>> {
@@ -1563,25 +1567,25 @@ export async function deleteFormTemplate(id: string): Promise<Result<boolean>> {
 export async function duplicateFormTemplate(id: string): Promise<Result<import('./types').FormTemplate | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('duplicate_form_template', { p_form_id: id })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormTemplate | null)
 }
 
 export async function getFormQuestions(formId: string): Promise<Result<import('./types').FormQuestion[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('form_questions').select('*').eq('form_id', formId).order('position').order('created_at')
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as FormQuestion[])
 }
 
 export async function createFormQuestion(question: import('./types').FormQuestionInsert): Promise<Result<import('./types').FormQuestion | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_questions').insert(question).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormQuestion | null)
 }
 
 export async function updateFormQuestion(id: string, updates: import('./types').FormQuestionUpdate): Promise<Result<import('./types').FormQuestion | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('form_questions').update(updates).eq('id', id).select().single()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormQuestion | null)
 }
 
 export async function deleteFormQuestion(id: string): Promise<Result<boolean>> {
@@ -1599,7 +1603,7 @@ export async function reorderFormQuestions(formId: string, orderedQuestionIds: s
 export async function submitDynamicForm(formId: string, answers: import('@/lib/forms/question-types').AnswerMap): Promise<Result<import('./types').FormSubmission | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.rpc('submit_dynamic_form', { p_form_id: formId, p_answers: answers as unknown as import('./types').Json })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as FormSubmission | null)
 }
 
 export async function getPublicSubmissionTracking(trackingKey: string): Promise<Result<import('./types').PublicSubmissionTracking | null>> {
@@ -1615,7 +1619,7 @@ export async function getPublicSubmissionTracking(trackingKey: string): Promise<
 export async function getFormSubmissions(formId: string): Promise<Result<import('./types').FormSubmission[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('form_submissions').select('*').eq('form_id', formId).order('submitted_at', { ascending: false })
-  return error ? fail([], error.message) : ok(data || [])
+  return error ? fail([], error.message) : ok((data || []) as unknown as FormSubmission[])
 }
 
 export async function getAllFormSubmissions(): Promise<Result<(import('./types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[]>> {
@@ -1984,7 +1988,7 @@ export async function getTeamMemberById(id: string): Promise<Result<Profile | nu
     .maybeSingle()
   if (error) return fail(null, error.message)
   if (data && data.role === 'client') return ok(null)
-  return ok(data)
+  return ok(data as unknown as Profile | null)
 }
 
 export async function createTeamMember(payload: TeamMemberPayload): Promise<Result<{ profile: Profile; temporaryPassword: string } | null>> {
@@ -2095,7 +2099,7 @@ export async function updateTeamMember(payload: TeamMemberUpdatePayload): Promis
     p_employee_role_id: payload.employee_role_id || null,
     p_status: payload.status || null,
   })
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 
 export async function deleteTeamMember(userId: string): Promise<Result<boolean>> {
@@ -2172,7 +2176,7 @@ export async function getAvatarPublicUrl(storagePath: string): Promise<Result<st
 export async function getProfileById(id: string): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
-  return error ? fail(null, error.message) : ok(data)
+  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 
 export async function updateOwnEnhancedProfile(userId: string, updates: {

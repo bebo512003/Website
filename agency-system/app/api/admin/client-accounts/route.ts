@@ -319,7 +319,7 @@ export async function PATCH(request: Request) {
     return errorResponse(profileError?.message || 'Unable to update the client account.', 400)
   }
 
-  await syncAuthAccessBan(serviceClient, userId, profile.status)
+  await syncAuthAccessBan(serviceClient, userId, profile.status as ProfileStatus)
 
   return Response.json({ data: profile as Profile }, { status: 200, headers: NO_STORE_HEADERS })
 }
