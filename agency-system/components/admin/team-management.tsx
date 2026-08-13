@@ -19,6 +19,7 @@ import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'
 import type { AppRoleWithPermissions, EmployeeRole, Profile, ProfileStatus } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type SocialLinks = Record<string, string>
 
@@ -49,6 +50,7 @@ const PAGE_SIZE = 25
 
 export function TeamManagement() {
   const { can } = useAuth()
+  const confirm = useConfirm()
   const [members, setMembers] = useState<Profile[]>([])
   const [total, setTotal] = useState(0)
   const [roles, setRoles] = useState<AppRoleWithPermissions[]>([])
@@ -293,7 +295,13 @@ export function TeamManagement() {
 
   const handleDelete = async (member: Profile) => {
     if (!canManage) return
-    if (!window.confirm(`Delete team member "${member.full_name || member.email}"? This cannot be undone.`)) return
+    const ok = await confirm({
+      title: `Delete “${member.full_name || member.email}”?`,
+      description: 'Their profile and Auth account are removed. Assigned projects and completed work stay attributed to them for audit purposes.',
+      confirmLabel: 'Delete team member',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const res = await deleteTeamMember(member.id)
     if (res.error) {
       setError(res.error)

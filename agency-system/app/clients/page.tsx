@@ -9,6 +9,7 @@ import type { Client } from '@/lib/supabase/types'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 const PAGE_SIZE = 24
 
@@ -21,6 +22,7 @@ function clientToForm(client: Client): Form {
 
 export default function ClientsPage() {
   const { can } = useAuth()
+  const confirm = useConfirm()
   const canCreate = can('client.create')
   const canEdit = can('client.edit')
   const [clients, setClients] = useState<Client[]>([])
@@ -75,7 +77,13 @@ export default function ClientsPage() {
   }
 
   const remove = async (client: Client) => {
-    if (!window.confirm(`Delete “${client.name}”? Clients with projects cannot be deleted.`)) return
+    const ok = await confirm({
+      title: `Delete “${client.name}”?`,
+      description: 'Clients with projects cannot be deleted.',
+      confirmLabel: 'Delete client',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteClient(client.id)
     if (result.error) setError(result.error)
     else { setMessage('Client deleted.'); await load() }

@@ -51,6 +51,7 @@ import {
   primaryButtonClassName,
   secondaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type ProjectForm = {
   title: string
@@ -106,6 +107,7 @@ function coverImage(project: PortfolioProjectWithRelations) {
 
 export function PortfolioManagement() {
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const canManage = can('portfolio.manage')
   const [projects, setProjects] = useState<PortfolioProjectWithRelations[]>([])
   const [total, setTotal] = useState(0)
@@ -266,7 +268,13 @@ export function PortfolioManagement() {
   }
 
   const removeProject = async (project: PortfolioProject) => {
-    if (!window.confirm(`Delete “${project.title}” and all of its images? This cannot be undone.`)) return
+    const ok = await confirm({
+      title: `Delete “${project.title}”?`,
+      description: 'This removes the project and all of its images.',
+      confirmLabel: 'Delete project',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setError('')
     const result = await deletePortfolioProject(project.id)
     if (result.error) setError(result.error)
@@ -299,7 +307,13 @@ export function PortfolioManagement() {
   }
 
   const removeImage = async (project: PortfolioProjectWithRelations, imageId: string, storagePath: string) => {
-    if (!window.confirm('Delete this portfolio image?')) return
+    const ok = await confirm({
+      title: 'Delete this image?',
+      description: 'The image is removed from the portfolio project.',
+      confirmLabel: 'Delete image',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setError('')
     if (project.cover_image_path === storagePath) {
       const coverResult = await setPortfolioProjectCoverImage(project.id, null)
@@ -356,7 +370,13 @@ export function PortfolioManagement() {
   }
 
   const removeCategory = async (category: PortfolioCategory) => {
-    if (!window.confirm(`Delete “${category.name}”? Projects using it will become uncategorized.`)) return
+    const ok = await confirm({
+      title: `Delete “${category.name}”?`,
+      description: 'Projects using this category will become uncategorized.',
+      confirmLabel: 'Delete category',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deletePortfolioCategory(category.id)
     if (result.error) setError(result.error)
     else {

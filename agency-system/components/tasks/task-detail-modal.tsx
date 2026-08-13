@@ -30,6 +30,7 @@ import {
   inputClassName,
   primaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 const PRIORITY_ORDER: TaskPriority[] = ['high', 'medium', 'low']
 
@@ -89,6 +90,7 @@ export function TaskDetailModal({
   onChanged: () => void | Promise<void>
 }) {
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const [form, setForm] = useState({
     title: '',
     description: '',
@@ -265,7 +267,14 @@ export function TaskDetailModal({
   }
 
   const remove = async () => {
-    if (!window.confirm(`Delete “${task.title}”?`)) return
+    if (!task) return
+    const ok = await confirm({
+      title: `Delete “${task.title}”?`,
+      description: 'This removes the task and its activity history.',
+      confirmLabel: 'Delete task',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setDeleting(true)
     setError('')
     const result = await deleteTask(task.id)

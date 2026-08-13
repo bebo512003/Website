@@ -27,6 +27,7 @@ import {
   inputClassName,
   primaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 const PAGE_SIZE = 20
 
@@ -48,6 +49,7 @@ const emptyByStatus = (): Record<TaskStatus, TaskWithRelations[]> => ({
 
 export default function TasksPage() {
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const [tasksByStatus, setTasksByStatus] = useState<Record<TaskStatus, TaskWithRelations[]>>(emptyByStatus)
   const [totalsByStatus, setTotalsByStatus] = useState<Record<TaskStatus, number>>({ todo: 0, inprogress: 0, review: 0, done: 0 })
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
@@ -133,7 +135,13 @@ export default function TasksPage() {
   }
 
   const remove = async (task: TaskWithRelations) => {
-    if (!window.confirm(`Delete “${task.title}”?`)) return
+    const ok = await confirm({
+      title: `Delete “${task.title}”?`,
+      description: 'This removes the task and its activity history.',
+      confirmLabel: 'Delete task',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteTask(task.id)
     if (result.error) setError(result.error)
     else await load()

@@ -30,6 +30,7 @@ import {
   PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS, PROJECT_STATUS_ORDER, projectStatusBadgeClass,
 } from '@/lib/project-lifecycle'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type Tab = 'team' | 'roles' | 'clients' | 'projects' | 'access' | 'permissions' | 'forms' | 'portfolio'
 type MemberWithProfile = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
@@ -54,6 +55,7 @@ const slugify = (value: string) =>
 
 export default function AdminPage() {
   const { can, hasAny } = useAuth()
+  const confirm = useConfirm()
   const canOpenAdmin = hasAny(...ADMIN_AREA_PERMISSIONS)
   const visibleTabs = useMemo(() => ([
     { id: 'team' as const, show: can('employee.manage') || can('employee.edit') },
@@ -205,7 +207,13 @@ export default function AdminPage() {
   }
 
   const removeEmployeeRole = async (role: EmployeeRole) => {
-    if (!window.confirm(`Delete the job role “${role.name}”? Employees assigned to it become unassigned.`)) return
+    const ok = await confirm({
+      title: `Delete the job role “${role.name}”?`,
+      description: 'Employees assigned to it become unassigned.',
+      confirmLabel: 'Delete role',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteEmployeeRole(role.id)
     if (result.error) setError(result.error)
     else {
@@ -238,7 +246,13 @@ export default function AdminPage() {
   }
 
   const removeProject = async (project: ProjectWithClient) => {
-    if (!window.confirm(`Delete “${project.name}”? This also deletes its assignments, tasks, and project files.`)) return
+    const ok = await confirm({
+      title: `Delete “${project.name}”?`,
+      description: 'This also deletes its assignments, tasks, and project files.',
+      confirmLabel: 'Delete project',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteProject(project.id)
     if (result.error) setError(result.error)
     else {

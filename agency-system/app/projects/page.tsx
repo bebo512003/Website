@@ -14,6 +14,7 @@ import {
 } from '@/lib/project-lifecycle'
 import { PROJECT_CREATE_STATUSES } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 const PAGE_SIZE = 12
 
@@ -57,6 +58,7 @@ function displayName(member: Pick<Profile, 'full_name' | 'email' | 'job_title'> 
 
 export default function ProjectsPage() {
   const { can, profile } = useAuth()
+  const confirm = useConfirm()
   const canCreate = can('project.create')
   const canEdit = can('project.edit')
   const canAssign = can('project.assign')
@@ -164,7 +166,13 @@ export default function ProjectsPage() {
   }
 
   const remove = async (project: ProjectWithClient) => {
-    if (!window.confirm(`Delete “${project.name}”? This action cannot be undone.`)) return
+    const ok = await confirm({
+      title: `Delete “${project.name}”?`,
+      description: 'This deletes the project along with its assignments, tasks, and files.',
+      confirmLabel: 'Delete project',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteProject(project.id)
     if (result.error) setError(result.error)
     else {
