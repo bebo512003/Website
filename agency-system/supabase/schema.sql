@@ -7,7 +7,7 @@
 -- This snapshot intentionally contains the complete migration chain so running it
 -- on an empty Supabase project produces the same functional schema as applying the
 -- migrations in order. It contains no application/business seed records.
--- Included migrations (27):
+-- Included migrations (40):
 --   20260808000000_secure_roles_and_projects.sql
 --   20260808010000_intake_forms.sql
 --   20260808020000_multi_service_public_intake.sql
@@ -35,6 +35,19 @@
 --   20260829000000_my_work_task_management.sql
 --   20260830000000_project_activity_audit.sql
 --   20260831000000_project_delivery_closure.sql
+--   20260901000000_public_submission_tracking.sql
+--   20260902000000_client_portal.sql
+--   20260903000000_client_feedback_shared_files.sql
+--   20260904000000_unified_in_app_notifications.sql
+--   20260905000000_deadline_escalation_reminders.sql
+--   20260906000000_transactional_email.sql
+--   20260908000000_list_pagination_rpc.sql
+--   20260909000000_operational_analytics.sql
+--   20260910000000_anonymous_signin_fallback.sql
+--   20260911000000_public_form_submit_reliability.sql
+--   20260912000000_public_form_crypto_search_path.sql
+--   20260913000000_public_form_trigger_safety.sql
+--   20260914000000_save_public_form_submission.sql
 
 -- ── BEGIN MIGRATION: 20260808000000_secure_roles_and_projects.sql ─────────────────────────────────────────────
 -- Agency OS production schema
@@ -10860,3 +10873,5724 @@ grant execute on function public.unarchive_project(uuid) to authenticated;
 
 commit;
 -- ── END MIGRATION: 20260831000000_project_delivery_closure.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260901000000_public_submission_tracking.sql ─────────────────────────────────────────────
+-- Session 16 — Public Submission Confirmation & Tracking
+--
+-- Provides a professional confirmation experience and a secure read-only tracking
+-- mechanism for clients who submit a dynamic form.
+--
+-- Key principles:
+--   * Unguessable, human-friendly request reference number (e.g. REQ-2608-ABC123)
+--   * High-entropy tracking token for direct URLs
+--   * Clients do NOT need an account to track their submission
+--   * Public tracking RPC exposes ONLY minimal, non-sensitive projection
+--   * Zero leakage of internal notes, reviewer identity, or audit logs
+
+begin;
+
+-- ── 1. Reference generator function ──────────────────────────────────────────
+create or replace function public.generate_submission_reference()
+returns text
+language plpgsql
+as $$
+declare
+  prefix text;
+  rand_part text;
+  candidate text;
+  loop_count integer := 0;
+begin
+  prefix := 'REQ-' || to_char(now() at time zone 'utc', 'YYMM') || '-';
+  loop
+    loop_count := loop_count + 1;
+    -- Generate 6 uppercase alphanumeric characters
+    rand_part := upper(substr(encode(gen_random_bytes(4), 'hex'), 1, 6));
+    candidate := prefix || rand_part;
+    if not exists (select 1 from public.form_submissions where reference_number = candidate) then
+      return candidate;
+    end if;
+    if loop_count > 20 then
+      return prefix || upper(substr(md5(gen_random_uuid()::text), 1, 8));
+    end if;
+  end loop;
+end;
+$$;
+
+-- ── 2. Add reference number & tracking token to form_submissions ─────────────
+alter table public.form_submissions
+  add column if not exists reference_number text,
+  add column if not exists tracking_token text;
+
+comment on column public.form_submissions.reference_number is
+  'Human-friendly unique reference code (e.g. REQ-2608-ABC123) shown to the client upon submission.';
+comment on column public.form_submissions.tracking_token is
+  'Cryptographically safe random token for read-only submission status tracking URLs.';
+
+-- Backfill existing rows
+update public.form_submissions
+set reference_number = 'REQ-' || to_char(coalesce(submitted_at, created_at) at time zone 'utc', 'YYMM') || '-' || upper(substr(md5(id::text || coalesce(submitted_at, created_at)::text), 1, 6))
+where reference_number is null;
+
+update public.form_submissions
+set tracking_token = encode(digest(id::text || coalesce(submitted_at, created_at)::text || gen_random_uuid()::text, 'sha256'), 'hex')
+where tracking_token is null;
+
+-- Set defaults and non-null constraints
+alter table public.form_submissions
+  alter column reference_number set default public.generate_submission_reference(),
+  alter column reference_number set not null,
+  alter column tracking_token set default encode(gen_random_bytes(24), 'hex'),
+  alter column tracking_token set not null;
+
+alter table public.form_submissions drop constraint if exists form_submissions_reference_number_unique;
+alter table public.form_submissions add constraint form_submissions_reference_number_unique unique (reference_number);
+
+alter table public.form_submissions drop constraint if exists form_submissions_tracking_token_unique;
+alter table public.form_submissions add constraint form_submissions_tracking_token_unique unique (tracking_token);
+
+create index if not exists idx_form_submissions_ref_upper on public.form_submissions (upper(reference_number));
+create index if not exists idx_form_submissions_tracking_token on public.form_submissions (tracking_token);
+
+-- ── 3. Public tracking RPC (minimal, non-sensitive projection) ────────────────
+create or replace function public.get_public_submission_tracking(p_tracking_key text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  clean_key text;
+  sub_rec record;
+  stage_idx integer;
+  status_label text;
+  status_desc text;
+begin
+  clean_key := btrim(coalesce(p_tracking_key, ''));
+  if clean_key = '' then
+    return null;
+  end if;
+
+  select
+    s.id,
+    s.reference_number,
+    s.tracking_token,
+    s.form_id,
+    ft.title as form_title,
+    ft.description as form_description,
+    s.status,
+    s.respondent_name,
+    s.company_name,
+    s.submitted_at,
+    s.updated_at,
+    (s.project_id is not null) as has_project
+  into sub_rec
+  from public.form_submissions s
+  left join public.form_templates ft on ft.id = s.form_id
+  where upper(s.reference_number) = upper(clean_key)
+     or s.tracking_token = clean_key
+  limit 1;
+
+  if sub_rec.id is null then
+    return null;
+  end if;
+
+  -- Map internal workflow status to safe client-facing stage & descriptions
+  case sub_rec.status
+    when 'new' then
+      stage_idx := 1;
+      status_label := 'Received';
+      status_desc := 'Your submission has been securely received and queued for initial team review.';
+    when 'reviewing' then
+      stage_idx := 2;
+      status_label := 'Under Review';
+      status_desc := 'Our creative and technical specialists are actively evaluating your request requirements.';
+    when 'need_information' then
+      stage_idx := 2;
+      status_label := 'Information Needed';
+      status_desc := 'Our team needs a few clarifications. Please check your email for questions from our team.';
+    when 'qualified' then
+      stage_idx := 3;
+      status_label := 'Qualified';
+      status_desc := 'Your request has been qualified and approved for scoping and kickoff planning.';
+    when 'approved' then
+      stage_idx := 3;
+      status_label := 'Approved';
+      status_desc := 'Your request is approved. Team assignments and project setup are underway.';
+    when 'converted' then
+      stage_idx := 4;
+      status_label := 'In Progress';
+      status_desc := 'Your request has transitioned to an active project in our production pipeline.';
+    when 'rejected' then
+      stage_idx := 0;
+      status_label := 'Declined';
+      status_desc := 'We are currently unable to take on this project. Thank you for considering us.';
+    when 'archived' then
+      stage_idx := 0;
+      status_label := 'Archived';
+      status_desc := 'This request has been archived or closed.';
+    else
+      stage_idx := 1;
+      status_label := 'Received';
+      status_desc := 'Your request is in our system and will be processed shortly.';
+  end case;
+
+  return jsonb_build_object(
+    'id', sub_rec.id,
+    'reference_number', sub_rec.reference_number,
+    'tracking_token', sub_rec.tracking_token,
+    'form_id', sub_rec.form_id,
+    'form_title', coalesce(sub_rec.form_title, 'Service Request'),
+    'form_description', sub_rec.form_description,
+    'status', sub_rec.status,
+    'client_status_label', status_label,
+    'client_status_description', status_desc,
+    'stage_index', stage_idx,
+    'submitted_at', sub_rec.submitted_at,
+    'updated_at', sub_rec.updated_at,
+    'respondent_name', sub_rec.respondent_name,
+    'company_name', sub_rec.company_name,
+    'has_project', sub_rec.has_project,
+    'expected_response_time', '1–2 business days (24–48 hours)',
+    'contact_email', 'support@agencyos.studio',
+    'contact_phone', '+1 (555) 019-2834',
+    'support_hours', 'Monday – Friday, 9:00 AM – 6:00 PM EST'
+  );
+end;
+$$;
+
+revoke all on function public.get_public_submission_tracking(text) from public;
+grant execute on function public.get_public_submission_tracking(text) to anon, authenticated;
+
+-- ── 4. Update submit_dynamic_form to store creation reference in event ───────
+create or replace function public.submit_dynamic_form(
+  p_form_id uuid,
+  p_answers jsonb
+)
+returns public.form_submissions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  q public.form_questions;
+  val jsonb;
+  txt text;
+  is_empty boolean;
+  missing text[];
+  submission_rec public.form_submissions;
+  linked_client_id uuid;
+  linked_project_id uuid;
+  file_item jsonb;
+  file_path text;
+  file_name text;
+  file_size bigint;
+  file_ext text;
+  rating_max_val integer;
+  -- Rate limiting
+  recent_count integer;
+  -- Duplicate detection
+  respondent_email_val text;
+  fp text;
+  dup_count integer;
+  -- Payload validation
+  answer_key text;
+  answer_val text;
+begin
+  -- ── Form existence and status ──────────────────────────────────────────
+  select * into form_rec from public.form_templates where id = p_form_id;
+  if not found then
+    raise exception 'Form not found';
+  end if;
+  if form_rec.status <> 'published' then
+    raise exception 'This form is not accepting submissions';
+  end if;
+
+  -- ── Payload size guard ─────────────────────────────────────────────────
+  if length(p_answers::text) > 102400 then
+    raise exception 'Your submission is too large. Please shorten your answers.';
+  end if;
+
+  for answer_key, answer_val in select * from jsonb_each_text(p_answers)
+  loop
+    if length(answer_val) > 10000 then
+      raise exception 'One of your answers exceeds the maximum allowed length.';
+    end if;
+  end loop;
+
+  -- ── Rate limiting: max 5 submissions per minute per session+form ───────
+  select count(*) into recent_count
+  from public.form_rate_limits
+  where session_id = auth.uid()
+    and form_id = p_form_id
+    and submitted_at > now() - interval '1 minute';
+
+  if recent_count >= 5 then
+    raise exception 'You are submitting too frequently. Please wait a moment and try again.';
+  end if;
+
+  -- ── Per-session cooldown: minimum 3 seconds between submissions ────────
+  if exists (
+    select 1 from public.form_rate_limits
+    where session_id = auth.uid()
+      and form_id = p_form_id
+      and submitted_at > now() - interval '3 seconds'
+  ) then
+    raise exception 'Please wait a few seconds before submitting again.';
+  end if;
+
+  -- ── Validate answers ───────────────────────────────────────────────────
+  for q in
+    select * from public.form_questions where form_id = p_form_id order by position, created_at
+  loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    is_empty := val is null
+      or val = 'null'::jsonb
+      or (jsonb_typeof(val) = 'string' and btrim(val #>> '{}') = '')
+      or (jsonb_typeof(val) = 'array' and jsonb_array_length(val) = 0);
+
+    if q.required and is_empty then
+      missing := coalesce(missing, '{}') || q.label;
+      continue;
+    end if;
+
+    if not is_empty then
+      if q.question_type in ('single_choice', 'dropdown') then
+        if jsonb_typeof(val) <> 'string'
+           or not exists (select 1 from jsonb_array_elements_text(q.options) o where o = val #>> '{}') then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'multiple_choice' then
+        if jsonb_typeof(val) <> 'array'
+           or exists (select 1 from jsonb_array_elements_text(val) v where not exists (
+                select 1 from jsonb_array_elements_text(q.options) o where o = v)) then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'yes_no' then
+        if jsonb_typeof(val) <> 'string' or (val #>> '{}') not in ('yes', 'no') then
+          raise exception 'Invalid answer for "%"', q.label;
+        end if;
+      elsif q.question_type = 'number' then
+        if jsonb_typeof(val) <> 'number' and (jsonb_typeof(val) <> 'string' or (val #>> '{}') !~ '^-?\d+(\.\d+)?$') then
+          raise exception 'Invalid number for "%"', q.label;
+        end if;
+      elsif q.question_type = 'rating' then
+        rating_max_val := greatest(1, least(10, coalesce(nullif(q.config ->> 'rating_max', '')::integer, 5)));
+        if (val #>> '{}') !~ '^\d+$'
+           or (val #>> '{}')::integer < 1
+           or (val #>> '{}')::integer > rating_max_val then
+          raise exception 'Invalid rating for "%"', q.label;
+        end if;
+      elsif q.question_type = 'file_upload' then
+        if jsonb_typeof(val) <> 'array' then
+          raise exception 'Invalid file answer for "%"', q.label;
+        end if;
+        if jsonb_array_length(val) > 10 then
+          raise exception 'Too many files uploaded for "%". Maximum is 10.', q.label;
+        end if;
+
+        for file_item in select * from jsonb_array_elements(val) loop
+          file_name := coalesce(file_item ->> 'name', '');
+          file_size := coalesce(nullif(file_item ->> 'size', '')::bigint, 0);
+
+          if file_size > 20971520 then
+            raise exception 'Uploaded file "%" exceeds maximum allowed size of 20 MB.', file_name;
+          end if;
+
+          file_ext := lower(substring(file_name from '\.([a-zA-Z0-9]+)$'));
+          if file_ext in ('exe', 'bat', 'cmd', 'sh', 'php', 'phtml', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'py', 'js', 'vbs', 'msi', 'jar', 'scr', 'hta', 'ps1') then
+            raise exception 'Uploaded file "%" has an unsafe file extension and is rejected.', file_name;
+          end if;
+        end loop;
+      end if;
+
+      txt := case when jsonb_typeof(val) = 'string' then btrim(val #>> '{}') else null end;
+      if nullif(txt, '') is not null then
+        if q.map_to = 'name' then submission_rec.respondent_name := txt; end if;
+        if q.map_to = 'email' then respondent_email_val := lower(txt); end if;
+        if q.map_to = 'phone' then submission_rec.respondent_phone := txt; end if;
+        if q.map_to = 'company' then submission_rec.company_name := txt; end if;
+      end if;
+    end if;
+  end loop;
+
+  submission_rec.respondent_email := respondent_email_val;
+
+  if missing is not null then
+    raise exception 'Required questions are missing: %', array_to_string(missing, ', ');
+  end if;
+
+  -- ── Duplicate submission detection ─────────────────────────────────────
+  if respondent_email_val is not null then
+    fp := encode(digest(respondent_email_val || p_form_id::text, 'sha256'), 'hex');
+    select count(*) into dup_count
+    from public.form_submission_fingerprints
+    where form_id = p_form_id
+      and fingerprint = fp
+      and submitted_at > now() - interval '5 minutes';
+
+    if dup_count > 0 then
+      raise exception 'You have already submitted a response recently. Please wait a few minutes before submitting again.';
+    end if;
+
+    insert into public.form_submission_fingerprints (form_id, fingerprint)
+    values (p_form_id, fp);
+  end if;
+
+  -- ── Record rate-limit entry ────────────────────────────────────────────
+  insert into public.form_rate_limits (session_id, form_id)
+  values (auth.uid(), p_form_id);
+
+  -- ── Match or create CRM client ─────────────────────────────────────────
+  if respondent_email_val is not null then
+    select id into linked_client_id
+    from public.clients
+    where lower(coalesce(email, '')) = respondent_email_val
+    order by created_at asc
+    limit 1;
+
+    if linked_client_id is null then
+      insert into public.clients (name, type, status, contact_person, email, phone, notes, created_by)
+      values (
+        coalesce(nullif(submission_rec.company_name, ''), nullif(submission_rec.respondent_name, ''), respondent_email_val),
+        'potential',
+        'potential',
+        nullif(submission_rec.respondent_name, ''),
+        respondent_email_val,
+        nullif(submission_rec.respondent_phone, ''),
+        'Created automatically from form "' || form_rec.title || '"',
+        auth.uid()
+      )
+      returning id into linked_client_id;
+    end if;
+  end if;
+
+  -- ── Optional: open a project ───────────────────────────────────────────
+  if coalesce(form_rec.settings ->> 'create_project_on_submit', 'false') = 'true' and linked_client_id is not null then
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (
+      coalesce(nullif(submission_rec.company_name, '') || ' — ', '') || form_rec.title,
+      'Created automatically from a submission to form "' || form_rec.title || '"',
+      linked_client_id,
+      form_rec.title,
+      'active', 1, 'Discovery', 0, auth.uid()
+    )
+    returning id into linked_project_id;
+  end if;
+
+  -- ── Store submission ───────────────────────────────────────────────────
+  insert into public.form_submissions
+    (form_id, form_version, status, respondent_name, respondent_email, respondent_phone, company_name, client_id, project_id, created_by)
+  values (
+    p_form_id, form_rec.version, 'new',
+    submission_rec.respondent_name, submission_rec.respondent_email,
+    submission_rec.respondent_phone, submission_rec.company_name,
+    linked_client_id, linked_project_id, auth.uid()
+  )
+  returning * into submission_rec;
+
+  -- Freeze each answer together with the question it answered
+  insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
+  select submission_rec.id, fq.id, to_jsonb(fq), p_answers -> fq.id::text
+  from public.form_questions fq
+  where fq.form_id = p_form_id
+    and public.is_form_question_visible(fq, p_answers)
+  order by fq.position, fq.created_at;
+
+  -- Record submission creation event in audit trail
+  insert into public.form_submission_events (
+    submission_id, actor_id, event_type, new_value, note, metadata
+  ) values (
+    submission_rec.id,
+    (select id from public.profiles where id = auth.uid()),
+    'created',
+    'new',
+    'Submission received',
+    jsonb_build_object(
+      'form_version', form_rec.version,
+      'form_title', form_rec.title,
+      'respondent_email', submission_rec.respondent_email,
+      'reference_number', submission_rec.reference_number
+    )
+  );
+
+  -- Attach uploaded files
+  for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    if jsonb_typeof(val) = 'array' then
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_path := file_item ->> 'storage_path';
+        if file_path is not null and (
+          (auth.uid() is not null and split_part(file_path, '/', 1) = auth.uid()::text)
+          or public.has_permission('submission.edit')
+        ) then
+          insert into public.form_submission_attachments
+            (submission_id, question_id, name, size, mime_type, storage_path, uploaded_by)
+          values (
+            submission_rec.id, q.id,
+            coalesce(nullif(file_item ->> 'name', ''), 'file'),
+            coalesce(nullif(file_item ->> 'size', '')::bigint, 0),
+            nullif(file_item ->> 'mime_type', ''),
+            file_path,
+            auth.uid()
+          )
+          on conflict (storage_path) do nothing;
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  return submission_rec;
+end;
+$$;
+revoke all on function public.submit_dynamic_form(uuid, jsonb) from public, anon;
+grant execute on function public.submit_dynamic_form(uuid, jsonb) to authenticated, anon;
+
+commit;
+-- ── END MIGRATION: 20260901000000_public_submission_tracking.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260902000000_client_portal.sql ─────────────────────────────────────────────
+-- Session 17 — Client Portal
+--
+-- Turns the Client role into a real, invitation-only portal:
+--   1. `client_portal_client_id()` — resolves the *active* client account's linked
+--      CRM record, and only for `client`-role profiles. Public form submitters have
+--      no profile and therefore no portal access until an Admin invites them.
+--   2. Admin-only client account provisioning (`admin_create_client_account`,
+--      `admin_update_client_account`, `admin_delete_client_account`) — creates a
+--      client profile placeholder that the trusted Auth provisioning flow claims.
+--   3. `handle_new_user` is extended so a trusted Auth user can claim a *client*
+--      placeholder (preserving the CRM link), not just a team-member placeholder.
+--   4. Sanitized, SECURITY DEFINER read RPCs for the portal: a client can only ever
+--      read projects whose `client_id` equals their own linked record. No internal
+--      notes, tasks, activity, files, staff, or other clients' data is returned.
+
+begin;
+
+-- ── 1. Portal identity: active client accounts only ──────────────────────────
+create or replace function public.client_portal_client_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p.client_id
+  from public.profiles p
+  where p.id = auth.uid()
+    and p.role = 'client'::public.app_role
+    and p.status = 'active';
+$$;
+
+-- ── 2. Client account provisioning (Admin-only invitations) ─────────────────
+create or replace function public.admin_create_client_account(
+  p_client_id uuid,
+  p_email text,
+  p_full_name text default null,
+  p_status text default 'active'
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  result public.profiles;
+  target_role_id uuid;
+  clean_email text := lower(trim(p_email));
+  clean_status text := lower(trim(p_status));
+begin
+  if not public.has_permission('admin.manage') then
+    raise exception 'Administrator access required: admin.manage';
+  end if;
+
+  if clean_email is null or clean_email = '' then
+    raise exception 'Email is required';
+  end if;
+
+  if clean_status not in ('active', 'inactive') then
+    clean_status := 'active';
+  end if;
+
+  if not exists (select 1 from public.clients where id = p_client_id) then
+    raise exception 'Client record not found';
+  end if;
+
+  -- Same provisioning rules as team accounts: an e-mail can never be shared by
+  -- two profiles or reused against an existing Auth login.
+  if exists (select 1 from public.profiles where lower(email) = clean_email) then
+    raise exception 'A profile with this email already exists: %', clean_email;
+  end if;
+
+  if exists (select 1 from auth.users u where lower(u.email) = clean_email) then
+    raise exception 'An account with this email already exists: %', clean_email;
+  end if;
+
+  select id into target_role_id
+  from public.app_roles
+  where key = 'client' and is_system
+  limit 1;
+
+  if target_role_id is null then
+    raise exception 'Client system role not found';
+  end if;
+
+  insert into public.profiles (
+    id, email, full_name, role, role_id, client_id, status, must_change_password
+  ) values (
+    gen_random_uuid(),
+    clean_email,
+    nullif(trim(p_full_name), ''),
+    'client'::public.app_role,
+    target_role_id,
+    p_client_id,
+    clean_status::text,
+    false
+  )
+  returning * into result;
+
+  return result;
+end;
+$$;
+
+create or replace function public.admin_update_client_account(
+  p_user_id uuid,
+  p_email text default null,
+  p_full_name text default null,
+  p_client_id uuid default null
+)
+returns public.profiles
+language plpgsql
+security definer
+set search_path = public, auth
+as $$
+declare
+  existing public.profiles;
+  result public.profiles;
+  clean_email text;
+begin
+  if not public.has_permission('admin.manage') then
+    raise exception 'Administrator access required: admin.manage';
+  end if;
+
+  select * into existing from public.profiles where id = p_user_id;
+  if not found then
+    raise exception 'Client account not found';
+  end if;
+
+  if existing.role <> 'client'::public.app_role then
+    raise exception 'Cannot manage non-client accounts from Client Portal management';
+  end if;
+
+  clean_email := case
+    when p_email is null then existing.email
+    else lower(trim(p_email))
+  end;
+
+  if clean_email is null or clean_email = '' then
+    raise exception 'Email is required';
+  end if;
+
+  if lower(clean_email) <> lower(existing.email)
+     and exists (select 1 from public.profiles where lower(email) = lower(clean_email) and id <> p_user_id) then
+    raise exception 'A profile with this email already exists: %', clean_email;
+  end if;
+
+  if p_client_id is not null and not exists (select 1 from public.clients where id = p_client_id) then
+    raise exception 'Client record not found';
+  end if;
+
+  update public.profiles
+  set email = clean_email,
+      full_name = case when p_full_name is not null then nullif(trim(p_full_name), '') else full_name end,
+      client_id = coalesce(p_client_id, client_id),
+      updated_at = now()
+  where id = p_user_id
+  returning * into result;
+
+  return result;
+end;
+$$;
+
+create or replace function public.admin_delete_client_account(p_user_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  existing public.profiles;
+begin
+  if not public.has_permission('admin.manage') then
+    raise exception 'Administrator access required: admin.manage';
+  end if;
+
+  select * into existing from public.profiles where id = p_user_id;
+  if not found then
+    raise exception 'Client account not found';
+  end if;
+
+  if existing.role <> 'client'::public.app_role then
+    raise exception 'Cannot delete non-client accounts from Client Portal management';
+  end if;
+
+  delete from public.profiles where id = p_user_id;
+  delete from auth.users where id = p_user_id;
+  return true;
+end;
+$$;
+
+revoke all on function public.admin_create_client_account(uuid, text, text, text) from public, anon;
+revoke all on function public.admin_update_client_account(uuid, text, text, uuid) from public, anon;
+revoke all on function public.admin_delete_client_account(uuid) from public, anon;
+grant execute on function public.admin_create_client_account(uuid, text, text, text) to authenticated;
+grant execute on function public.admin_update_client_account(uuid, text, text, uuid) to authenticated;
+grant execute on function public.admin_delete_client_account(uuid) to authenticated;
+
+-- ── 3. Extend trusted Auth provisioning to claim client placeholders ─────────
+-- Identical to the team-member claim, except the placeholder filter no longer
+-- excludes the client role and the CRM link (`client_id`) is preserved.
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  placeholder public.profiles;
+  target_role_id uuid;
+begin
+  if coalesce(new.is_anonymous, false)
+     or coalesce(new.raw_app_meta_data->>'provider', '') = 'anonymous' then
+    return new;
+  end if;
+
+  -- Existing permanent accounts may be updated by normal Auth operations.
+  if exists (select 1 from public.profiles where id = new.id) then
+    update public.profiles
+    set email = coalesce(nullif(lower(trim(new.email)), ''), email),
+        full_name = coalesce(nullif(trim(new.raw_user_meta_data->>'full_name'), ''), full_name),
+        updated_at = now()
+    where id = new.id;
+    return new;
+  end if;
+
+  -- Defence in depth if this function is invoked independently of the guard.
+  if coalesce(new.raw_app_meta_data->>'agency_os_admin_provisioned', 'false') <> 'true' then
+    raise exception 'Public account creation is disabled. An administrator must create this account.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtext('agency_os_admin_account_provisioning'));
+
+  select * into placeholder
+  from public.profiles
+  where lower(email) = lower(coalesce(new.email, ''))
+    and id <> new.id
+  order by created_at desc
+  limit 1;
+
+  if placeholder.id is not null then
+    target_role_id := placeholder.role_id;
+    if target_role_id is null then
+      select id into target_role_id
+      from public.app_roles
+      where key = placeholder.role::text and is_system
+      limit 1;
+    end if;
+
+    create temporary table if not exists _claimed_project_assignments (
+      project_id uuid,
+      assigned_by uuid,
+      assigned_at timestamptz
+    ) on commit drop;
+    delete from _claimed_project_assignments;
+
+    insert into _claimed_project_assignments (project_id, assigned_by, assigned_at)
+    select project_id, assigned_by, assigned_at
+    from public.project_members
+    where user_id = placeholder.id;
+
+    -- Frees the e-mail for the claimed profile (unique index) before insert.
+    delete from public.profiles where id = placeholder.id;
+
+    insert into public.profiles (
+      id, email, full_name, avatar_url, role, status, employee_role_id, role_id,
+      client_id, agency_name, agency_website, phone, whatsapp, bio, job_title,
+      department, specialization, location, portfolio_url, social_links,
+      must_change_password, skills, experience, certifications, previous_projects,
+      linkedin, behance, instagram, facebook, twitter, personal_website,
+      other_social_links, created_at, updated_at
+    )
+    values (
+      new.id,
+      coalesce(nullif(lower(trim(new.email)), ''), placeholder.email),
+      coalesce(nullif(trim(new.raw_user_meta_data->>'full_name'), ''), placeholder.full_name),
+      placeholder.avatar_url,
+      placeholder.role,
+      placeholder.status,
+      placeholder.employee_role_id,
+      target_role_id,
+      placeholder.client_id,
+      placeholder.agency_name,
+      placeholder.agency_website,
+      placeholder.phone,
+      placeholder.whatsapp,
+      placeholder.bio,
+      placeholder.job_title,
+      placeholder.department,
+      placeholder.specialization,
+      placeholder.location,
+      placeholder.portfolio_url,
+      coalesce(placeholder.social_links, '{}'::jsonb),
+      true,
+      placeholder.skills,
+      placeholder.experience,
+      placeholder.certifications,
+      placeholder.previous_projects,
+      placeholder.linkedin,
+      placeholder.behance,
+      placeholder.instagram,
+      placeholder.facebook,
+      placeholder.twitter,
+      placeholder.personal_website,
+      coalesce(placeholder.other_social_links, '{}'::jsonb),
+      placeholder.created_at,
+      now()
+    );
+
+    -- Preserve assignments made against the placeholder before it was claimed.
+    insert into public.project_members (project_id, user_id, assigned_by, assigned_at)
+    select project_id, new.id, assigned_by, assigned_at
+    from _claimed_project_assignments
+    on conflict do nothing;
+
+    return new;
+  end if;
+
+  -- One-time bootstrap for a brand-new workspace. The supplied bootstrap script
+  -- uses the same server-only marker. Once any profile exists this path is closed.
+  if not exists (select 1 from public.profiles) then
+    select id into target_role_id
+    from public.app_roles
+    where key = 'admin' and is_system
+    limit 1;
+
+    insert into public.profiles (
+      id, email, full_name, role, role_id, status, must_change_password
+    )
+    values (
+      new.id,
+      coalesce(lower(trim(new.email)), ''),
+      nullif(trim(new.raw_user_meta_data->>'full_name'), ''),
+      'admin'::public.app_role,
+      target_role_id,
+      'active',
+      false
+    );
+    return new;
+  end if;
+
+  raise exception 'Internal account must be created from Admin Team Management before Auth provisioning.';
+end;
+$$;
+
+-- ── 4. Sanitized, client-scoped portal reads ─────────────────────────────────
+-- Clients never touch the raw `projects` table: these functions return only the
+-- caller's own projects and only client-appropriate fields (no owner, manager,
+-- team, budget, health, priority, archive state, or internal audit columns).
+create or replace function public.get_client_portal_projects()
+returns table (
+  id uuid,
+  name text,
+  description text,
+  type text,
+  status text,
+  progress integer,
+  phase integer,
+  phase_name text,
+  start_date date,
+  due_date date,
+  reference_number text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  my_client_id uuid := public.client_portal_client_id();
+begin
+  if my_client_id is null then
+    return;
+  end if;
+
+  return query
+    select
+      p.id,
+      p.name,
+      p.description,
+      p.type,
+      p.status,
+      p.progress,
+      p.phase,
+      p.phase_name,
+      p.start_date,
+      p.due_date,
+      fs.reference_number,
+      p.created_at,
+      p.updated_at
+    from public.projects p
+    left join public.form_submissions fs on fs.id = p.source_submission_id
+    where p.client_id = my_client_id
+    order by p.updated_at desc, p.created_at desc;
+end;
+$$;
+
+create or replace function public.get_client_portal_project(p_project_id uuid)
+returns table (
+  id uuid,
+  name text,
+  description text,
+  type text,
+  status text,
+  progress integer,
+  phase integer,
+  phase_name text,
+  start_date date,
+  due_date date,
+  reference_number text,
+  created_at timestamptz,
+  updated_at timestamptz
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  my_client_id uuid := public.client_portal_client_id();
+begin
+  if my_client_id is null then
+    return;
+  end if;
+
+  return query
+    select
+      p.id,
+      p.name,
+      p.description,
+      p.type,
+      p.status,
+      p.progress,
+      p.phase,
+      p.phase_name,
+      p.start_date,
+      p.due_date,
+      fs.reference_number,
+      p.created_at,
+      p.updated_at
+    from public.projects p
+    left join public.form_submissions fs on fs.id = p.source_submission_id
+    where p.id = p_project_id
+      and p.client_id = my_client_id;
+end;
+$$;
+
+create or replace function public.get_client_portal_client()
+returns table (
+  id uuid,
+  name text,
+  email text,
+  contact_person text,
+  contact_position text
+)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  my_client_id uuid := public.client_portal_client_id();
+begin
+  if my_client_id is null then
+    return;
+  end if;
+
+  return query
+    select c.id, c.name, c.email, c.contact_person, c.contact_position
+    from public.clients c
+    where c.id = my_client_id;
+end;
+$$;
+
+revoke all on function public.get_client_portal_projects() from public, anon;
+revoke all on function public.get_client_portal_project(uuid) from public, anon;
+revoke all on function public.get_client_portal_client() from public, anon;
+grant execute on function public.get_client_portal_projects() to authenticated;
+grant execute on function public.get_client_portal_project(uuid) to authenticated;
+grant execute on function public.get_client_portal_client() to authenticated;
+
+commit;
+-- ── END MIGRATION: 20260902000000_client_portal.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260903000000_client_feedback_shared_files.sql ─────────────────────────────────────────────
+-- Session 18 — Client Feedback, Shared Files & Approval
+--
+-- Extends the invitation-only Client Portal with a collaboration layer that is
+-- deliberately SEPARATE from internal staff data:
+--
+--   * `client_shared_files`     — only files staff select (or that sit on a
+--                                 delivered package) are visible to the client.
+--   * `client_messages`         — client-visible conversation. Internal
+--                                 discussion stays in `comments` and is never
+--                                 readable by client accounts.
+--   * `client_approvals`        — client-owned approval / revision / feedback
+--                                 actions. Session 15 reserved this table so
+--                                 clients never write `project_deliveries`
+--                                 directly; SECURITY DEFINER RPCs apply the
+--                                 operational side-effects.
+--
+-- Isolation rules (enforced in PostgreSQL, not only the UI):
+--   * Clients never SELECT the raw `files`, `comments`, `project_deliveries`,
+--     `project_delivery_files`, or `project_activity` tables.
+--   * Portal reads/writes go through SECURITY DEFINER RPCs scoped to
+--     `client_portal_client_id()`.
+--   * Storage SELECT on `project-files` is allowed for a client only when the
+--     object is a shared or delivered file on their own project.
+--   * Client feedback notifies the project owner (and manager, if different).
+--   * Approval updates the delivery package + completion blockers.
+--   * A client revision request is a first-class operational event and opens
+--     a new preparing package (same path as a staff revision).
+
+begin;
+
+-- ── 1. Catalog / constraint extensions ──────────────────────────────────────
+insert into public.permissions (key, name, category, description) values
+  ('portal.collaborate', 'Client portal collaboration', 'portal',
+   'Share selected files with a client and post client-visible messages.')
+on conflict (key) do update set
+  name = excluded.name, category = excluded.category, description = excluded.description;
+
+-- Admin and Manager can share files / reply to the client by default.
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id
+from public.app_roles r, public.permissions p
+where r.key in ('admin', 'manager') and p.key = 'portal.collaborate'
+on conflict do nothing;
+
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check (
+  type in (
+    'info',
+    'assignment',
+    'project_update',
+    'task_update',
+    'task_assignment',
+    'form_submission',
+    'submission',
+    'client_feedback',
+    'client_approval',
+    'client_revision'
+  )
+);
+
+alter table public.project_activity drop constraint if exists project_activity_event_type_check;
+alter table public.project_activity add constraint project_activity_event_type_check check (
+  event_type in (
+    'created',
+    'submission_converted',
+    'owner_changed',
+    'manager_changed',
+    'member_added',
+    'member_removed',
+    'status_changed',
+    'deadline_changed',
+    'file_uploaded',
+    'file_deleted',
+    'delivery_prepared',
+    'delivery_ready',
+    'delivery_sent',
+    'delivery_file_added',
+    'delivery_file_removed',
+    'revision_requested',
+    'approval_recorded',
+    'archived',
+    'unarchived',
+    'file_shared',
+    'file_unshared',
+    'client_feedback',
+    'client_approved',
+    'client_revision_requested'
+  )
+);
+
+alter table public.project_deliveries drop constraint if exists project_deliveries_approval_state_check;
+alter table public.project_deliveries add constraint project_deliveries_approval_state_check check (
+  approval_state in (
+    'not_requested',
+    'awaiting_client',
+    'approved_internally',
+    'revision_required',
+    'approved_by_client'
+  )
+);
+
+comment on column public.project_deliveries.approval_state is
+  'Staff placeholder (approved_internally / awaiting_client) OR a real client-portal action (approved_by_client). Clients never write this column directly.';
+
+-- ── 2. Client-visible tables (never mixed with internal comments) ───────────
+create table if not exists public.client_shared_files (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  file_id uuid not null references public.files(id) on delete cascade,
+  shared_by uuid references public.profiles(id) on delete set null default auth.uid(),
+  note text,
+  shared_at timestamptz not null default now(),
+  unique (project_id, file_id)
+);
+
+comment on table public.client_shared_files is
+  'Explicit allow-list of project files a client may see. Working files stay private until shared, or until they sit on a delivered package.';
+
+create index if not exists idx_client_shared_files_project on public.client_shared_files(project_id);
+create index if not exists idx_client_shared_files_file on public.client_shared_files(file_id);
+
+create table if not exists public.client_messages (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  author_id uuid references public.profiles(id) on delete set null default auth.uid(),
+  body text not null,
+  kind text not null default 'message' check (kind in ('message', 'feedback', 'approval', 'revision')),
+  created_at timestamptz not null default now()
+);
+
+comment on table public.client_messages is
+  'Client-visible conversation. Internal staff discussion lives in `comments` and is never readable by client accounts.';
+
+create index if not exists idx_client_messages_project on public.client_messages(project_id, created_at);
+
+create table if not exists public.client_approvals (
+  id uuid primary key default gen_random_uuid(),
+  project_id uuid not null references public.projects(id) on delete cascade,
+  delivery_id uuid references public.project_deliveries(id) on delete set null,
+  action text not null check (action in ('approved', 'revision_requested', 'feedback')),
+  message text,
+  created_by uuid references public.profiles(id) on delete set null default auth.uid(),
+  created_at timestamptz not null default now()
+);
+
+comment on table public.client_approvals is
+  'Client-owned operational actions (approve / request revision / feedback). The only table a client action may write. Side-effects on delivery/project state happen inside SECURITY DEFINER RPCs.';
+
+create index if not exists idx_client_approvals_project on public.client_approvals(project_id, created_at desc);
+
+-- ── 3. RLS — staff read; clients never touch the raw tables ─────────────────
+alter table public.client_shared_files enable row level security;
+alter table public.client_messages enable row level security;
+alter table public.client_approvals enable row level security;
+
+drop policy if exists client_shared_files_select_staff on public.client_shared_files;
+create policy client_shared_files_select_staff on public.client_shared_files
+  for select to authenticated
+  using (
+    public.is_staff()
+    and public.can_access_project(project_id)
+  );
+
+drop policy if exists client_messages_select_staff on public.client_messages;
+create policy client_messages_select_staff on public.client_messages
+  for select to authenticated
+  using (
+    public.is_staff()
+    and public.can_access_project(project_id)
+  );
+
+drop policy if exists client_messages_insert_staff on public.client_messages;
+create policy client_messages_insert_staff on public.client_messages
+  for insert to authenticated
+  with check (
+    public.is_staff()
+    and author_id = auth.uid()
+    and public.can_access_project(project_id)
+    and kind = 'message'
+  );
+
+drop policy if exists client_approvals_select_staff on public.client_approvals;
+create policy client_approvals_select_staff on public.client_approvals
+  for select to authenticated
+  using (
+    public.is_staff()
+    and public.can_access_project(project_id)
+  );
+
+grant select on public.client_shared_files to authenticated;
+grant select, insert on public.client_messages to authenticated;
+grant select on public.client_approvals to authenticated;
+revoke all on public.client_shared_files from anon;
+revoke all on public.client_messages from anon;
+revoke all on public.client_approvals from anon;
+
+-- Defence in depth: internal comments are staff-only, even if project access
+-- helpers are ever loosened for the portal.
+drop policy if exists comments_select_authorized on public.comments;
+create policy comments_select_authorized on public.comments
+  for select to authenticated
+  using (
+    public.is_staff()
+    and public.can_access_entity(entity_type, entity_id)
+  );
+
+drop policy if exists comments_insert_authorized on public.comments;
+create policy comments_insert_authorized on public.comments
+  for insert to authenticated
+  with check (
+    public.is_staff()
+    and author_id = auth.uid()
+    and public.can_access_entity(entity_type, entity_id)
+  );
+
+drop policy if exists comments_update_own on public.comments;
+create policy comments_update_own on public.comments
+  for update to authenticated
+  using (public.is_staff() and public.is_active() and author_id = auth.uid())
+  with check (
+    public.is_staff()
+    and author_id = auth.uid()
+    and public.can_access_entity(entity_type, entity_id)
+  );
+
+drop policy if exists comments_delete_own_or_management on public.comments;
+create policy comments_delete_own_or_management on public.comments
+  for delete to authenticated
+  using (
+    public.is_staff()
+    and public.is_active()
+    and (author_id = auth.uid() or public.is_admin())
+  );
+
+comment on table public.comments is
+  'INTERNAL staff discussion. Clients have no SELECT/INSERT. Client-visible messages live in `client_messages`.';
+
+-- ── 4. Identity / visibility helpers ────────────────────────────────────────
+create or replace function public.client_owns_project(p_project_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select p_project_id is not null
+    and public.client_portal_client_id() is not null
+    and exists (
+      select 1 from public.projects p
+      where p.id = p_project_id
+        and p.client_id = public.client_portal_client_id()
+    );
+$$;
+
+comment on function public.client_owns_project(uuid) is
+  'True when the caller is an active client account and the project belongs to their CRM record.';
+
+create or replace function public.client_can_read_file(p_file_id uuid)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  my_client_id uuid := public.client_portal_client_id();
+  file_project uuid;
+  file_client uuid;
+begin
+  if my_client_id is null or p_file_id is null then
+    return false;
+  end if;
+  if public.must_change_password_pending() then
+    return false;
+  end if;
+
+  select f.project_id, p.client_id
+    into file_project, file_client
+  from public.files f
+  join public.projects p on p.id = f.project_id
+  where f.id = p_file_id;
+
+  if file_project is null or file_client is distinct from my_client_id then
+    return false;
+  end if;
+
+  if exists (
+    select 1 from public.client_shared_files s
+    where s.file_id = p_file_id and s.project_id = file_project
+  ) then
+    return true;
+  end if;
+
+  -- Delivered / approved package files are "selected" as the final set.
+  return exists (
+    select 1
+    from public.project_delivery_files df
+    join public.project_deliveries d on d.id = df.delivery_id
+    where df.file_id = p_file_id
+      and d.project_id = file_project
+      and d.status in ('delivered', 'approved')
+  );
+end;
+$$;
+
+create or replace function public.client_can_read_storage_object(p_object_name text)
+returns boolean
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  file_id uuid;
+begin
+  if p_object_name is null or btrim(p_object_name) = '' then
+    return false;
+  end if;
+  select id into file_id from public.files where storage_path = p_object_name;
+  if file_id is null then
+    return false;
+  end if;
+  return public.client_can_read_file(file_id);
+end;
+$$;
+
+-- Storage: clients may SELECT (and therefore create a signed URL for) only
+-- the files the helpers above accept. No insert/update/delete.
+drop policy if exists project_files_select_client on storage.objects;
+create policy project_files_select_client on storage.objects
+  for select to authenticated
+  using (
+    bucket_id = 'project-files'
+    and public.client_can_read_storage_object(name)
+  );
+
+-- ── 5. Completion blockers accept a real client approval ────────────────────
+create or replace function public.project_completion_blockers(p_project_id uuid)
+returns text[]
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  pkg public.project_deliveries;
+  file_count integer;
+  blockers text[] := '{}';
+begin
+  select * into proj from public.projects where id = p_project_id;
+  if proj.id is null then
+    return array['Project not found'];
+  end if;
+  if proj.archived_at is not null then
+    blockers := blockers || 'The project is archived';
+  end if;
+  if proj.status is distinct from 'delivered' and proj.status is distinct from 'completed' then
+    blockers := blockers || 'The project must be in Delivered before it can be completed';
+  end if;
+
+  select * into pkg from public.current_project_delivery(p_project_id);
+  if pkg.id is null then
+    blockers := blockers || 'Prepare a delivery package and attach at least one final delivery file';
+    return blockers;
+  end if;
+
+  select count(*)::integer into file_count
+  from public.project_delivery_files where delivery_id = pkg.id;
+
+  if file_count < 1 then
+    blockers := blockers || 'Attach at least one final delivery file';
+  end if;
+  if pkg.status not in ('delivered', 'approved') then
+    blockers := blockers || 'Mark the delivery package as delivered';
+  end if;
+  if pkg.approval_state not in ('approved_internally', 'approved_by_client') then
+    blockers := blockers || 'Record client approval or the internal approval placeholder';
+  end if;
+  return blockers;
+end;
+$$;
+
+-- ── 6. Auto-share delivered files ───────────────────────────────────────────
+create or replace function public.share_delivered_files_with_client()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.status in ('delivered', 'approved')
+     and (tg_op = 'INSERT' or old.status is distinct from new.status) then
+    insert into public.client_shared_files (project_id, file_id, shared_by, note)
+    select new.project_id, df.file_id, coalesce(new.delivered_by, auth.uid()),
+           'Shared automatically with the client as part of delivery v' || new.version::text
+    from public.project_delivery_files df
+    where df.delivery_id = new.id
+    on conflict (project_id, file_id) do nothing;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists share_delivered_files_with_client on public.project_deliveries;
+create trigger share_delivered_files_with_client
+after insert or update of status on public.project_deliveries
+for each row execute function public.share_delivered_files_with_client();
+
+-- ── 7. Notify the project owner (and manager) ───────────────────────────────
+create or replace function public.notify_project_owners(
+  p_project_id uuid,
+  p_type text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+begin
+  select * into proj from public.projects where id = p_project_id;
+  if proj.id is null then
+    return;
+  end if;
+
+  insert into public.notifications (
+    recipient_id, actor_id, project_id, type, title, message, action_url, metadata
+  )
+  select distinct recipient.id, auth.uid(), proj.id, p_type, p_title, p_message, p_action_url, coalesce(p_metadata, '{}'::jsonb)
+  from public.profiles recipient
+  where recipient.status = 'active'
+    and recipient.role <> 'client'::public.app_role
+    and recipient.id is distinct from auth.uid()
+    and recipient.id in (proj.owner_id, proj.manager_id)
+    and recipient.id is not null;
+end;
+$$;
+
+-- ── 8. Staff RPCs: share files + client-visible replies ─────────────────────
+create or replace function public.share_project_file_with_client(
+  p_project_id uuid,
+  p_file_id uuid,
+  p_note text default null
+)
+returns public.client_shared_files
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  file_rec public.files;
+  row public.client_shared_files;
+  clean_note text := nullif(btrim(coalesce(p_note, '')), '');
+begin
+  perform public.assert_staff_can_access_project(p_project_id);
+  if not (
+    public.has_permission('project.edit')
+    or public.has_permission('file.upload')
+    or public.has_permission('portal.collaborate')
+  ) then
+    raise exception 'You do not have permission to share files with the client.';
+  end if;
+
+  select * into file_rec from public.files where id = p_file_id;
+  if file_rec.id is null or file_rec.project_id is distinct from p_project_id then
+    raise exception 'Choose a file that belongs to this project.';
+  end if;
+
+  insert into public.client_shared_files (project_id, file_id, shared_by, note)
+  values (p_project_id, p_file_id, auth.uid(), clean_note)
+  on conflict (project_id, file_id) do update
+    set note = coalesce(excluded.note, public.client_shared_files.note),
+        shared_by = excluded.shared_by,
+        shared_at = now()
+  returning * into row;
+
+  insert into public.project_activity (project_id, actor_id, event_type, new_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'file_shared', file_rec.name,
+    jsonb_build_object('file_id', p_file_id, 'shared_file_id', row.id)
+  );
+  return row;
+end;
+$$;
+
+create or replace function public.unshare_project_file_with_client(p_project_id uuid, p_file_id uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  file_name text;
+begin
+  perform public.assert_staff_can_access_project(p_project_id);
+  if not (
+    public.has_permission('project.edit')
+    or public.has_permission('file.upload')
+    or public.has_permission('portal.collaborate')
+  ) then
+    raise exception 'You do not have permission to change the client file set.';
+  end if;
+
+  select name into file_name from public.files where id = p_file_id;
+  delete from public.client_shared_files
+  where project_id = p_project_id and file_id = p_file_id;
+  if not found then
+    raise exception 'That file is not in the client-shared set.';
+  end if;
+
+  insert into public.project_activity (project_id, actor_id, event_type, old_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'file_unshared', file_name,
+    jsonb_build_object('file_id', p_file_id)
+  );
+  return true;
+end;
+$$;
+
+create or replace function public.add_client_visible_message(p_project_id uuid, p_body text)
+returns public.client_messages
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  row public.client_messages;
+  clean_body text := btrim(coalesce(p_body, ''));
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  if not public.is_staff() or public.must_change_password_pending() then
+    raise exception 'Only staff can post a client-visible reply from the workspace.';
+  end if;
+  if not public.can_access_project(p_project_id) then
+    raise exception 'You do not have access to this project.';
+  end if;
+  if length(clean_body) = 0 then
+    raise exception 'A message cannot be empty.';
+  end if;
+  if length(clean_body) > 4000 then
+    raise exception 'A message cannot be longer than 4000 characters.';
+  end if;
+
+  select * into proj from public.projects where id = p_project_id;
+  if proj.id is null then raise exception 'Project not found'; end if;
+
+  insert into public.client_messages (project_id, author_id, body, kind)
+  values (p_project_id, auth.uid(), clean_body, 'message')
+  returning * into row;
+  return row;
+end;
+$$;
+
+-- ── 9. Client portal RPCs ───────────────────────────────────────────────────
+create or replace function public.assert_client_portal_project(p_project_id uuid)
+returns public.projects
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  my_client_id uuid := public.client_portal_client_id();
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  if my_client_id is null then
+    raise exception 'Client portal access is not available for this account.';
+  end if;
+  if public.must_change_password_pending() then
+    raise exception 'Replace the temporary password before using the portal.';
+  end if;
+  select * into proj from public.projects where id = p_project_id;
+  if proj.id is null or proj.client_id is distinct from my_client_id then
+    raise exception 'This project does not exist or is not linked to your account.';
+  end if;
+  return proj;
+end;
+$$;
+
+create or replace function public.get_client_portal_collaboration(p_project_id uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  pkg public.project_deliveries;
+  my_id uuid := auth.uid();
+  can_act boolean := false;
+begin
+  proj := public.assert_client_portal_project(p_project_id);
+  select * into pkg from public.current_project_delivery(p_project_id);
+
+  can_act := proj.archived_at is null
+    and proj.status in ('ready-for-delivery', 'delivered')
+    and pkg.id is not null
+    and pkg.status in ('delivered', 'approved')
+    and pkg.approval_state is distinct from 'approved_by_client';
+
+  return jsonb_build_object(
+    'project_status', proj.status,
+    'archived', proj.archived_at is not null,
+    'can_approve', can_act and proj.status = 'delivered' and pkg.status in ('delivered', 'approved'),
+    'can_request_revision', can_act,
+    'delivery', case
+      when pkg.id is not null and pkg.status in ('delivered', 'approved', 'revision_requested') then
+        jsonb_build_object(
+          'id', pkg.id,
+          'version', pkg.version,
+          'status', pkg.status,
+          'delivered_at', pkg.delivered_at,
+          'approval_state', case
+            when pkg.approval_state = 'approved_by_client' then 'approved_by_client'
+            when pkg.approval_state = 'revision_required' then 'revision_required'
+            when pkg.status in ('delivered', 'approved') then 'awaiting_you'
+            else 'not_ready'
+          end
+        )
+      else null
+    end,
+    'files', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', f.id,
+        'name', f.name,
+        'type', f.type,
+        'size', f.size,
+        'mime_type', f.mime_type,
+        'storage_path', f.storage_path,
+        'created_at', f.created_at,
+        'source', case
+          when exists (
+            select 1 from public.project_delivery_files df
+            join public.project_deliveries d on d.id = df.delivery_id
+            where df.file_id = f.id and d.project_id = proj.id and d.status in ('delivered', 'approved')
+          ) and exists (
+            select 1 from public.client_shared_files s
+            where s.file_id = f.id and s.project_id = proj.id
+          ) then 'both'
+          when exists (
+            select 1 from public.project_delivery_files df
+            join public.project_deliveries d on d.id = df.delivery_id
+            where df.file_id = f.id and d.project_id = proj.id and d.status in ('delivered', 'approved')
+          ) then 'delivery'
+          else 'shared'
+        end
+      ) order by f.created_at desc)
+      from public.files f
+      where f.project_id = proj.id
+        and public.client_can_read_file(f.id)
+    ), '[]'::jsonb),
+    'messages', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', m.id,
+        'body', m.body,
+        'kind', m.kind,
+        'created_at', m.created_at,
+        'mine', m.author_id = my_id,
+        'author_label', case
+          when m.author_id = my_id then 'You'
+          when author.role = 'client'::public.app_role then coalesce(nullif(trim(author.full_name), ''), 'Your account')
+          else coalesce(nullif(trim(author.full_name), ''), 'Your team')
+        end,
+        'from_client', coalesce(author.role = 'client'::public.app_role, false)
+      ) order by m.created_at)
+      from public.client_messages m
+      left join public.profiles author on author.id = m.author_id
+      where m.project_id = proj.id
+    ), '[]'::jsonb),
+    'approvals', coalesce((
+      select jsonb_agg(jsonb_build_object(
+        'id', a.id,
+        'action', a.action,
+        'message', a.message,
+        'created_at', a.created_at
+      ) order by a.created_at)
+      from public.client_approvals a
+      where a.project_id = proj.id
+        and a.created_by = my_id
+    ), '[]'::jsonb)
+  );
+end;
+$$;
+
+create or replace function public.add_client_portal_feedback(p_project_id uuid, p_body text)
+returns public.client_messages
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  row public.client_messages;
+  clean_body text := btrim(coalesce(p_body, ''));
+  actor_name text;
+begin
+  proj := public.assert_client_portal_project(p_project_id);
+  if length(clean_body) = 0 then
+    raise exception 'Feedback cannot be empty.';
+  end if;
+  if length(clean_body) > 4000 then
+    raise exception 'Feedback cannot be longer than 4000 characters.';
+  end if;
+
+  insert into public.client_messages (project_id, author_id, body, kind)
+  values (p_project_id, auth.uid(), clean_body, 'feedback')
+  returning * into row;
+
+  insert into public.client_approvals (project_id, action, message, created_by)
+  values (p_project_id, 'feedback', clean_body, auth.uid());
+
+  insert into public.project_activity (project_id, actor_id, event_type, new_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'client_feedback', left(clean_body, 280),
+    jsonb_build_object('message_id', row.id, 'client_facing', true)
+  );
+
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'The client')
+    into actor_name
+  from public.profiles where id = auth.uid();
+
+  perform public.notify_project_owners(
+    p_project_id,
+    'client_feedback',
+    'Client feedback on ' || proj.name,
+    coalesce(actor_name, 'The client') || ' left feedback on “' || proj.name || '”: ' || left(clean_body, 180),
+    '/projects/' || p_project_id::text,
+    jsonb_build_object(
+      'project_id', p_project_id,
+      'project_name', proj.name,
+      'message_id', row.id,
+      'kind', 'feedback'
+    )
+  );
+  return row;
+end;
+$$;
+
+create or replace function public.approve_client_portal_delivery(p_project_id uuid, p_note text default null)
+returns public.client_approvals
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  pkg public.project_deliveries;
+  row public.client_approvals;
+  clean_note text := nullif(btrim(coalesce(p_note, '')), '');
+  actor_name text;
+begin
+  proj := public.assert_client_portal_project(p_project_id);
+  if proj.archived_at is not null then
+    raise exception 'This project is archived and can no longer be approved.';
+  end if;
+  if proj.status not in ('delivered', 'ready-for-delivery') then
+    raise exception 'There is no delivery waiting for your approval.';
+  end if;
+
+  select * into pkg from public.current_project_delivery(p_project_id);
+  if pkg.id is null or pkg.status not in ('delivered', 'approved') then
+    raise exception 'Your team has not delivered a package for you to approve yet.';
+  end if;
+  if pkg.approval_state = 'approved_by_client' then
+    raise exception 'You have already approved this delivery.';
+  end if;
+
+  insert into public.client_approvals (project_id, delivery_id, action, message, created_by)
+  values (p_project_id, pkg.id, 'approved', clean_note, auth.uid())
+  returning * into row;
+
+  insert into public.client_messages (project_id, author_id, body, kind)
+  values (
+    p_project_id,
+    auth.uid(),
+    coalesce(clean_note, 'Approved the latest delivery.'),
+    'approval'
+  );
+
+  -- Operational side-effect: staff-owned delivery row is updated by this
+  -- definer function, never by a client table write.
+  update public.project_deliveries
+     set status = 'approved',
+         approval_state = 'approved_by_client',
+         approval_recorded_by = auth.uid(),
+         approval_recorded_at = now(),
+         approval_note = coalesce(clean_note, approval_note)
+   where id = pkg.id;
+
+  if proj.status = 'ready-for-delivery' then
+    update public.projects set status = 'delivered' where id = p_project_id;
+  end if;
+
+  insert into public.project_activity (project_id, actor_id, event_type, new_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'client_approved', 'approved_by_client',
+    jsonb_build_object(
+      'delivery_id', pkg.id,
+      'version', pkg.version,
+      'client_facing', true,
+      'internal_placeholder', false,
+      'note', left(coalesce(clean_note, ''), 280)
+    )
+  );
+
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'The client')
+    into actor_name
+  from public.profiles where id = auth.uid();
+
+  perform public.notify_project_owners(
+    p_project_id,
+    'client_approval',
+    'Client approved ' || proj.name,
+    coalesce(actor_name, 'The client') || ' approved delivery v' || pkg.version::text || ' on “' || proj.name || '”.',
+    '/projects/' || p_project_id::text,
+    jsonb_build_object(
+      'project_id', p_project_id,
+      'project_name', proj.name,
+      'delivery_id', pkg.id,
+      'version', pkg.version,
+      'action', 'approved'
+    )
+  );
+  return row;
+end;
+$$;
+
+create or replace function public.request_client_portal_revision(p_project_id uuid, p_note text)
+returns public.client_approvals
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  pkg public.project_deliveries;
+  row public.client_approvals;
+  clean_note text := btrim(coalesce(p_note, ''));
+  actor_name text;
+begin
+  proj := public.assert_client_portal_project(p_project_id);
+  if length(clean_note) = 0 then
+    raise exception 'Please describe what needs to change.';
+  end if;
+  if length(clean_note) > 4000 then
+    raise exception 'A revision request cannot be longer than 4000 characters.';
+  end if;
+  if proj.archived_at is not null or proj.status in ('completed', 'cancelled') then
+    raise exception 'This project can no longer accept a revision request.';
+  end if;
+
+  select * into pkg from public.current_project_delivery(p_project_id);
+  if pkg.id is null or pkg.status not in ('delivered', 'approved') then
+    raise exception 'There is no delivered package to request a revision on.';
+  end if;
+
+  insert into public.client_approvals (project_id, delivery_id, action, message, created_by)
+  values (p_project_id, pkg.id, 'revision_requested', clean_note, auth.uid())
+  returning * into row;
+
+  insert into public.client_messages (project_id, author_id, body, kind)
+  values (p_project_id, auth.uid(), clean_note, 'revision');
+
+  -- Distinct operational event BEFORE the status move so the timeline shows
+  -- the client action even though the existing delivery trigger also records
+  -- the package-level `revision_requested` event.
+  insert into public.project_activity (project_id, actor_id, event_type, old_value, new_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'client_revision_requested', pkg.status, 'revision_requested',
+    jsonb_build_object(
+      'delivery_id', pkg.id,
+      'version', pkg.version,
+      'client_facing', true,
+      'note', left(clean_note, 280)
+    )
+  );
+
+  -- Moving Delivered / Ready-for-delivery → In review reuses the Session 15
+  -- trigger: current package becomes revision_requested and a new preparing
+  -- package is opened. The client never writes those rows directly.
+  if proj.status <> 'in-review' then
+    update public.projects set status = 'in-review' where id = p_project_id;
+  else
+    update public.project_deliveries
+       set status = 'revision_requested',
+           approval_state = 'revision_required',
+           revision_note = clean_note
+     where id = pkg.id;
+  end if;
+
+  -- Keep the client's wording on the package even when the trigger supplied
+  -- a generic note.
+  update public.project_deliveries
+     set revision_note = clean_note,
+         approval_state = 'revision_required'
+   where id = pkg.id;
+
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'The client')
+    into actor_name
+  from public.profiles where id = auth.uid();
+
+  perform public.notify_project_owners(
+    p_project_id,
+    'client_revision',
+    'Revision requested on ' || proj.name,
+    coalesce(actor_name, 'The client') || ' requested a revision on “' || proj.name || '”: ' || left(clean_note, 180),
+    '/projects/' || p_project_id::text,
+    jsonb_build_object(
+      'project_id', p_project_id,
+      'project_name', proj.name,
+      'delivery_id', pkg.id,
+      'version', pkg.version,
+      'action', 'revision_requested'
+    )
+  );
+  return row;
+end;
+$$;
+
+-- ── 10. Grants ──────────────────────────────────────────────────────────────
+revoke all on function public.client_owns_project(uuid) from public, anon;
+revoke all on function public.client_can_read_file(uuid) from public, anon;
+revoke all on function public.client_can_read_storage_object(text) from public, anon;
+revoke all on function public.notify_project_owners(uuid, text, text, text, text, jsonb) from public, anon;
+revoke all on function public.share_project_file_with_client(uuid, uuid, text) from public, anon;
+revoke all on function public.unshare_project_file_with_client(uuid, uuid) from public, anon;
+revoke all on function public.add_client_visible_message(uuid, text) from public, anon;
+revoke all on function public.assert_client_portal_project(uuid) from public, anon;
+revoke all on function public.get_client_portal_collaboration(uuid) from public, anon;
+revoke all on function public.add_client_portal_feedback(uuid, text) from public, anon;
+revoke all on function public.approve_client_portal_delivery(uuid, text) from public, anon;
+revoke all on function public.request_client_portal_revision(uuid, text) from public, anon;
+
+grant execute on function public.client_owns_project(uuid) to authenticated;
+grant execute on function public.client_can_read_file(uuid) to authenticated;
+grant execute on function public.client_can_read_storage_object(text) to authenticated;
+grant execute on function public.share_project_file_with_client(uuid, uuid, text) to authenticated;
+grant execute on function public.unshare_project_file_with_client(uuid, uuid) to authenticated;
+grant execute on function public.add_client_visible_message(uuid, text) to authenticated;
+grant execute on function public.get_client_portal_collaboration(uuid) to authenticated;
+grant execute on function public.add_client_portal_feedback(uuid, text) to authenticated;
+grant execute on function public.approve_client_portal_delivery(uuid, text) to authenticated;
+grant execute on function public.request_client_portal_revision(uuid, text) to authenticated;
+
+commit;
+-- ── END MIGRATION: 20260903000000_client_feedback_shared_files.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260904000000_unified_in_app_notifications.sql ─────────────────────────────────────────────
+-- Session 19 — Unified in-app notification system
+--
+-- Normalizes every inbox row around a domain event. Inserts go through one
+-- SECURITY DEFINER helper (`emit_in_app_notification`) that:
+--   * never notifies the actor
+--   * never notifies inactive / pending-password accounts
+--   * never notifies a client of a staff-only event (and vice versa)
+--   * deduplicates on (recipient_id, dedupe_key)
+--
+-- Email is intentionally not added. `read_at` remains the unread flag.
+--
+-- Event catalog (recipient / title / link):
+--   submission.created         staff with submission.view   /admin/forms/… or /submissions
+--   submission.assigned        assigned reviewer            /submissions?submission=
+--   submission.status_changed  reviewer, else submission.view staff
+--   project.created            owner + manager              /projects/{id}
+--   project.assigned           new owner / manager          /projects/{id}
+--   team_member.assigned       added member (not lead)      /projects/{id}
+--   task.assigned              assignee                     /my-work?task=
+--   task.updated               current assignee             /my-work?task=
+--   client.feedback            owner + manager              /projects/{id}
+--   file.shared                linked client portal accounts /portal/projects/{id}
+--   delivery.ready             staff team (ready) + clients (delivered)
+
+begin;
+
+-- ── 1. Schema: domain event + dedupe ────────────────────────────────────────
+alter table public.notifications
+  add column if not exists event text,
+  add column if not exists dedupe_key text;
+
+comment on column public.notifications.event is
+  'Domain event key (submission.created, task.assigned, …). Source of truth for the inbox.';
+comment on column public.notifications.dedupe_key is
+  'Per-recipient uniqueness token so the same event is never delivered twice.';
+
+alter table public.notifications drop constraint if exists notifications_event_check;
+alter table public.notifications add constraint notifications_event_check check (
+  event is null or event in (
+    'submission.created',
+    'submission.assigned',
+    'submission.status_changed',
+    'project.created',
+    'project.assigned',
+    'team_member.assigned',
+    'task.assigned',
+    'task.updated',
+    'client.feedback',
+    'client.approval',
+    'client.revision',
+    'file.shared',
+    'delivery.ready'
+  )
+);
+
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check (
+  type in (
+    'info',
+    'assignment',
+    'project_update',
+    'task_update',
+    'task_assignment',
+    'form_submission',
+    'submission',
+    'client_feedback',
+    'client_approval',
+    'client_revision',
+    'file_shared',
+    'delivery_ready'
+  )
+);
+
+create unique index if not exists idx_notifications_dedupe
+  on public.notifications (recipient_id, dedupe_key);
+
+create index if not exists idx_notifications_event
+  on public.notifications (recipient_id, event, created_at desc);
+
+-- Clients need to read their own inbox for file.shared / delivery.ready.
+insert into public.role_permissions (role_id, permission_id)
+select r.id, p.id
+from public.app_roles r, public.permissions p
+where r.key = 'client' and p.key = 'notification.view'
+on conflict do nothing;
+
+-- ── 2. Core emitter ─────────────────────────────────────────────────────────
+create or replace function public.notification_display_name(p_user_id uuid)
+returns text
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'A team member')
+  from public.profiles
+  where id = p_user_id;
+$$;
+
+create or replace function public.emit_in_app_notification(
+  p_recipient_id uuid,
+  p_event text,
+  p_type text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_dedupe_key text,
+  p_actor_id uuid default null,
+  p_project_id uuid default null,
+  p_submission_id uuid default null,
+  p_task_id uuid default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor uuid := coalesce(
+    p_actor_id,
+    (select id from public.profiles where id = auth.uid())
+  );
+  recipient public.profiles;
+  inserted_id uuid;
+  client_events text[] := array['file.shared', 'delivery.ready'];
+begin
+  if actor is not null and not exists (select 1 from public.profiles where id = actor) then
+    actor := null;
+  end if;
+  if p_recipient_id is null or nullif(btrim(coalesce(p_dedupe_key, '')), '') is null then
+    return null;
+  end if;
+  if actor is not null and p_recipient_id is not distinct from actor then
+    return null;
+  end if;
+
+  select * into recipient from public.profiles where id = p_recipient_id;
+  if recipient.id is null
+     or recipient.status <> 'active'
+     or recipient.must_change_password then
+    return null;
+  end if;
+
+  -- Clients only receive the portal-facing events; staff never receive those
+  -- same rows (file.shared / the client copy of delivery.ready use a distinct
+  -- dedupe_key and are addressed only to client accounts).
+  if recipient.role = 'client'::public.app_role then
+    if p_event <> all (client_events) then
+      return null;
+    end if;
+  else
+    if p_event = 'file.shared' then
+      return null;
+    end if;
+  end if;
+
+  insert into public.notifications (
+    recipient_id, actor_id, project_id, submission_id, task_id,
+    type, event, title, message, action_url, metadata, dedupe_key
+  ) values (
+    p_recipient_id,
+    actor,
+    p_project_id,
+    p_submission_id,
+    p_task_id,
+    p_type,
+    p_event,
+    p_title,
+    p_message,
+    p_action_url,
+    coalesce(p_metadata, '{}'::jsonb),
+    p_dedupe_key
+  )
+  on conflict (recipient_id, dedupe_key) do nothing
+  returning id into inserted_id;
+
+  return inserted_id;
+end;
+$$;
+
+comment on function public.emit_in_app_notification(uuid, text, text, text, text, text, text, uuid, uuid, uuid, uuid, jsonb) is
+  'Single in-app notification writer. Dedupes, skips the actor, skips inactive accounts. No email.';
+
+create or replace function public.notify_staff_with_permission(
+  p_permission text,
+  p_event text,
+  p_type text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_dedupe_prefix text,
+  p_actor_id uuid default null,
+  p_project_id uuid default null,
+  p_submission_id uuid default null,
+  p_task_id uuid default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  rec record;
+  sent integer := 0;
+begin
+  for rec in
+    select p.id
+    from public.profiles p
+    where p.status = 'active'
+      and p.role <> 'client'::public.app_role
+      and not p.must_change_password
+      and public.user_has_permission(p.id, p_permission)
+  loop
+    if public.emit_in_app_notification(
+      rec.id, p_event, p_type, p_title, p_message, p_action_url,
+      p_dedupe_prefix || ':' || rec.id::text,
+      p_actor_id, p_project_id, p_submission_id, p_task_id, p_metadata
+    ) is not null then
+      sent := sent + 1;
+    end if;
+  end loop;
+  return sent;
+end;
+$$;
+
+create or replace function public.notify_client_accounts(
+  p_client_id uuid,
+  p_event text,
+  p_type text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_dedupe_prefix text,
+  p_actor_id uuid default null,
+  p_project_id uuid default null,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  rec record;
+  sent integer := 0;
+begin
+  if p_client_id is null then
+    return 0;
+  end if;
+  for rec in
+    select p.id
+    from public.profiles p
+    where p.client_id = p_client_id
+      and p.role = 'client'::public.app_role
+      and p.status = 'active'
+      and not p.must_change_password
+  loop
+    if public.emit_in_app_notification(
+      rec.id, p_event, p_type, p_title, p_message, p_action_url,
+      p_dedupe_prefix || ':' || rec.id::text,
+      p_actor_id, p_project_id, null, null, p_metadata
+    ) is not null then
+      sent := sent + 1;
+    end if;
+  end loop;
+  return sent;
+end;
+$$;
+
+-- ── 3. New submission ───────────────────────────────────────────────────────
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+  action text;
+begin
+  select * into form_rec from public.form_templates where id = new.form_id;
+
+  client_display_name := coalesce(
+    nullif(trim(new.respondent_name), ''),
+    nullif(trim(new.company_name), ''),
+    nullif(trim(new.respondent_email), ''),
+    'Anonymous client'
+  );
+
+  notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+  notif_message := 'New submission #' || substring(new.id::text, 1, 8)
+    || ' received from ' || client_display_name
+    || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+  action := '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text;
+
+  perform public.notify_staff_with_permission(
+    'submission.view',
+    'submission.created',
+    'form_submission',
+    notif_title,
+    notif_message,
+    action,
+    'submission.created:' || new.id::text,
+    (select id from public.profiles where id = auth.uid()),
+    new.project_id,
+    new.id,
+    null,
+    jsonb_build_object(
+      'submission_id', new.id,
+      'form_id', new.form_id,
+      'form_name', coalesce(form_rec.title, 'Form'),
+      'client_name', client_display_name,
+      'respondent_name', new.respondent_name,
+      'respondent_email', new.respondent_email,
+      'respondent_phone', new.respondent_phone,
+      'company_name', new.company_name,
+      'project_id', new.project_id,
+      'submitted_at', new.submitted_at,
+      'reference_number', new.reference_number
+    )
+  );
+  return new;
+end;
+$$;
+
+-- ── 4. Submission assigned / status changed ─────────────────────────────────
+create or replace function public.notify_submission_review_events()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  actor_name text;
+  reviewer_name text;
+  action text;
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  select * into form_rec from public.form_templates where id = new.form_id;
+  client_display := coalesce(
+    nullif(btrim(new.company_name), ''),
+    nullif(btrim(new.respondent_name), ''),
+    nullif(btrim(new.respondent_email), ''),
+    'a client'
+  );
+  actor_name := coalesce(public.notification_display_name(auth.uid()), 'A team member');
+  action := '/submissions?submission=' || new.id::text;
+
+  if new.reviewer_id is distinct from old.reviewer_id and new.reviewer_id is not null then
+    perform public.emit_in_app_notification(
+      new.reviewer_id,
+      'submission.assigned',
+      'assignment',
+      'You were assigned to review a submission',
+      'You were assigned to review the submission from ' || client_display
+        || ' for form “' || coalesce(form_rec.title, 'Form') || '” by ' || actor_name || '.',
+      action,
+      'submission.assigned:' || new.id::text || ':' || new.reviewer_id::text,
+      auth.uid(),
+      new.project_id,
+      new.id,
+      null,
+      jsonb_build_object(
+        'submission_id', new.id,
+        'form_id', new.form_id,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', client_display,
+        'respondent_name', new.respondent_name,
+        'respondent_email', new.respondent_email,
+        'company_name', new.company_name,
+        'assigned_by', actor_name,
+        'assigned_at', now()
+      )
+    );
+  end if;
+
+  if new.status is distinct from old.status and new.status is distinct from 'converted' then
+    select coalesce(nullif(trim(full_name), ''), email) into reviewer_name
+    from public.profiles where id = new.reviewer_id;
+
+    if new.reviewer_id is not null then
+      perform public.emit_in_app_notification(
+        new.reviewer_id,
+        'submission.status_changed',
+        'submission',
+        'Submission status updated',
+        'Submission from ' || client_display || ' moved from '
+          || replace(old.status, '_', ' ') || ' to ' || replace(new.status, '_', ' ')
+          || ' by ' || actor_name || '.',
+        action,
+        'submission.status_changed:' || new.id::text || ':' || new.status,
+        auth.uid(),
+        new.project_id,
+        new.id,
+        null,
+        jsonb_build_object(
+          'submission_id', new.id,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'client_name', client_display,
+          'status', new.status,
+          'previous_status', old.status,
+          'reviewer_name', reviewer_name
+        )
+      );
+    else
+      perform public.notify_staff_with_permission(
+        'submission.view',
+        'submission.status_changed',
+        'submission',
+        'Submission status updated',
+        'Submission from ' || client_display || ' moved from '
+          || replace(old.status, '_', ' ') || ' to ' || replace(new.status, '_', ' ')
+          || ' by ' || actor_name || '.',
+        action,
+        'submission.status_changed:' || new.id::text || ':' || new.status,
+        auth.uid(),
+        new.project_id,
+        new.id,
+        null,
+        jsonb_build_object(
+          'submission_id', new.id,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'client_name', client_display,
+          'status', new.status,
+          'previous_status', old.status
+        )
+      );
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_submission_review_events on public.form_submissions;
+create trigger notify_submission_review_events
+after update of reviewer_id, status on public.form_submissions
+for each row execute function public.notify_submission_review_events();
+
+-- The assignment RPC also inserted a notification directly. Route it through
+-- emit so a re-assign of the same reviewer cannot create a second row. The
+-- trigger above is the source of truth; drop the inline insert by wrapping
+-- the existing insert in a no-op when a matching dedupe_key already exists.
+-- We replace only the insert block by redefining the function from the last
+-- shipped version, calling emit instead of a raw insert.
+
+create or replace function public.assign_form_submission_reviewer(
+  p_submission_id uuid,
+  p_reviewer_id uuid,
+  p_note text default null
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  sub_rec public.form_submissions;
+  old_reviewer_id uuid;
+  old_reviewer_name text;
+  new_reviewer_name text;
+  caller_profile public.profiles;
+  target_reviewer public.profiles;
+  clean_note text := btrim(coalesce(p_note, ''));
+  action_event_type text;
+  now_ts timestamptz := now();
+  actor_name text;
+begin
+  if auth.uid() is null then raise exception 'Not authenticated'; end if;
+  if not public.has_permission('submission.assign') then
+    raise exception 'Not authorized to assign submissions';
+  end if;
+
+  select * into caller_profile from public.profiles where id = auth.uid();
+  if caller_profile.id is null or caller_profile.status <> 'active' then
+    raise exception 'User is not active';
+  end if;
+
+  select * into sub_rec from public.form_submissions where id = p_submission_id;
+  if sub_rec.id is null then raise exception 'Submission not found'; end if;
+
+  old_reviewer_id := sub_rec.reviewer_id;
+  if old_reviewer_id is not null then
+    select coalesce(nullif(full_name, ''), email) into old_reviewer_name
+    from public.profiles where id = old_reviewer_id;
+  end if;
+
+  actor_name := coalesce(nullif(caller_profile.full_name, ''), caller_profile.email, 'An administrator');
+
+  if p_reviewer_id is not null then
+    select * into target_reviewer from public.profiles where id = p_reviewer_id;
+    if target_reviewer.id is null or target_reviewer.status <> 'active' or target_reviewer.role = 'client'::public.app_role then
+      raise exception 'Selected reviewer is not an authorized team member';
+    end if;
+
+    new_reviewer_name := coalesce(nullif(target_reviewer.full_name, ''), target_reviewer.email);
+
+    update public.form_submissions
+       set reviewer_id = p_reviewer_id,
+           reviewed_at = now_ts,
+           updated_at = now_ts
+     where id = p_submission_id;
+
+    action_event_type := case
+      when old_reviewer_id is null then 'reviewer_assigned'
+      else 'reviewer_reassigned'
+    end;
+
+    if length(clean_note) > 0 then
+      insert into public.form_submission_notes (submission_id, author_id, note)
+      values (p_submission_id, auth.uid(), clean_note);
+    end if;
+
+    insert into public.form_submission_events (
+      submission_id, actor_id, event_type, old_value, new_value, note, metadata
+    ) values (
+      p_submission_id, auth.uid(), action_event_type, old_reviewer_name, new_reviewer_name,
+      case when length(clean_note) > 0 then clean_note else null end,
+      jsonb_build_object(
+        'reviewer_id', p_reviewer_id,
+        'reviewer_name', new_reviewer_name,
+        'previous_reviewer_id', old_reviewer_id,
+        'actor_name', actor_name
+      )
+    );
+    -- Inbox row is written by notify_submission_review_events.
+  else
+    update public.form_submissions
+       set reviewer_id = null, reviewed_at = null, updated_at = now_ts
+     where id = p_submission_id;
+
+    if length(clean_note) > 0 then
+      insert into public.form_submission_notes (submission_id, author_id, note)
+      values (p_submission_id, auth.uid(), clean_note);
+    end if;
+
+    insert into public.form_submission_events (
+      submission_id, actor_id, event_type, old_value, new_value, note, metadata
+    ) values (
+      p_submission_id, auth.uid(), 'reviewer_unassigned', old_reviewer_name, null,
+      case when length(clean_note) > 0 then clean_note else null end,
+      jsonb_build_object(
+        'previous_reviewer_id', old_reviewer_id,
+        'previous_reviewer_name', old_reviewer_name,
+        'actor_name', actor_name
+      )
+    );
+  end if;
+
+  return true;
+end;
+$$;
+
+-- ── 5. Project created / assigned / team member ─────────────────────────────
+create or replace function public.notify_project_created()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor_name text := coalesce(public.notification_display_name(auth.uid()), 'A team member');
+  meta jsonb;
+begin
+  meta := jsonb_build_object(
+    'project_id', new.id,
+    'project_name', new.name,
+    'status', new.status,
+    'assigned_by', actor_name
+  );
+
+  if new.owner_id is not null then
+    perform public.emit_in_app_notification(
+      new.owner_id,
+      'project.created',
+      'project_update',
+      'New project created',
+      '“' || new.name || '” was created and you are the project owner.',
+      '/projects/' || new.id::text,
+      'project.created:' || new.id::text || ':' || new.owner_id::text,
+      auth.uid(), new.id, null, null, meta || jsonb_build_object('role', 'owner')
+    );
+  end if;
+
+  if new.manager_id is not null and new.manager_id is distinct from new.owner_id then
+    perform public.emit_in_app_notification(
+      new.manager_id,
+      'project.created',
+      'project_update',
+      'New project created',
+      '“' || new.name || '” was created and you are the project manager.',
+      '/projects/' || new.id::text,
+      'project.created:' || new.id::text || ':' || new.manager_id::text,
+      auth.uid(), new.id, null, null, meta || jsonb_build_object('role', 'manager')
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_project_created on public.projects;
+create trigger notify_project_created
+after insert on public.projects
+for each row execute function public.notify_project_created();
+
+-- Owner / manager change only. The previous blast to every member on any
+-- status/progress/health edit duplicated delivery.ready and assignment rows.
+create or replace function public.notify_project_update()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  actor_name text := coalesce(public.notification_display_name(auth.uid()), 'A team member');
+begin
+  if new.owner_id is distinct from old.owner_id and new.owner_id is not null then
+    perform public.emit_in_app_notification(
+      new.owner_id,
+      'project.assigned',
+      'assignment',
+      'You were assigned as project owner',
+      actor_name || ' assigned you as owner of “' || new.name || '”.',
+      '/projects/' || new.id::text,
+      'project.assigned:' || new.id::text || ':' || new.owner_id::text || ':owner',
+      auth.uid(), new.id, null, null,
+      jsonb_build_object('project_id', new.id, 'project_name', new.name, 'role', 'owner', 'assigned_by', actor_name)
+    );
+  end if;
+
+  if new.manager_id is distinct from old.manager_id and new.manager_id is not null then
+    perform public.emit_in_app_notification(
+      new.manager_id,
+      'project.assigned',
+      'assignment',
+      'You were assigned as project manager',
+      actor_name || ' assigned you as manager of “' || new.name || '”.',
+      '/projects/' || new.id::text,
+      'project.assigned:' || new.id::text || ':' || new.manager_id::text || ':manager',
+      auth.uid(), new.id, null, null,
+      jsonb_build_object('project_id', new.id, 'project_name', new.name, 'role', 'manager', 'assigned_by', actor_name)
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+create or replace function public.notify_project_assignment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  assigner_name text;
+begin
+  select * into proj_rec from public.projects where id = new.project_id;
+  if proj_rec.id is null then
+    return new;
+  end if;
+
+  -- Owner / manager already received project.created or project.assigned.
+  if new.user_id is not distinct from proj_rec.owner_id
+     or new.user_id is not distinct from proj_rec.manager_id then
+    return new;
+  end if;
+
+  select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'An administrator')
+    into assigner_name
+  from public.profiles
+  where id = coalesce(new.assigned_by, auth.uid());
+
+  if assigner_name is null then
+    assigner_name := 'An administrator';
+  end if;
+
+  perform public.emit_in_app_notification(
+    new.user_id,
+    'team_member.assigned',
+    'assignment',
+    'You have been assigned to a new project',
+    'You were assigned to project “' || coalesce(proj_rec.name, 'a project')
+      || '” (Status: ' || coalesce(proj_rec.status::text, 'active') || ') by ' || assigner_name || '.',
+    '/projects/' || new.project_id::text,
+    'team_member.assigned:' || new.project_id::text || ':' || new.user_id::text,
+    coalesce(new.assigned_by, auth.uid()),
+    new.project_id,
+    null,
+    null,
+    jsonb_build_object(
+      'project_id', new.project_id,
+      'project_name', coalesce(proj_rec.name, 'Project'),
+      'assigned_by', assigner_name,
+      'status', coalesce(proj_rec.status::text, 'active'),
+      'assigned_at', now()
+    )
+  );
+  return new;
+end;
+$$;
+
+-- ── 6. Task assigned / updated ──────────────────────────────────────────────
+create or replace function public.notify_task_assignment()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  assigner_name text;
+begin
+  if new.assignee_id is null then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.assignee_id is not distinct from old.assignee_id then
+    return new;
+  end if;
+
+  select * into proj_rec from public.projects where id = new.project_id;
+  assigner_name := coalesce(
+    public.notification_display_name(coalesce(auth.uid(), new.created_by)),
+    'A team member'
+  );
+
+  perform public.emit_in_app_notification(
+    new.assignee_id,
+    'task.assigned',
+    'task_assignment',
+    'New task assignment: ' || new.title,
+    'You were assigned “' || new.title || '” in project “'
+      || coalesce(proj_rec.name, 'a project') || '” by ' || assigner_name
+      || case when new.due_date is not null then ' (Due: ' || to_char(new.due_date, 'YYYY-MM-DD') || ')' else '' end
+      || '.',
+    '/my-work?task=' || new.id::text,
+    'task.assigned:' || new.id::text || ':' || new.assignee_id::text,
+    coalesce(auth.uid(), new.created_by),
+    new.project_id,
+    null,
+    new.id,
+    jsonb_build_object(
+      'task_id', new.id,
+      'task_title', new.title,
+      'project_id', new.project_id,
+      'project_name', coalesce(proj_rec.name, 'Project'),
+      'assigned_by', assigner_name,
+      'due_date', new.due_date,
+      'priority', new.priority,
+      'status', new.status,
+      'assigned_at', now()
+    )
+  );
+  return new;
+end;
+$$;
+
+create or replace function public.notify_task_updated()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  actor_name text;
+  bits text := '';
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+  if new.assignee_id is null then
+    return new;
+  end if;
+  -- Assignment is its own event.
+  if new.assignee_id is distinct from old.assignee_id
+     and new.status is not distinct from old.status
+     and new.priority is not distinct from old.priority
+     and new.due_date is not distinct from old.due_date
+     and new.title is not distinct from old.title then
+    return new;
+  end if;
+  if (new.status, new.priority, new.due_date, new.title)
+     is not distinct from (old.status, old.priority, old.due_date, old.title) then
+    return new;
+  end if;
+
+  select * into proj_rec from public.projects where id = new.project_id;
+  actor_name := coalesce(public.notification_display_name(auth.uid()), 'A team member');
+
+  if new.status is distinct from old.status then
+    bits := bits || 'status → ' || new.status;
+  end if;
+  if new.priority is distinct from old.priority then
+    bits := bits || case when bits <> '' then ', ' else '' end || 'priority → ' || new.priority;
+  end if;
+  if new.due_date is distinct from old.due_date then
+    bits := bits || case when bits <> '' then ', ' else '' end
+      || 'due date → ' || coalesce(to_char(new.due_date, 'YYYY-MM-DD'), 'none');
+  end if;
+  if new.title is distinct from old.title then
+    bits := bits || case when bits <> '' then ', ' else '' end || 'title updated';
+  end if;
+
+  perform public.emit_in_app_notification(
+    new.assignee_id,
+    'task.updated',
+    'task_update',
+    'Task updated: ' || new.title,
+    actor_name || ' updated “' || new.title || '” in “'
+      || coalesce(proj_rec.name, 'a project') || '” (' || bits || ').',
+    '/my-work?task=' || new.id::text,
+    'task.updated:' || new.id::text || ':' || coalesce(new.status, '') || ':'
+      || coalesce(new.priority, '') || ':' || coalesce(new.due_date::text, '') || ':' || md5(new.title),
+    auth.uid(),
+    new.project_id,
+    null,
+    new.id,
+    jsonb_build_object(
+      'task_id', new.id,
+      'task_title', new.title,
+      'project_id', new.project_id,
+      'project_name', coalesce(proj_rec.name, 'Project'),
+      'status', new.status,
+      'priority', new.priority,
+      'due_date', new.due_date
+    )
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_task_updated on public.tasks;
+create trigger notify_task_updated
+after update of status, priority, due_date, title on public.tasks
+for each row execute function public.notify_task_updated();
+
+-- ── 7. Client feedback / approval / revision (reuse existing helper) ────────
+create or replace function public.notify_project_owners(
+  p_project_id uuid,
+  p_type text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  ev text;
+  dedupe text;
+  recipient uuid;
+begin
+  select * into proj from public.projects where id = p_project_id;
+  if proj.id is null then
+    return;
+  end if;
+
+  ev := case p_type
+    when 'client_feedback' then 'client.feedback'
+    when 'client_approval' then 'client.approval'
+    when 'client_revision' then 'client.revision'
+    else 'client.feedback'
+  end;
+
+  dedupe := ev || ':' || p_project_id::text || ':' || coalesce(
+    p_metadata->>'message_id',
+    p_metadata->>'delivery_id',
+    md5(coalesce(p_message, p_title, ''))
+  );
+
+  foreach recipient in array array[proj.owner_id, proj.manager_id]
+  loop
+    perform public.emit_in_app_notification(
+      recipient, ev, p_type, p_title, p_message, p_action_url,
+      dedupe || ':' || recipient::text,
+      auth.uid(), proj.id, null, null, coalesce(p_metadata, '{}'::jsonb)
+    );
+  end loop;
+end;
+$$;
+
+-- ── 8. File shared → client portal accounts ─────────────────────────────────
+create or replace function public.share_project_file_with_client(
+  p_project_id uuid,
+  p_file_id uuid,
+  p_note text default null
+)
+returns public.client_shared_files
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  file_rec public.files;
+  row public.client_shared_files;
+  clean_note text := nullif(btrim(coalesce(p_note, '')), '');
+  proj public.projects;
+  actor_name text;
+begin
+  perform public.assert_staff_can_access_project(p_project_id);
+  if not (
+    public.has_permission('project.edit')
+    or public.has_permission('file.upload')
+    or public.has_permission('portal.collaborate')
+  ) then
+    raise exception 'You do not have permission to share files with the client.';
+  end if;
+
+  select * into file_rec from public.files where id = p_file_id;
+  if file_rec.id is null or file_rec.project_id is distinct from p_project_id then
+    raise exception 'Choose a file that belongs to this project.';
+  end if;
+
+  insert into public.client_shared_files (project_id, file_id, shared_by, note)
+  values (p_project_id, p_file_id, auth.uid(), clean_note)
+  on conflict (project_id, file_id) do update
+    set note = coalesce(excluded.note, public.client_shared_files.note),
+        shared_by = excluded.shared_by,
+        shared_at = now()
+  returning * into row;
+
+  insert into public.project_activity (project_id, actor_id, event_type, new_value, metadata)
+  values (
+    p_project_id, auth.uid(), 'file_shared', file_rec.name,
+    jsonb_build_object('file_id', p_file_id, 'shared_file_id', row.id)
+  );
+
+  select * into proj from public.projects where id = p_project_id;
+  actor_name := coalesce(public.notification_display_name(auth.uid()), 'Your team');
+
+  perform public.notify_client_accounts(
+    proj.client_id,
+    'file.shared',
+    'file_shared',
+    'A file was shared on ' || proj.name,
+    actor_name || ' shared “' || file_rec.name || '” on “' || proj.name || '”.',
+    '/portal/projects/' || p_project_id::text,
+    'file.shared:' || p_project_id::text || ':' || p_file_id::text,
+    auth.uid(),
+    p_project_id,
+    jsonb_build_object(
+      'project_id', p_project_id,
+      'project_name', proj.name,
+      'file_id', p_file_id,
+      'file_name', file_rec.name
+    )
+  );
+  return row;
+end;
+$$;
+
+-- ── 9. Delivery ready ───────────────────────────────────────────────────────
+-- Staff are notified when the package becomes ready. Clients are notified
+-- when the package is actually delivered (the moment it is visible to them).
+create or replace function public.notify_delivery_ready()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj public.projects;
+  actor_name text;
+  recipient uuid;
+begin
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status then
+    return new;
+  end if;
+
+  select * into proj from public.projects where id = new.project_id;
+  if proj.id is null then
+    return new;
+  end if;
+  actor_name := coalesce(public.notification_display_name(auth.uid()), 'A team member');
+
+  if new.status in ('ready', 'delivered') then
+    for recipient in
+      select distinct uid
+      from unnest(
+        array[proj.owner_id, proj.manager_id] || coalesce((
+          select array_agg(pm.user_id) from public.project_members pm where pm.project_id = proj.id
+        ), '{}'::uuid[])
+      ) as uid
+      where uid is not null
+    loop
+      perform public.emit_in_app_notification(
+        recipient,
+        'delivery.ready',
+        'delivery_ready',
+        'Delivery ready: ' || proj.name,
+        actor_name || ' marked delivery v' || new.version::text
+          || case when new.status = 'delivered' then ' delivered' else ' ready' end
+          || ' on “' || proj.name || '”.',
+        '/projects/' || proj.id::text,
+        'delivery.ready:' || proj.id::text || ':' || new.version::text || ':' || recipient::text,
+        auth.uid(),
+        proj.id,
+        null,
+        null,
+        jsonb_build_object(
+          'project_id', proj.id,
+          'project_name', proj.name,
+          'delivery_id', new.id,
+          'version', new.version,
+          'status', new.status
+        )
+      );
+    end loop;
+  end if;
+
+  if new.status = 'delivered' then
+    perform public.notify_client_accounts(
+      proj.client_id,
+      'delivery.ready',
+      'delivery_ready',
+      'Your delivery is ready',
+      'Delivery v' || new.version::text || ' for “' || proj.name || '” is ready to review.',
+      '/portal/projects/' || proj.id::text,
+      'delivery.ready.client:' || proj.id::text || ':' || new.version::text,
+      auth.uid(),
+      proj.id,
+      jsonb_build_object(
+        'project_id', proj.id,
+        'project_name', proj.name,
+        'delivery_id', new.id,
+        'version', new.version,
+        'status', new.status
+      )
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists notify_delivery_ready on public.project_deliveries;
+create trigger notify_delivery_ready
+after insert or update of status on public.project_deliveries
+for each row execute function public.notify_delivery_ready();
+
+-- ── 10. Grants ──────────────────────────────────────────────────────────────
+revoke all on function public.notification_display_name(uuid) from public, anon;
+revoke all on function public.emit_in_app_notification(uuid, text, text, text, text, text, text, uuid, uuid, uuid, uuid, jsonb) from public, anon;
+revoke all on function public.notify_staff_with_permission(text, text, text, text, text, text, text, uuid, uuid, uuid, uuid, jsonb) from public, anon;
+revoke all on function public.notify_client_accounts(uuid, text, text, text, text, text, text, uuid, uuid, jsonb) from public, anon;
+
+-- Keep the existing grants on the public RPCs we replaced.
+revoke all on function public.share_project_file_with_client(uuid, uuid, text) from public, anon;
+grant execute on function public.share_project_file_with_client(uuid, uuid, text) to authenticated;
+revoke all on function public.assign_form_submission_reviewer(uuid, uuid, text) from public, anon;
+grant execute on function public.assign_form_submission_reviewer(uuid, uuid, text) to authenticated;
+
+commit;
+-- ── END MIGRATION: 20260904000000_unified_in_app_notifications.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260905000000_deadline_escalation_reminders.sql ─────────────────────────────────────────────
+-- Session 20 — Deadline & escalation reminders
+--
+-- Server-side job (`run_deadline_reminders`) scans open tasks and open
+-- projects and writes in-app notifications through emit_in_app_notification.
+-- Every attempt that actually delivers (or is skipped after a successful
+-- uniqueness claim) is recorded in reminder_events.
+--
+-- Recipients:
+--   task.due_soon / task.due_today / task.overdue  → assignee
+--   task.overdue.escalation                        → project manager, then owner
+--   project.deadline_approaching / project.overdue → owner + manager
+--
+-- Inactive / pending-password accounts are never notified (emit already
+-- enforces this). Dedupe is (kind, entity, recipient, due_date) so a due-date
+-- change can produce a new reminder, but the same state never repeats.
+--
+-- Calendar math uses CURRENT_DATE on the database (typically UTC).
+
+begin;
+
+-- ── 1. Catalog: new domain events + UI type ────────────────────────────────
+alter table public.notifications drop constraint if exists notifications_event_check;
+alter table public.notifications add constraint notifications_event_check check (
+  event is null or event in (
+    'submission.created',
+    'submission.assigned',
+    'submission.status_changed',
+    'project.created',
+    'project.assigned',
+    'team_member.assigned',
+    'task.assigned',
+    'task.updated',
+    'client.feedback',
+    'client.approval',
+    'client.revision',
+    'file.shared',
+    'delivery.ready',
+    'task.due_soon',
+    'task.due_today',
+    'task.overdue',
+    'project.deadline_approaching',
+    'project.overdue'
+  )
+);
+
+alter table public.notifications drop constraint if exists notifications_type_check;
+alter table public.notifications add constraint notifications_type_check check (
+  type in (
+    'info',
+    'assignment',
+    'project_update',
+    'task_update',
+    'task_assignment',
+    'form_submission',
+    'submission',
+    'client_feedback',
+    'client_approval',
+    'client_revision',
+    'file_shared',
+    'delivery_ready',
+    'deadline_reminder'
+  )
+);
+
+-- ── 2. Reminder event log ──────────────────────────────────────────────────
+create table if not exists public.reminder_events (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null check (kind in (
+    'task.due_soon',
+    'task.due_today',
+    'task.overdue',
+    'task.overdue.escalation',
+    'project.deadline_approaching',
+    'project.overdue'
+  )),
+  entity_type text not null check (entity_type in ('task', 'project')),
+  entity_id uuid not null,
+  recipient_id uuid references public.profiles(id) on delete set null,
+  notification_id uuid references public.notifications(id) on delete set null,
+  due_date date not null,
+  dedupe_key text not null,
+  role text not null default 'assignee' check (role in ('assignee', 'manager', 'owner')),
+  created_at timestamptz not null default now()
+);
+
+comment on table public.reminder_events is
+  'Append-only record of deadline reminder deliveries. Unique on dedupe_key.';
+
+create unique index if not exists idx_reminder_events_dedupe
+  on public.reminder_events (dedupe_key);
+
+create index if not exists idx_reminder_events_entity
+  on public.reminder_events (entity_type, entity_id, created_at desc);
+
+create index if not exists idx_reminder_events_recipient
+  on public.reminder_events (recipient_id, created_at desc);
+
+alter table public.reminder_events enable row level security;
+
+-- Staff with notification.view can read the log for projects they can access;
+-- nobody (including authenticated) may insert/update/delete via the table API.
+create policy reminder_events_select_staff on public.reminder_events
+  for select to authenticated
+  using (
+    public.is_active()
+    and public.has_permission('notification.view')
+    and (
+      (entity_type = 'project' and public.can_access_project(entity_id))
+      or (entity_type = 'task' and exists (
+        select 1 from public.tasks t
+        where t.id = entity_id and public.can_access_project(t.project_id)
+      ))
+    )
+  );
+
+revoke insert, update, delete on public.reminder_events from anon, authenticated;
+grant select on public.reminder_events to authenticated;
+
+-- ── 3. Delivery helper ─────────────────────────────────────────────────────
+create or replace function public.record_deadline_reminder(
+  p_kind text,
+  p_entity_type text,
+  p_entity_id uuid,
+  p_recipient_id uuid,
+  p_due_date date,
+  p_role text,
+  p_event text,
+  p_title text,
+  p_message text,
+  p_action_url text,
+  p_project_id uuid,
+  p_task_id uuid,
+  p_metadata jsonb default '{}'::jsonb
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  claimed boolean := false;
+  notif_id uuid;
+  key text;
+begin
+  if p_recipient_id is null or p_due_date is null or p_entity_id is null then
+    return false;
+  end if;
+
+  key := p_kind || ':' || p_entity_id::text || ':' || p_recipient_id::text || ':' || p_due_date::text;
+
+  -- Claim uniqueness first so two overlapping cron ticks cannot double-send.
+  begin
+    insert into public.reminder_events (
+      kind, entity_type, entity_id, recipient_id, due_date, dedupe_key, role
+    ) values (
+      p_kind, p_entity_type, p_entity_id, p_recipient_id, p_due_date, key, coalesce(p_role, 'assignee')
+    );
+    claimed := true;
+  exception
+    when unique_violation then
+      return false;
+  end;
+
+  notif_id := public.emit_in_app_notification(
+    p_recipient_id,
+    p_event,
+    'deadline_reminder',
+    p_title,
+    p_message,
+    p_action_url,
+    key,
+    null, -- system actor: do not skip the recipient
+    p_project_id,
+    null,
+    p_task_id,
+    coalesce(p_metadata, '{}'::jsonb) || jsonb_build_object(
+      'reminder_kind', p_kind,
+      'reminder_role', coalesce(p_role, 'assignee'),
+      'due_date', p_due_date
+    )
+  );
+
+  if notif_id is null then
+    -- Inactive / pending-password / client. Drop the claim so a later run
+    -- can deliver once the account is eligible again.
+    delete from public.reminder_events where dedupe_key = key;
+    return false;
+  end if;
+
+  update public.reminder_events
+     set notification_id = notif_id
+   where dedupe_key = key;
+
+  return true;
+end;
+$$;
+
+-- ── 4. Scheduled job ───────────────────────────────────────────────────────
+create or replace function public.run_deadline_reminders(p_today date default current_date)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  today date := coalesce(p_today, current_date);
+  soon_days integer := 3;
+  project_soon_days integer := 7;
+  sent integer := 0;
+  skipped integer := 0;
+  rec record;
+  delivered boolean;
+  assignee_name text;
+begin
+  -- Open tasks with a due date and an assignee.
+  for rec in
+    select
+      t.id,
+      t.title,
+      t.due_date,
+      t.assignee_id,
+      t.project_id,
+      t.status,
+      p.name as project_name,
+      p.owner_id,
+      p.manager_id,
+      p.status as project_status,
+      p.archived_at
+    from public.tasks t
+    join public.projects p on p.id = t.project_id
+    where t.due_date is not null
+      and t.assignee_id is not null
+      and t.status is distinct from 'done'
+      and p.archived_at is null
+      and p.status not in ('completed', 'cancelled')
+  loop
+    if rec.due_date > today and rec.due_date <= today + soon_days then
+      delivered := public.record_deadline_reminder(
+        'task.due_soon', 'task', rec.id, rec.assignee_id, rec.due_date, 'assignee',
+        'task.due_soon',
+        'Task due soon: ' || rec.title,
+        '“' || rec.title || '” in “' || coalesce(rec.project_name, 'a project')
+          || '” is due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+        '/my-work?task=' || rec.id::text,
+        rec.project_id, rec.id,
+        jsonb_build_object('task_title', rec.title, 'project_name', rec.project_name, 'project_id', rec.project_id)
+      );
+      if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+    elsif rec.due_date = today then
+      delivered := public.record_deadline_reminder(
+        'task.due_today', 'task', rec.id, rec.assignee_id, rec.due_date, 'assignee',
+        'task.due_today',
+        'Task due today: ' || rec.title,
+        '“' || rec.title || '” in “' || coalesce(rec.project_name, 'a project')
+          || '” is due today.',
+        '/my-work?task=' || rec.id::text,
+        rec.project_id, rec.id,
+        jsonb_build_object('task_title', rec.title, 'project_name', rec.project_name, 'project_id', rec.project_id)
+      );
+      if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+    elsif rec.due_date < today then
+      delivered := public.record_deadline_reminder(
+        'task.overdue', 'task', rec.id, rec.assignee_id, rec.due_date, 'assignee',
+        'task.overdue',
+        'Task overdue: ' || rec.title,
+        '“' || rec.title || '” in “' || coalesce(rec.project_name, 'a project')
+          || '” was due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+        '/my-work?task=' || rec.id::text,
+        rec.project_id, rec.id,
+        jsonb_build_object('task_title', rec.title, 'project_name', rec.project_name, 'project_id', rec.project_id)
+      );
+      if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+
+      select coalesce(nullif(trim(full_name), ''), nullif(trim(email), ''), 'The assignee')
+        into assignee_name
+      from public.profiles where id = rec.assignee_id;
+
+      -- Escalate to manager, then owner, never the assignee twice.
+      if rec.manager_id is not null and rec.manager_id is distinct from rec.assignee_id then
+        delivered := public.record_deadline_reminder(
+          'task.overdue.escalation', 'task', rec.id, rec.manager_id, rec.due_date, 'manager',
+          'task.overdue',
+          'Escalation: overdue task ' || rec.title,
+          coalesce(assignee_name, 'The assignee') || ' has an overdue task “' || rec.title
+            || '” in “' || coalesce(rec.project_name, 'a project')
+            || '” (due ' || to_char(rec.due_date, 'YYYY-MM-DD') || ').',
+          '/projects/' || rec.project_id::text,
+          rec.project_id, rec.id,
+          jsonb_build_object(
+            'task_title', rec.title,
+            'project_name', rec.project_name,
+            'project_id', rec.project_id,
+            'assignee_id', rec.assignee_id,
+            'escalation', true
+          )
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+
+      if rec.owner_id is not null
+         and rec.owner_id is distinct from rec.assignee_id
+         and rec.owner_id is distinct from rec.manager_id then
+        delivered := public.record_deadline_reminder(
+          'task.overdue.escalation', 'task', rec.id, rec.owner_id, rec.due_date, 'owner',
+          'task.overdue',
+          'Escalation: overdue task ' || rec.title,
+          coalesce(assignee_name, 'The assignee') || ' has an overdue task “' || rec.title
+            || '” in “' || coalesce(rec.project_name, 'a project')
+            || '” (due ' || to_char(rec.due_date, 'YYYY-MM-DD') || ').',
+          '/projects/' || rec.project_id::text,
+          rec.project_id, rec.id,
+          jsonb_build_object(
+            'task_title', rec.title,
+            'project_name', rec.project_name,
+            'project_id', rec.project_id,
+            'assignee_id', rec.assignee_id,
+            'escalation', true
+          )
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+    end if;
+  end loop;
+
+  -- Open projects with a deadline.
+  for rec in
+    select
+      p.id,
+      p.name as project_name,
+      p.due_date,
+      p.owner_id,
+      p.manager_id,
+      p.status,
+      p.archived_at
+    from public.projects p
+    where p.due_date is not null
+      and p.archived_at is null
+      and p.status not in ('completed', 'cancelled')
+  loop
+    if rec.due_date > today and rec.due_date <= today + project_soon_days then
+      if rec.owner_id is not null then
+        delivered := public.record_deadline_reminder(
+          'project.deadline_approaching', 'project', rec.id, rec.owner_id, rec.due_date, 'owner',
+          'project.deadline_approaching',
+          'Project deadline approaching: ' || rec.project_name,
+          '“' || rec.project_name || '” is due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+          '/projects/' || rec.id::text,
+          rec.id, null,
+          jsonb_build_object('project_name', rec.project_name, 'project_id', rec.id)
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+      if rec.manager_id is not null and rec.manager_id is distinct from rec.owner_id then
+        delivered := public.record_deadline_reminder(
+          'project.deadline_approaching', 'project', rec.id, rec.manager_id, rec.due_date, 'manager',
+          'project.deadline_approaching',
+          'Project deadline approaching: ' || rec.project_name,
+          '“' || rec.project_name || '” is due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+          '/projects/' || rec.id::text,
+          rec.id, null,
+          jsonb_build_object('project_name', rec.project_name, 'project_id', rec.id)
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+    elsif rec.due_date < today then
+      if rec.owner_id is not null then
+        delivered := public.record_deadline_reminder(
+          'project.overdue', 'project', rec.id, rec.owner_id, rec.due_date, 'owner',
+          'project.overdue',
+          'Project overdue: ' || rec.project_name,
+          '“' || rec.project_name || '” was due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+          '/projects/' || rec.id::text,
+          rec.id, null,
+          jsonb_build_object('project_name', rec.project_name, 'project_id', rec.id)
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+      if rec.manager_id is not null and rec.manager_id is distinct from rec.owner_id then
+        delivered := public.record_deadline_reminder(
+          'project.overdue', 'project', rec.id, rec.manager_id, rec.due_date, 'manager',
+          'project.overdue',
+          'Project overdue: ' || rec.project_name,
+          '“' || rec.project_name || '” was due on ' || to_char(rec.due_date, 'YYYY-MM-DD') || '.',
+          '/projects/' || rec.id::text,
+          rec.id, null,
+          jsonb_build_object('project_name', rec.project_name, 'project_id', rec.id)
+        );
+        if delivered then sent := sent + 1; else skipped := skipped + 1; end if;
+      end if;
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'ok', true,
+    'today', today,
+    'sent', sent,
+    'skipped', skipped
+  );
+end;
+$$;
+
+comment on function public.run_deadline_reminders(date) is
+  'Server-side deadline scan. Call from /api/cron/reminders (service role). Not for browsers.';
+
+revoke all on function public.record_deadline_reminder(text, text, uuid, uuid, date, text, text, text, text, text, uuid, uuid, jsonb) from public, anon, authenticated;
+revoke all on function public.run_deadline_reminders(date) from public, anon, authenticated;
+
+do $$
+begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant execute on function public.run_deadline_reminders(date) to service_role;
+  end if;
+end $$;
+
+commit;
+-- ── END MIGRATION: 20260905000000_deadline_escalation_reminders.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260906000000_transactional_email.sql ─────────────────────────────────────────────
+-- Session 21 — Transactional email notifications (Resend)
+--
+-- High-value events only. The database never sends email itself: triggers
+-- enqueue rows into `email_outbox`, and the server-side job
+-- (GET /api/cron/emails, protected by CRON_SECRET) claims them, renders the
+-- branded template, and sends via the Resend provider. Delivery status is
+-- tracked through Resend webhooks (POST /api/email/resend-webhook) which
+-- append to `email_delivery_events` and update the outbox row.
+--
+-- Covered events (see README for the full matrix):
+--   submission-received      → public submitter          (form_submissions insert)
+--   new-submission           → staff with submission.view (form_submissions insert)
+--   client-invitation        → enqueued by the Next.js admin route (no trigger,
+--                              no password in the payload)
+--   delivery-ready           → client portal accounts    (project_deliveries → delivered)
+--   revision-approval-update → acting client             (client_approvals approved/revision_requested)
+--   project-update           → project owner + manager   (client_approvals feedback/approved/revision)
+--   task-assigned            → assignee                  (tasks insert / assignee change)
+--   project-assigned         → new owner/manager/member  (projects update, project_members insert)
+--
+-- Every other in-app notification stays inbox-only for now.
+--
+-- Duplicates are impossible: `email_outbox` has a unique
+-- (template_key, dedupe_key) index and the enqueue helper inserts with
+-- ON CONFLICT DO NOTHING. Claiming is optimistic (status='queued' guard) so
+-- concurrent workers can never double-send the same row.
+--
+-- The outbox is server-only: RLS denies every role and the enqueue helper is
+-- revocable; only SECURITY DEFINER triggers and the service-role server can
+-- read/write it. Sensitive payloads stay out of email content entirely
+-- (e.g. no passwords, no full answer dumps, no internal links in client mail).
+
+begin;
+
+-- ── 1. Outbox table ─────────────────────────────────────────────────────────
+create table if not exists public.email_outbox (
+  id uuid primary key default gen_random_uuid(),
+  template_key text not null check (template_key in (
+    'submission-received',
+    'client-invitation',
+    'delivery-ready',
+    'revision-approval-update',
+    'new-submission',
+    'task-assigned',
+    'project-assigned',
+    'project-update'
+  )),
+  recipient_email text not null,
+  recipient_user_id uuid references public.profiles(id) on delete set null,
+  payload jsonb not null default '{}'::jsonb,
+  dedupe_key text not null,
+  status text not null default 'queued'
+    check (status in ('queued', 'sending', 'sent', 'delivered', 'failed', 'skipped')),
+  attempts integer not null default 0 check (attempts >= 0),
+  provider text,
+  provider_message_id text,
+  last_error text,
+  next_attempt_at timestamptz not null default now(),
+  sent_at timestamptz,
+  delivered_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint email_outbox_template_dedupe_key unique (template_key, dedupe_key)
+);
+
+comment on table public.email_outbox is
+  'Server-side transactional email queue. Written by SECURITY DEFINER triggers / service role, flushed by GET /api/cron/emails, updated by the Resend webhook.';
+comment on column public.email_outbox.payload is
+  'Template variables only — never passwords, answers, or internal-only data.';
+comment on column public.email_outbox.status is
+  'queued → sending → sent → delivered (webhook). failed after retries are exhausted; skipped when expired or unrenderable.';
+comment on column public.email_outbox.next_attempt_at is
+  'Earliest time the row may be claimed again after a transient failure.';
+
+create index if not exists idx_email_outbox_claim
+  on public.email_outbox (status, next_attempt_at, created_at);
+create index if not exists idx_email_outbox_provider_message
+  on public.email_outbox (provider_message_id);
+
+alter table public.email_outbox enable row level security;
+
+-- Server-only: no browser role may ever read or write the queue.
+drop policy if exists email_outbox_no_public_read on public.email_outbox;
+create policy email_outbox_no_public_read on public.email_outbox
+  for select to anon, authenticated using (false);
+drop policy if exists email_outbox_no_public_write on public.email_outbox;
+create policy email_outbox_no_public_write on public.email_outbox
+  for insert to anon, authenticated with check (false);
+drop policy if exists email_outbox_no_public_update on public.email_outbox;
+create policy email_outbox_no_public_update on public.email_outbox
+  for update to anon, authenticated using (false);
+drop policy if exists email_outbox_no_public_delete on public.email_outbox;
+create policy email_outbox_no_public_delete on public.email_outbox
+  for delete to anon, authenticated using (false);
+
+revoke all on table public.email_outbox from anon, authenticated;
+
+-- ── 2. Provider delivery-event log ──────────────────────────────────────────
+create table if not exists public.email_delivery_events (
+  id uuid primary key default gen_random_uuid(),
+  provider text not null default 'resend',
+  provider_message_id text,
+  event_type text not null,
+  recipient_email text,
+  payload jsonb not null default '{}'::jsonb,
+  received_at timestamptz not null default now()
+);
+
+comment on table public.email_delivery_events is
+  'Append-only log of provider webhook events (sent/delivered/bounced/complained/…). Written only by the server webhook route.';
+
+create index if not exists idx_email_delivery_events_message
+  on public.email_delivery_events (provider_message_id, received_at desc);
+
+alter table public.email_delivery_events enable row level security;
+
+drop policy if exists email_delivery_events_no_public_read on public.email_delivery_events;
+create policy email_delivery_events_no_public_read on public.email_delivery_events
+  for select to anon, authenticated using (false);
+drop policy if exists email_delivery_events_no_public_write on public.email_delivery_events;
+create policy email_delivery_events_no_public_write on public.email_delivery_events
+  for insert to anon, authenticated with check (false);
+
+revoke all on table public.email_delivery_events from anon, authenticated;
+
+-- ── 3. Enqueue helper (deduped) ─────────────────────────────────────────────
+create or replace function public.enqueue_email(
+  p_template_key text,
+  p_recipient_email text,
+  p_recipient_user_id uuid default null,
+  p_payload jsonb default '{}'::jsonb,
+  p_dedupe_key text default null
+)
+returns uuid
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  inserted_id uuid;
+  clean_email text := lower(btrim(coalesce(p_recipient_email, '')));
+begin
+  if p_template_key is null
+     or clean_email = ''
+     or clean_email !~ '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$'
+     or nullif(btrim(coalesce(p_dedupe_key, '')), '') is null then
+    return null;
+  end if;
+
+  insert into public.email_outbox
+    (template_key, recipient_email, recipient_user_id, payload, dedupe_key)
+  values
+    (p_template_key, clean_email, p_recipient_user_id, coalesce(p_payload, '{}'::jsonb), p_dedupe_key)
+  on conflict (template_key, dedupe_key) do nothing
+  returning id into inserted_id;
+
+  return inserted_id;
+end;
+$$;
+
+comment on function public.enqueue_email(text, text, uuid, jsonb, text) is
+  'Deduplicated outbox writer used by email triggers and the server. Never callable from the browser.';
+
+-- Only the service role (from the Next.js server) may call this directly.
+revoke all on function public.enqueue_email(text, text, uuid, jsonb, text) from public, anon, authenticated;
+
+-- ── 4. Recipient eligibility (mirrors the in-app rules) ─────────────────────
+create or replace function public.email_staff_recipient_ok(p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = p_user_id
+      and status = 'active'
+      and not must_change_password
+      and role <> 'client'::public.app_role
+      and nullif(btrim(email), '') is not null
+  );
+$$;
+
+create or replace function public.email_client_recipient_ok(p_user_id uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.profiles
+    where id = p_user_id
+      and status = 'active'
+      and not must_change_password
+      and role = 'client'::public.app_role
+      and nullif(btrim(email), '') is not null
+  );
+$$;
+
+-- ── 5. Submission received (client) + new submission (staff) ────────────────
+create or replace function public.enqueue_submission_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  staff_display text;
+  rec record;
+begin
+  select * into form_rec from public.form_templates where id = new.form_id;
+
+  client_display := coalesce(
+    nullif(btrim(new.respondent_name), ''),
+    nullif(btrim(new.company_name), ''),
+    nullif(btrim(new.respondent_email), ''),
+    'A client'
+  );
+
+  -- Staff emails never fall back to the respondent's email address:
+  -- only the name / company travel over email.
+  staff_display := coalesce(
+    nullif(btrim(new.respondent_name), ''),
+    nullif(btrim(new.company_name), ''),
+    'A client'
+  );
+
+  -- Client: receipt with reference number + public tracking link.
+  -- Deliberately no internal data: no reviewer info, no answers, no staff links.
+  if nullif(btrim(coalesce(new.respondent_email, '')), '') is not null then
+    perform public.enqueue_email(
+      'submission-received',
+      new.respondent_email,
+      null,
+      jsonb_build_object(
+        'reference_number', new.reference_number,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'respondent_name', coalesce(nullif(btrim(new.respondent_name), ''), client_display),
+        'submitted_at', new.submitted_at,
+        'tracking_path', '/track/' || new.reference_number
+      ),
+      'submission.received:' || new.id::text
+    );
+  end if;
+
+  -- Internal: staff with submission.view get the new-submission email.
+  -- The respondent's email/phone are intentionally NOT included in email.
+  for rec in
+    select p.id, p.email
+    from public.profiles p
+    where public.email_staff_recipient_ok(p.id)
+      and public.user_has_permission(p.id, 'submission.view')
+  loop
+    perform public.enqueue_email(
+      'new-submission',
+      rec.email,
+      rec.id,
+      jsonb_build_object(
+        'reference_number', new.reference_number,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', staff_display,
+        'company_name', new.company_name,
+        'submission_id', new.id,
+        'submitted_at', new.submitted_at,
+        'inbox_path', '/submissions?submission=' || new.id::text
+      ),
+      'submission.created:' || new.id::text || ':' || rec.id::text
+    );
+  end loop;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_submission_emails on public.form_submissions;
+create trigger enqueue_submission_emails
+after insert on public.form_submissions
+for each row execute function public.enqueue_submission_emails();
+
+-- ── 6. Important assignment: task assigned ──────────────────────────────────
+create or replace function public.enqueue_task_assigned_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  state_key text;
+begin
+  if new.assignee_id is null then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.assignee_id is not distinct from old.assignee_id then
+    return new;
+  end if;
+  if new.assignee_id is not distinct from auth.uid() then
+    return new; -- assigning yourself needs no email
+  end if;
+  if not public.email_staff_recipient_ok(new.assignee_id) then
+    return new;
+  end if;
+
+  select * into proj_rec from public.projects where id = new.project_id;
+
+  -- A state snapshot in the key means the *same* assignment state never emails
+  -- twice, while a real reassignment (changed title/status/priority/due date)
+  -- produces a fresh key and a fresh email.
+  state_key := md5(concat_ws('|', new.title, new.status, new.priority, coalesce(new.due_date::text, '')));
+
+  perform public.enqueue_email(
+    'task-assigned',
+    (select email from public.profiles where id = new.assignee_id),
+    new.assignee_id,
+    jsonb_build_object(
+      'task_id', new.id,
+      'task_title', new.title,
+      'project_id', new.project_id,
+      'project_name', coalesce(proj_rec.name, 'a project'),
+      'due_date', new.due_date,
+      'priority', new.priority,
+      'task_path', '/my-work?task=' || new.id::text
+    ),
+    'task.assigned:' || new.id::text || ':' || new.assignee_id::text || ':' || state_key
+  );
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_task_assigned_email on public.tasks;
+create trigger enqueue_task_assigned_email
+after insert or update of assignee_id on public.tasks
+for each row execute function public.enqueue_task_assigned_email();
+
+-- ── 7. Important assignment: project owner / manager change ─────────────────
+create or replace function public.enqueue_project_lead_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op <> 'UPDATE' then
+    return new;
+  end if;
+
+  if new.owner_id is distinct from old.owner_id
+     and new.owner_id is not null
+     and new.owner_id is distinct from auth.uid()
+     and public.email_staff_recipient_ok(new.owner_id) then
+    perform public.enqueue_email(
+      'project-assigned',
+      (select email from public.profiles where id = new.owner_id),
+      new.owner_id,
+      jsonb_build_object(
+        'project_id', new.id,
+        'project_name', new.name,
+        'role', 'owner',
+        'project_path', '/projects/' || new.id::text
+      ),
+      'project.assigned:' || new.id::text || ':' || new.owner_id::text || ':owner'
+    );
+  end if;
+
+  if new.manager_id is distinct from old.manager_id
+     and new.manager_id is not null
+     and new.manager_id is distinct from new.owner_id
+     and new.manager_id is distinct from auth.uid()
+     and public.email_staff_recipient_ok(new.manager_id) then
+    perform public.enqueue_email(
+      'project-assigned',
+      (select email from public.profiles where id = new.manager_id),
+      new.manager_id,
+      jsonb_build_object(
+        'project_id', new.id,
+        'project_name', new.name,
+        'role', 'manager',
+        'project_path', '/projects/' || new.id::text
+      ),
+      'project.assigned:' || new.id::text || ':' || new.manager_id::text || ':manager'
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_project_lead_email on public.projects;
+create trigger enqueue_project_lead_email
+after update of owner_id, manager_id on public.projects
+for each row execute function public.enqueue_project_lead_email();
+
+-- ── 8. Important assignment: team member added to a project ─────────────────
+create or replace function public.enqueue_team_member_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+begin
+  if new.user_id is distinct from auth.uid()
+     and public.email_staff_recipient_ok(new.user_id) then
+    select * into proj_rec from public.projects where id = new.project_id;
+    perform public.enqueue_email(
+      'project-assigned',
+      (select email from public.profiles where id = new.user_id),
+      new.user_id,
+      jsonb_build_object(
+        'project_id', new.project_id,
+        'project_name', coalesce(proj_rec.name, 'a project'),
+        'role', 'team member',
+        'project_path', '/projects/' || new.project_id::text
+      ),
+      'team.member.assigned:' || new.project_id::text || ':' || new.user_id::text
+    );
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_team_member_email on public.project_members;
+create trigger enqueue_team_member_email
+after insert on public.project_members
+for each row execute function public.enqueue_team_member_email();
+
+-- ── 9. Important project update + client confirmation ───────────────────────
+-- client_approvals is the only table client actions write (feedback, approved,
+-- revision_requested). One trigger covers:
+--   * project-update email → owner + manager (all three actions)
+--   * revision-approval-update email → the acting client (approved / revision)
+create or replace function public.enqueue_client_collaboration_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  label text;
+  rec record;
+  actor_email text;
+begin
+  select * into proj_rec from public.projects where id = new.project_id;
+  if proj_rec.id is null then
+    return new;
+  end if;
+
+  label := case new.action
+    when 'approved' then 'Client approval'
+    when 'revision_requested' then 'Revision request'
+    else 'Client feedback'
+  end;
+
+  -- Internal: owner + manager.
+  for rec in
+    select distinct p.id, p.email
+    from unnest(array[proj_rec.owner_id, proj_rec.manager_id]) as u(id)
+    join public.profiles p on p.id = u.id
+    where u.id is not null
+      and public.email_staff_recipient_ok(u.id)
+  loop
+    perform public.enqueue_email(
+      'project-update',
+      rec.email,
+      rec.id,
+      jsonb_build_object(
+        'project_id', new.project_id,
+        'project_name', proj_rec.name,
+        'label', label,
+        'summary', left(coalesce(new.message, ''), 280),
+        'project_path', '/projects/' || new.project_id::text
+      ),
+      'client.collaboration:' || new.id::text || ':' || rec.id::text
+    );
+  end loop;
+
+  -- Client confirmation receipt for approval / revision request.
+  if new.action in ('approved', 'revision_requested') then
+    select p.email into actor_email
+    from public.profiles p
+    where p.id = new.created_by
+      and public.email_client_recipient_ok(p.id);
+    if actor_email is not null then
+      perform public.enqueue_email(
+        'revision-approval-update',
+        actor_email,
+        new.created_by,
+        jsonb_build_object(
+          'project_id', new.project_id,
+          'project_name', proj_rec.name,
+          'action', new.action,
+          'note', left(coalesce(new.message, ''), 280),
+          'portal_path', '/portal/projects/' || new.project_id::text
+        ),
+        'client.confirmation:' || new.id::text
+      );
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_client_collaboration_emails on public.client_approvals;
+create trigger enqueue_client_collaboration_emails
+after insert on public.client_approvals
+for each row execute function public.enqueue_client_collaboration_emails();
+
+-- ── 10. Delivery ready (client) ─────────────────────────────────────────────
+create or replace function public.enqueue_delivery_client_email()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  proj_rec public.projects;
+  rec record;
+begin
+  if tg_op = 'UPDATE' and new.status is not distinct from old.status then
+    return new;
+  end if;
+  if new.status <> 'delivered' then
+    return new;
+  end if;
+
+  select * into proj_rec from public.projects where id = new.project_id;
+  if proj_rec.id is null or proj_rec.client_id is null then
+    return new;
+  end if;
+
+  for rec in
+    select p.id, p.email
+    from public.profiles p
+    where p.client_id = proj_rec.client_id
+      and public.email_client_recipient_ok(p.id)
+  loop
+    perform public.enqueue_email(
+      'delivery-ready',
+      rec.email,
+      rec.id,
+      jsonb_build_object(
+        'project_id', proj_rec.id,
+        'project_name', proj_rec.name,
+        'version', new.version,
+        'portal_path', '/portal/projects/' || proj_rec.id::text
+      ),
+      'delivery.ready:' || new.id::text || ':' || new.version::text || ':' || rec.id::text
+    );
+  end loop;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists enqueue_delivery_client_email on public.project_deliveries;
+create trigger enqueue_delivery_client_email
+after insert or update of status on public.project_deliveries
+for each row execute function public.enqueue_delivery_client_email();
+
+commit;
+-- ── END MIGRATION: 20260906000000_transactional_email.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260908000000_list_pagination_rpc.sql ─────────────────────────────────────────────
+-- Session 23 — Server-side list pagination (search / filtering / sorting)
+--
+-- Large collections are filtered, sorted, and paged in the database. Most
+-- lists use parameterized PostgREST queries from the client (ilike/eq/in/
+-- order/range + exact count). The submission review inbox gets two dedicated
+-- SECURITY INVOKER functions because it needs cross-table search (form title,
+-- reviewer name) and a non-alphabetical "workflow priority" sort that cannot
+-- be expressed with PostgREST filters alone.
+--
+-- Both functions run with the caller's privileges, so RLS applies to every
+-- row they read — they never widen what the signed-in user can already see.
+
+begin;
+
+-- ── 1. Submission inbox page ────────────────────────────────────────────────
+-- One round trip returns: the requested page (with the form title and reviewer
+-- joined for display), the exact total matching the filters, search across the
+-- submission fields plus form title and reviewer name, status/reviewer/form
+-- filters, and newest / oldest / workflow-priority sorting that stays correct
+-- across pages.
+
+create or replace function public.get_submission_inbox_page(
+  p_search text default null,
+  p_status text default null,
+  p_reviewer_mode text default null,
+  p_reviewer_id uuid default null,
+  p_form_id uuid default null,
+  p_sort text default 'newest',
+  p_page integer default 1,
+  p_page_size integer default 25,
+  out data jsonb,
+  out total bigint
+)
+language plpgsql
+security invoker
+set search_path = public
+as $$
+declare
+  v_page integer := greatest(1, coalesce(p_page, 1));
+  v_page_size integer := least(100, greatest(1, coalesce(p_page_size, 25)));
+begin
+  select count(*)
+    into total
+    from public.form_submissions fs
+    left join public.form_templates ft on ft.id = fs.form_id
+    left join public.profiles pr on pr.id = fs.reviewer_id
+   where (p_search is null or p_search = ''
+          or fs.reference_number ilike '%' || p_search || '%'
+          or fs.respondent_name ilike '%' || p_search || '%'
+          or fs.respondent_email ilike '%' || p_search || '%'
+          or fs.respondent_phone ilike '%' || p_search || '%'
+          or fs.company_name ilike '%' || p_search || '%'
+          or ft.title ilike '%' || p_search || '%'
+          or pr.full_name ilike '%' || p_search || '%'
+          or pr.email ilike '%' || p_search || '%')
+     and (p_status is null
+          or (p_status = 'assigned_to_me' and fs.reviewer_id = auth.uid())
+          or (p_status <> 'assigned_to_me' and fs.status = p_status))
+     and (p_reviewer_mode is null
+          or (p_reviewer_mode = 'unassigned' and fs.reviewer_id is null)
+          or (p_reviewer_mode = 'assigned_to_me' and fs.reviewer_id = auth.uid()))
+     and (p_reviewer_id is null or fs.reviewer_id = p_reviewer_id)
+     and (p_form_id is null or fs.form_id = p_form_id);
+
+  select coalesce(jsonb_agg(row_to_json(r)), '[]'::jsonb)
+    into data
+    from (
+      select fs.*,
+             case when ft.id is null then null
+                  else jsonb_build_object('title', ft.title, 'slug', ft.slug)
+             end as form_templates,
+             case when pr.id is null then null
+                  else jsonb_build_object(
+                    'id', pr.id,
+                    'full_name', pr.full_name,
+                    'email', pr.email,
+                    'avatar_url', pr.avatar_url,
+                    'job_title', pr.job_title
+                  )
+             end as reviewer
+        from public.form_submissions fs
+        left join public.form_templates ft on ft.id = fs.form_id
+        left join public.profiles pr on pr.id = fs.reviewer_id
+       where (p_search is null or p_search = ''
+              or fs.reference_number ilike '%' || p_search || '%'
+              or fs.respondent_name ilike '%' || p_search || '%'
+              or fs.respondent_email ilike '%' || p_search || '%'
+              or fs.respondent_phone ilike '%' || p_search || '%'
+              or fs.company_name ilike '%' || p_search || '%'
+              or ft.title ilike '%' || p_search || '%'
+              or pr.full_name ilike '%' || p_search || '%'
+              or pr.email ilike '%' || p_search || '%')
+         and (p_status is null
+              or (p_status = 'assigned_to_me' and fs.reviewer_id = auth.uid())
+              or (p_status <> 'assigned_to_me' and fs.status = p_status))
+         and (p_reviewer_mode is null
+              or (p_reviewer_mode = 'unassigned' and fs.reviewer_id is null)
+              or (p_reviewer_mode = 'assigned_to_me' and fs.reviewer_id = auth.uid()))
+         and (p_reviewer_id is null or fs.reviewer_id = p_reviewer_id)
+         and (p_form_id is null or fs.form_id = p_form_id)
+       order by
+         (case when p_sort = 'oldest' then 1 else 0 end),
+         (case when p_sort = 'status'
+               then case fs.status
+                      when 'new' then 0
+                      when 'reviewing' then 1
+                      when 'need_information' then 2
+                      when 'qualified' then 3
+                      when 'approved' then 4
+                      when 'converted' then 5
+                      when 'rejected' then 6
+                      else 7
+                    end
+               else 0 end),
+         (case when p_sort = 'oldest' then fs.submitted_at else '-infinity'::timestamptz end) asc,
+         (case when p_sort = 'oldest' then 'infinity'::timestamptz else fs.submitted_at end) desc
+       limit v_page_size offset (v_page - 1) * v_page_size
+    ) r;
+end;
+$$;
+
+comment on function public.get_submission_inbox_page is
+  'Paged, searchable submission inbox (SECURITY INVOKER — RLS still applies).';
+
+-- ── 2. Submission pipeline summary counts ───────────────────────────────────
+-- Single round trip for the inbox summary cards: total, count per status, and
+-- "assigned to me". Aggregated in Postgres, never in the browser.
+
+create or replace function public.get_submission_pipeline_counts(
+  out total bigint,
+  out by_status jsonb,
+  out assigned_to_me bigint
+)
+language sql
+security invoker
+set search_path = public
+as $$
+  select
+    (select count(*) from public.form_submissions)::bigint,
+    coalesce(
+      (select jsonb_object_agg(status, n)
+         from (select status, count(*) as n from public.form_submissions group by status) t),
+      '{}'::jsonb
+    ),
+    (select count(*) from public.form_submissions where reviewer_id = auth.uid())::bigint
+$$;
+
+comment on function public.get_submission_pipeline_counts is
+  'Submission inbox summary counts (SECURITY INVOKER — RLS still applies).';
+
+commit;
+-- ── END MIGRATION: 20260908000000_list_pagination_rpc.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260909000000_operational_analytics.sql ─────────────────────────────────────────────
+-- Session 24 — Operational Analytics
+--
+-- One permission-checked database report built from the agency's real workflow:
+-- submissions and their immutable first staff response, project lifecycle,
+-- task deadlines/assignees, team workload, and delivery packages.
+--
+-- Financial reporting is intentionally out of scope. Project budgets, client
+-- values, rates, invoices, and revenue are never selected or returned here.
+
+begin;
+
+-- These indexes serve the report's time-window and exception queries without
+-- changing any business records. All are safe/idempotent for existing installs.
+create index if not exists idx_form_submissions_submitted_at
+  on public.form_submissions(submitted_at desc);
+create index if not exists idx_form_submission_events_first_response
+  on public.form_submission_events(submission_id, created_at)
+  where actor_id is not null
+    and event_type in (
+      'status_changed', 'reviewer_assigned', 'reviewer_reassigned',
+      'note_added', 'converted_to_project'
+    );
+create index if not exists idx_tasks_open_due_date
+  on public.tasks(due_date, assignee_id)
+  where status <> 'done';
+create index if not exists idx_projects_live_status_due_date
+  on public.projects(status, due_date)
+  where archived_at is null;
+create index if not exists idx_project_deliveries_delivered_at
+  on public.project_deliveries(delivered_at)
+  where delivered_at is not null;
+
+create or replace function public.get_operational_analytics(p_days integer default 30)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  v_user_id uuid := auth.uid();
+  v_days integer := least(365, greatest(7, coalesce(p_days, 30)));
+  v_start_date date;
+  v_previous_start_date date;
+  v_has_submissions boolean;
+  v_all_projects boolean;
+  v_result jsonb;
+begin
+  if v_user_id is null then
+    raise exception 'Not authenticated';
+  end if;
+  if not public.is_active() or public.must_change_password_pending() then
+    raise exception 'Your account is not available for operational reporting.';
+  end if;
+  if not public.has_permission('report.view') then
+    raise exception 'You do not have permission to view reports.';
+  end if;
+
+  v_start_date := current_date - (v_days - 1);
+  v_previous_start_date := v_start_date - v_days;
+  v_has_submissions := public.has_permission('submission.view');
+  v_all_projects := public.has_permission('project.view_all');
+
+  with
+  -- SECURITY DEFINER is used so one RPC can aggregate efficiently, but every
+  -- project is explicitly scoped through the same access helper as project RLS.
+  accessible_projects as materialized (
+    -- Explicit operational projection: financial columns are not selected.
+    select
+      p.id,
+      p.name,
+      p.status,
+      p.due_date,
+      p.archived_at,
+      p.start_date,
+      p.created_at
+    from public.projects p
+    where public.can_user_access_project(v_user_id, p.id)
+  ),
+  live_projects as materialized (
+    select * from accessible_projects where archived_at is null
+  ),
+  operational_projects as materialized (
+    select *
+    from live_projects
+    where status in (
+      'planned', 'active', 'waiting-for-client', 'in-review',
+      'ready-for-delivery', 'delivered'
+    )
+  ),
+  current_submissions as materialized (
+    select
+      fs.id,
+      fs.form_id,
+      fs.status,
+      fs.project_id,
+      fs.converted_at,
+      fs.submitted_at,
+      first_action.first_response_at
+    from public.form_submissions fs
+    left join lateral (
+      select min(e.created_at) as first_response_at
+      from public.form_submission_events e
+      where e.submission_id = fs.id
+        and e.actor_id is not null
+        and e.event_type in (
+          'status_changed', 'reviewer_assigned', 'reviewer_reassigned',
+          'note_added', 'converted_to_project'
+        )
+        and e.created_at >= fs.submitted_at
+    ) first_action on true
+    where v_has_submissions
+      and fs.submitted_at >= v_start_date::timestamptz
+      and fs.submitted_at <= now()
+  ),
+  submission_summary as (
+    select
+      count(*)::bigint as volume,
+      count(*) filter (
+        where project_id is not null or converted_at is not null or status = 'converted'
+      )::bigint as converted,
+      count(*) filter (where first_response_at is not null)::bigint as responded,
+      count(*) filter (where first_response_at is null)::bigint as awaiting_response,
+      percentile_cont(0.5) within group (
+        order by extract(epoch from (first_response_at - submitted_at)) / 3600.0
+      ) filter (where first_response_at is not null) as median_response_hours
+    from current_submissions
+  ),
+  previous_submission_summary as (
+    select count(*)::bigint as volume
+    from public.form_submissions fs
+    where v_has_submissions
+      and fs.submitted_at >= v_previous_start_date::timestamptz
+      and fs.submitted_at < v_start_date::timestamptz
+  ),
+  submission_by_form as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'form_id', ranked.form_id,
+      'title', ranked.title,
+      'submissions', ranked.submissions,
+      'converted', ranked.converted,
+      'conversion_rate', ranked.conversion_rate
+    ) order by ranked.submissions desc, ranked.title), '[]'::jsonb) as rows
+    from (
+      select
+        cs.form_id,
+        coalesce(ft.title, 'Deleted form') as title,
+        count(*)::bigint as submissions,
+        count(*) filter (
+          where cs.project_id is not null or cs.converted_at is not null or cs.status = 'converted'
+        )::bigint as converted,
+        round(
+          100.0 * count(*) filter (
+            where cs.project_id is not null or cs.converted_at is not null or cs.status = 'converted'
+          ) / nullif(count(*), 0),
+          1
+        ) as conversion_rate
+      from current_submissions cs
+      left join public.form_templates ft on ft.id = cs.form_id
+      group by cs.form_id, ft.title
+    ) ranked
+  ),
+  trend_settings as (
+    select
+      case when v_days <= 31 then 'day' else 'week' end as grain,
+      case
+        when v_days <= 31 then v_start_date
+        else date_trunc('week', v_start_date::timestamp)::date
+      end as first_bucket,
+      case when v_days <= 31 then interval '1 day' else interval '7 days' end as step
+  ),
+  trend_series as (
+    select point::date as period_start
+    from trend_settings ts,
+         generate_series(ts.first_bucket::timestamp, current_date::timestamp, ts.step) point
+  ),
+  submission_trend as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'period_start', series.period_start,
+      'submissions', coalesce(bucket.submissions, 0),
+      'converted', coalesce(bucket.converted, 0)
+    ) order by series.period_start), '[]'::jsonb) as rows
+    from trend_series series
+    cross join trend_settings settings
+    left join (
+      select
+        case
+          when v_days <= 31 then date_trunc('day', submitted_at)::date
+          else date_trunc('week', submitted_at)::date
+        end as period_start,
+        count(*)::bigint as submissions,
+        count(*) filter (
+          where project_id is not null or converted_at is not null or status = 'converted'
+        )::bigint as converted
+      from current_submissions
+      group by 1
+    ) bucket on bucket.period_start = series.period_start
+  ),
+  project_status_catalog as (
+    select status, display_order
+    from unnest(array[
+      'draft', 'planned', 'active', 'waiting-for-client', 'in-review',
+      'ready-for-delivery', 'delivered', 'completed', 'on-hold', 'cancelled'
+    ]::text[]) with ordinality as statuses(status, display_order)
+  ),
+  projects_by_status as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'status', catalog.status,
+      'count', coalesce(counts.count, 0)
+    ) order by catalog.display_order), '[]'::jsonb) as rows
+    from project_status_catalog catalog
+    left join (
+      select status, count(*)::bigint as count
+      from live_projects
+      group by status
+    ) counts on counts.status = catalog.status
+  ),
+  project_summary as (
+    select
+      (select count(*)::bigint from operational_projects) as active,
+      count(*) filter (
+        where due_date < current_date
+          and status not in ('completed', 'cancelled')
+      )::bigint as overdue
+    from live_projects
+  ),
+  open_tasks as materialized (
+    select
+      t.id,
+      t.title,
+      t.project_id,
+      t.status,
+      t.priority,
+      t.assignee_id,
+      t.due_date,
+      project.name as project_name
+    from public.tasks t
+    join live_projects project on project.id = t.project_id
+    where t.status <> 'done'
+  ),
+  task_summary as (
+    select
+      count(*)::bigint as open,
+      count(*) filter (where due_date < current_date)::bigint as overdue,
+      count(*) filter (where assignee_id is null)::bigint as unassigned,
+      count(*) filter (
+        where due_date between current_date and current_date + 7
+      )::bigint as due_next_7_days
+    from open_tasks
+  ),
+  overdue_task_items as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'id', item.id,
+      'title', item.title,
+      'project_id', item.project_id,
+      'project_name', item.project_name,
+      'assignee_id', item.assignee_id,
+      'assignee_name', item.assignee_name,
+      'due_date', item.due_date,
+      'days_overdue', item.days_overdue,
+      'priority', item.priority
+    ) order by item.days_overdue desc, item.due_date, item.title), '[]'::jsonb) as rows
+    from (
+      select
+        task.id,
+        task.title,
+        task.project_id,
+        task.project_name,
+        task.assignee_id,
+        coalesce(nullif(btrim(profile.full_name), ''), profile.email, 'Unassigned') as assignee_name,
+        task.due_date,
+        (current_date - task.due_date)::integer as days_overdue,
+        task.priority
+      from open_tasks task
+      left join public.profiles profile on profile.id = task.assignee_id
+      where task.due_date < current_date
+      order by task.due_date, task.title
+      limit 10
+    ) item
+  ),
+  workload_people as materialized (
+    select profile.id, profile.full_name, profile.email, profile.job_title
+    from public.profiles profile
+    where profile.status = 'active'
+      and profile.role <> 'client'::public.app_role
+      and not profile.must_change_password
+      and (
+        exists (select 1 from open_tasks task where task.assignee_id = profile.id)
+        or exists (
+          select 1
+          from public.project_members member
+          join operational_projects project on project.id = member.project_id
+          where member.user_id = profile.id
+        )
+      )
+  ),
+  team_workload as (
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'user_id', workload.user_id,
+      'name', workload.name,
+      'job_title', workload.job_title,
+      'active_projects', workload.active_projects,
+      'open_tasks', workload.open_tasks,
+      'overdue_tasks', workload.overdue_tasks,
+      'due_next_7_days', workload.due_next_7_days,
+      'in_review_tasks', workload.in_review_tasks
+    ) order by workload.overdue_tasks desc, workload.open_tasks desc, workload.name), '[]'::jsonb) as rows
+    from (
+      select
+        person.id as user_id,
+        coalesce(nullif(btrim(person.full_name), ''), person.email) as name,
+        person.job_title,
+        (
+          select count(distinct member.project_id)::bigint
+          from public.project_members member
+          join operational_projects project on project.id = member.project_id
+          where member.user_id = person.id
+        ) as active_projects,
+        count(task.id)::bigint as open_tasks,
+        count(task.id) filter (where task.due_date < current_date)::bigint as overdue_tasks,
+        count(task.id) filter (
+          where task.due_date between current_date and current_date + 7
+        )::bigint as due_next_7_days,
+        count(task.id) filter (where task.status = 'review')::bigint as in_review_tasks
+      from workload_people person
+      left join open_tasks task on task.assignee_id = person.id
+      group by person.id, person.full_name, person.email, person.job_title
+    ) workload
+  ),
+  first_project_delivery as materialized (
+    select
+      project.id as project_id,
+      project.start_date,
+      project.created_at,
+      project.due_date,
+      min(delivery.delivered_at) as first_delivered_at,
+      bool_or(
+        delivery.status = 'revision_requested'
+        or delivery.approval_state = 'revision_required'
+      ) as had_revision
+    from accessible_projects project
+    join public.project_deliveries delivery on delivery.project_id = project.id
+    where delivery.delivered_at is not null
+    group by project.id, project.start_date, project.created_at, project.due_date
+  ),
+  delivery_window as materialized (
+    select *
+    from first_project_delivery
+    where first_delivered_at >= v_start_date::timestamptz
+      and first_delivered_at <= now()
+  ),
+  delivery_summary as (
+    select
+      count(*)::bigint as delivered,
+      count(*) filter (where due_date is not null)::bigint as scheduled,
+      count(*) filter (
+        where due_date is not null and first_delivered_at::date <= due_date
+      )::bigint as on_time,
+      count(*) filter (
+        where due_date is not null and first_delivered_at::date > due_date
+      )::bigint as late,
+      count(*) filter (where due_date is null)::bigint as no_deadline,
+      count(*) filter (where had_revision)::bigint as revision_projects,
+      percentile_cont(0.5) within group (
+        order by first_delivered_at::date - coalesce(start_date, created_at::date)
+      ) as median_cycle_days,
+      percentile_cont(0.5) within group (
+        order by first_delivered_at::date - due_date
+      ) filter (where due_date is not null) as median_variance_days
+    from delivery_window
+  )
+  select jsonb_build_object(
+    'window', jsonb_build_object(
+      'days', v_days,
+      'start_date', v_start_date,
+      'end_date', current_date,
+      'previous_start_date', v_previous_start_date,
+      'previous_end_date', v_start_date - 1,
+      'generated_at', now()
+    ),
+    'scope', jsonb_build_object(
+      'all_projects', v_all_projects,
+      'submissions_included', v_has_submissions
+    ),
+    'submissions', (
+      select jsonb_build_object(
+        'volume', summary.volume,
+        'previous_volume', previous.volume,
+        'volume_change_percent', case
+          when previous.volume = 0 then null
+          else round(100.0 * (summary.volume - previous.volume) / previous.volume, 1)
+        end,
+        'converted', summary.converted,
+        'conversion_rate', case
+          when summary.volume = 0 then null
+          else round(100.0 * summary.converted / summary.volume, 1)
+        end,
+        'responded', summary.responded,
+        'awaiting_response', summary.awaiting_response,
+        'median_response_hours', case
+          when summary.median_response_hours is null then null
+          else round(summary.median_response_hours::numeric, 1)
+        end,
+        'by_form', forms.rows,
+        'trend', trend.rows
+      )
+      from submission_summary summary
+      cross join previous_submission_summary previous
+      cross join submission_by_form forms
+      cross join submission_trend trend
+    ),
+    'projects', (
+      select jsonb_build_object(
+        'active', summary.active,
+        'overdue', summary.overdue,
+        'by_status', statuses.rows
+      )
+      from project_summary summary
+      cross join projects_by_status statuses
+    ),
+    'tasks', (
+      select jsonb_build_object(
+        'open', summary.open,
+        'overdue', summary.overdue,
+        'unassigned', summary.unassigned,
+        'due_next_7_days', summary.due_next_7_days,
+        'overdue_items', items.rows
+      )
+      from task_summary summary
+      cross join overdue_task_items items
+    ),
+    'team_workload', (select rows from team_workload),
+    'delivery', (
+      select jsonb_build_object(
+        'delivered', summary.delivered,
+        'scheduled', summary.scheduled,
+        'on_time', summary.on_time,
+        'late', summary.late,
+        'no_deadline', summary.no_deadline,
+        'on_time_rate', case
+          when summary.scheduled = 0 then null
+          else round(100.0 * summary.on_time / summary.scheduled, 1)
+        end,
+        'revision_projects', summary.revision_projects,
+        'median_cycle_days', case
+          when summary.median_cycle_days is null then null
+          else round(summary.median_cycle_days::numeric, 1)
+        end,
+        'median_variance_days', case
+          when summary.median_variance_days is null then null
+          else round(summary.median_variance_days::numeric, 1)
+        end
+      )
+      from delivery_summary summary
+    )
+  ) into v_result;
+
+  return v_result;
+end;
+$$;
+
+comment on function public.get_operational_analytics(integer) is
+  'Permission-scoped operational report. Windowed: submissions/deliveries. Current snapshot: projects/tasks/workload. Contains no financial data.';
+
+revoke all on function public.get_operational_analytics(integer) from public, anon;
+grant execute on function public.get_operational_analytics(integer) to authenticated;
+
+commit;
+-- ── END MIGRATION: 20260909000000_operational_analytics.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260910000000_anonymous_signin_fallback.sql ─────────────────────────────────────────────
+-- Public form submission fallback when GoTrue does not support Anonymous Sign-ins.
+--
+-- Some self-hosted / older Supabase projects do not expose
+-- auth.create_anonymous_user(), which causes signInAnonymously() to return 422.
+-- The public form client now gracefully degrades: text answers still submit
+-- through the server route using the anon key, and file uploads (when used)
+-- land in the shared `anon/` folder. This migration relaxes ONLY the form-files
+-- insert policy so the anon role can write under `anon/...`, while keeping reads
+-- locked down (staff with submission.view, or the uploader when a real session
+-- exists) and keeping every other bucket unchanged.
+
+begin;
+
+drop policy if exists form_files_insert on storage.objects;
+create policy form_files_insert on storage.objects for insert to authenticated, anon
+  with check (
+    bucket_id = 'form-files'
+    and (
+      -- Real (anonymous or authenticated) caller: uploader folder isolation.
+      (auth.uid() is not null and owner_id = auth.uid()::text
+        and (storage.foldername(name))[1] = auth.uid()::text)
+      -- Fallback when no session is available: shared anon folder. The server
+      -- only accepts file paths in this folder for callers without submission.edit,
+      -- so cross-folder references remain impossible.
+      or (auth.uid() is null and (storage.foldername(name))[1] = 'anon')
+    )
+  );
+
+commit;
+-- ── END MIGRATION: 20260910000000_anonymous_signin_fallback.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260911000000_public_form_submit_reliability.sql ─────────────────────────────────────────────
+-- Public form submit reliability.
+--
+-- Previous attempts let the public form degrade when Anonymous Sign-ins are
+-- unavailable, but three remaining bugs still rolled the save back:
+--
+--   1. form_rate_limits.session_id is NOT NULL. A no-session (anon-key)
+--      submit inserts auth.uid() = NULL and the whole RPC fails.
+--   2. form-files INSERT required owner_id = auth.uid()::text. Supabase
+--      Storage often leaves owner_id unset at WITH CHECK time, so picking
+--      an image never actually uploads.
+--   3. submit_dynamic_form only attached files whose folder matched
+--      auth.uid(). Files landed in the shared anon/ folder were dropped.
+--
+-- This migration makes a no-session text submit persist, lets a caller
+-- upload into their own folder without an owner_id match, and attaches
+-- anon/ files when there is no session. IP rate limiting in the API
+-- route remains the abuse control for session-less callers.
+--
+-- search_path includes extensions so digest() / gen_random_bytes() resolve
+-- on hosted Supabase (pgcrypto lives in that schema).
+
+begin;
+
+-- ── 1. Rate-limit table: session is optional ────────────────────────────────
+alter table public.form_rate_limits
+  alter column session_id drop not null;
+
+comment on column public.form_rate_limits.session_id is
+  'Caller auth.uid() when a session exists. NULL for session-less (anon-key) submits; those are rate-limited by IP in the API route.';
+
+-- ── 2. form-files insert: folder isolation only (no owner_id race) ──────────
+drop policy if exists form_files_insert on storage.objects;
+create policy form_files_insert on storage.objects for insert to authenticated, anon
+  with check (
+    bucket_id = 'form-files'
+    and position('..' in name) = 0
+    and (
+      (auth.uid() is not null and (storage.foldername(name))[1] = auth.uid()::text)
+      or (auth.uid() is null and (storage.foldername(name))[1] = 'anon')
+    )
+  );
+
+-- ── 3. submit_dynamic_form: null-uid + anon/ attachments ────────────────────
+create or replace function public.submit_dynamic_form(
+  p_form_id uuid,
+  p_answers jsonb
+)
+returns public.form_submissions
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  q public.form_questions;
+  val jsonb;
+  txt text;
+  is_empty boolean;
+  missing text[];
+  submission_rec public.form_submissions;
+  linked_client_id uuid;
+  linked_project_id uuid;
+  file_item jsonb;
+  file_path text;
+  file_name text;
+  file_size bigint;
+  file_ext text;
+  rating_max_val integer;
+  recent_count integer;
+  respondent_email_val text;
+  fp text;
+  dup_count integer;
+  answer_key text;
+  answer_val text;
+  caller uuid := auth.uid();
+begin
+  select * into form_rec from public.form_templates where id = p_form_id;
+  if not found then
+    raise exception 'Form not found';
+  end if;
+  if form_rec.status <> 'published' then
+    raise exception 'This form is not accepting submissions';
+  end if;
+
+  if length(p_answers::text) > 102400 then
+    raise exception 'Your submission is too large. Please shorten your answers.';
+  end if;
+
+  for answer_key, answer_val in select * from jsonb_each_text(p_answers)
+  loop
+    if length(answer_val) > 10000 then
+      raise exception 'One of your answers exceeds the maximum allowed length.';
+    end if;
+  end loop;
+
+  -- Session-scoped rate limits only apply when we actually have a session.
+  -- Session-less callers are limited by IP in POST /api/forms/submit.
+  if caller is not null then
+    select count(*) into recent_count
+    from public.form_rate_limits
+    where session_id = caller
+      and form_id = p_form_id
+      and submitted_at > now() - interval '1 minute';
+
+    if recent_count >= 5 then
+      raise exception 'You are submitting too frequently. Please wait a moment and try again.';
+    end if;
+
+    if exists (
+      select 1 from public.form_rate_limits
+      where session_id = caller
+        and form_id = p_form_id
+        and submitted_at > now() - interval '3 seconds'
+    ) then
+      raise exception 'Please wait a few seconds before submitting again.';
+    end if;
+  end if;
+
+  for q in
+    select * from public.form_questions where form_id = p_form_id order by position, created_at
+  loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    is_empty := val is null
+      or val = 'null'::jsonb
+      or (jsonb_typeof(val) = 'string' and btrim(val #>> '{}') = '')
+      or (jsonb_typeof(val) = 'array' and jsonb_array_length(val) = 0);
+
+    if q.required and is_empty then
+      missing := coalesce(missing, '{}') || q.label;
+      continue;
+    end if;
+
+    if not is_empty then
+      if q.question_type in ('single_choice', 'dropdown') then
+        if jsonb_typeof(val) <> 'string'
+           or not exists (select 1 from jsonb_array_elements_text(q.options) o where o = val #>> '{}') then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'multiple_choice' then
+        if jsonb_typeof(val) <> 'array'
+           or exists (select 1 from jsonb_array_elements_text(val) v where not exists (
+                select 1 from jsonb_array_elements_text(q.options) o where o = v)) then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'yes_no' then
+        if jsonb_typeof(val) <> 'string' or (val #>> '{}') not in ('yes', 'no') then
+          raise exception 'Invalid answer for "%"', q.label;
+        end if;
+      elsif q.question_type = 'number' then
+        if jsonb_typeof(val) <> 'number' and (jsonb_typeof(val) <> 'string' or (val #>> '{}') !~ '^-?\d+(\.\d+)?$') then
+          raise exception 'Invalid number for "%"', q.label;
+        end if;
+      elsif q.question_type = 'rating' then
+        rating_max_val := greatest(1, least(10, coalesce(nullif(q.config ->> 'rating_max', '')::integer, 5)));
+        if (val #>> '{}') !~ '^\d+$'
+           or (val #>> '{}')::integer < 1
+           or (val #>> '{}')::integer > rating_max_val then
+          raise exception 'Invalid rating for "%"', q.label;
+        end if;
+      elsif q.question_type = 'file_upload' then
+        if jsonb_typeof(val) <> 'array' then
+          raise exception 'Invalid file answer for "%"', q.label;
+        end if;
+        if jsonb_array_length(val) > 10 then
+          raise exception 'Too many files uploaded for "%". Maximum is 10.', q.label;
+        end if;
+
+        for file_item in select * from jsonb_array_elements(val) loop
+          file_name := coalesce(file_item ->> 'name', '');
+          file_size := coalesce(nullif(file_item ->> 'size', '')::bigint, 0);
+
+          if file_size > 20971520 then
+            raise exception 'Uploaded file "%" exceeds maximum allowed size of 20 MB.', file_name;
+          end if;
+
+          file_ext := lower(substring(file_name from '\.([a-zA-Z0-9]+)$'));
+          if file_ext in ('exe', 'bat', 'cmd', 'sh', 'php', 'phtml', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'py', 'js', 'vbs', 'msi', 'jar', 'scr', 'hta', 'ps1') then
+            raise exception 'Uploaded file "%" has an unsafe file extension and is rejected.', file_name;
+          end if;
+        end loop;
+      end if;
+
+      txt := case when jsonb_typeof(val) = 'string' then btrim(val #>> '{}') else null end;
+      if nullif(txt, '') is not null then
+        if q.map_to = 'name' then submission_rec.respondent_name := txt; end if;
+        if q.map_to = 'email' then respondent_email_val := lower(txt); end if;
+        if q.map_to = 'phone' then submission_rec.respondent_phone := txt; end if;
+        if q.map_to = 'company' then submission_rec.company_name := txt; end if;
+      end if;
+    end if;
+  end loop;
+
+  submission_rec.respondent_email := respondent_email_val;
+
+  if missing is not null then
+    raise exception 'Required questions are missing: %', array_to_string(missing, ', ');
+  end if;
+
+  if respondent_email_val is not null then
+    fp := encode(digest(respondent_email_val || p_form_id::text, 'sha256'), 'hex');
+    select count(*) into dup_count
+    from public.form_submission_fingerprints
+    where form_id = p_form_id
+      and fingerprint = fp
+      and submitted_at > now() - interval '5 minutes';
+
+    if dup_count > 0 then
+      raise exception 'You have already submitted a response recently. Please wait a few minutes before submitting again.';
+    end if;
+
+    insert into public.form_submission_fingerprints (form_id, fingerprint)
+    values (p_form_id, fp);
+  end if;
+
+  if caller is not null then
+    insert into public.form_rate_limits (session_id, form_id)
+    values (caller, p_form_id);
+  end if;
+
+  if respondent_email_val is not null then
+    select id into linked_client_id
+    from public.clients
+    where lower(coalesce(email, '')) = respondent_email_val
+    order by created_at asc
+    limit 1;
+
+    if linked_client_id is null then
+      insert into public.clients (name, type, status, contact_person, email, phone, notes, created_by)
+      values (
+        coalesce(nullif(submission_rec.company_name, ''), nullif(submission_rec.respondent_name, ''), respondent_email_val),
+        'potential',
+        'potential',
+        nullif(submission_rec.respondent_name, ''),
+        respondent_email_val,
+        nullif(submission_rec.respondent_phone, ''),
+        'Created automatically from form "' || form_rec.title || '"',
+        caller
+      )
+      returning id into linked_client_id;
+    end if;
+  end if;
+
+  if coalesce(form_rec.settings ->> 'create_project_on_submit', 'false') = 'true' and linked_client_id is not null then
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (
+      coalesce(nullif(submission_rec.company_name, '') || ' — ', '') || form_rec.title,
+      'Created automatically from a submission to form "' || form_rec.title || '"',
+      linked_client_id,
+      form_rec.title,
+      'active', 1, 'Discovery', 0, caller
+    )
+    returning id into linked_project_id;
+  end if;
+
+  insert into public.form_submissions
+    (form_id, form_version, status, respondent_name, respondent_email, respondent_phone, company_name, client_id, project_id, created_by)
+  values (
+    p_form_id, form_rec.version, 'new',
+    submission_rec.respondent_name, submission_rec.respondent_email,
+    submission_rec.respondent_phone, submission_rec.company_name,
+    linked_client_id, linked_project_id, caller
+  )
+  returning * into submission_rec;
+
+  insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
+  select submission_rec.id, fq.id, to_jsonb(fq), p_answers -> fq.id::text
+  from public.form_questions fq
+  where fq.form_id = p_form_id
+    and public.is_form_question_visible(fq, p_answers)
+  order by fq.position, fq.created_at;
+
+  insert into public.form_submission_events (
+    submission_id, actor_id, event_type, new_value, note, metadata
+  ) values (
+    submission_rec.id,
+    (select id from public.profiles where id = caller),
+    'created',
+    'new',
+    'Submission received',
+    jsonb_build_object(
+      'form_version', form_rec.version,
+      'form_title', form_rec.title,
+      'respondent_email', submission_rec.respondent_email,
+      'reference_number', submission_rec.reference_number
+    )
+  );
+
+  for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    if jsonb_typeof(val) = 'array' then
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_path := file_item ->> 'storage_path';
+        if file_path is not null
+           and position('..' in file_path) = 0
+           and (
+             (caller is not null and split_part(file_path, '/', 1) = caller::text)
+             or (caller is null and split_part(file_path, '/', 1) = 'anon')
+             or public.has_permission('submission.edit')
+           ) then
+          insert into public.form_submission_attachments
+            (submission_id, question_id, name, size, mime_type, storage_path, uploaded_by)
+          values (
+            submission_rec.id, q.id,
+            coalesce(nullif(file_item ->> 'name', ''), 'file'),
+            coalesce(nullif(file_item ->> 'size', '')::bigint, 0),
+            nullif(file_item ->> 'mime_type', ''),
+            file_path,
+            caller
+          )
+          on conflict (storage_path) do nothing;
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  return submission_rec;
+end;
+$$;
+
+revoke all on function public.submit_dynamic_form(uuid, jsonb) from public, anon;
+grant execute on function public.submit_dynamic_form(uuid, jsonb) to authenticated, anon;
+
+commit;
+-- ── END MIGRATION: 20260911000000_public_form_submit_reliability.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260912000000_public_form_crypto_search_path.sql ─────────────────────────────────────────────
+-- Public form submit: let SECURITY DEFINER functions see pgcrypto.
+--
+-- submit_dynamic_form and generate_submission_reference run with
+-- search_path = public. On hosted Supabase, digest() and
+-- gen_random_bytes() live in the extensions schema, so every submit that
+-- includes an email (the branding form always does) raised
+-- "function digest(text, unknown) does not exist". The API mapped that
+-- to the generic "Something went wrong. Please try again."
+--
+-- Adding extensions to the function search_path keeps the existing RPC
+-- working. The Next.js submit route no longer depends on this migration
+-- — it persists with the service role — but applying it still repairs
+-- any leftover RPC callers.
+
+begin;
+
+alter function public.generate_submission_reference()
+  set search_path = public, extensions;
+
+alter function public.submit_dynamic_form(uuid, jsonb)
+  set search_path = public, extensions;
+
+commit;
+-- ── END MIGRATION: 20260912000000_public_form_crypto_search_path.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260913000000_public_form_trigger_safety.sql ─────────────────────────────────────────────
+-- Public form submit: never let notification/email side-effects roll back
+-- the respondent's save.
+--
+-- AFTER INSERT triggers on form_submissions (inbox notification + email
+-- outbox) used to abort the whole insert when a helper was missing, a
+-- check constraint was stale, or pgcrypto was off search_path. The
+-- public form then showed "Your answers could not be saved."
+--
+-- The Next.js persist path writes the row directly; these triggers still
+-- fire. Swallowing their errors keeps the submission.
+
+begin;
+
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+  action text;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display_name := coalesce(
+      nullif(trim(new.respondent_name), ''),
+      nullif(trim(new.company_name), ''),
+      nullif(trim(new.respondent_email), ''),
+      'Anonymous client'
+    );
+
+    notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+    notif_message := 'New submission #' || substring(new.id::text, 1, 8)
+      || ' received from ' || client_display_name
+      || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+    action := '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text;
+
+    perform public.notify_staff_with_permission(
+      'submission.view',
+      'submission.created',
+      'form_submission',
+      notif_title,
+      notif_message,
+      action,
+      'submission.created:' || new.id::text,
+      (select id from public.profiles where id = auth.uid()),
+      new.project_id,
+      new.id,
+      null,
+      jsonb_build_object(
+        'submission_id', new.id,
+        'form_id', new.form_id,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', client_display_name,
+        'respondent_name', new.respondent_name,
+        'respondent_email', new.respondent_email,
+        'respondent_phone', new.respondent_phone,
+        'company_name', new.company_name,
+        'project_id', new.project_id,
+        'submitted_at', new.submitted_at,
+        'reference_number', new.reference_number
+      )
+    );
+  exception
+    when undefined_column then
+      begin
+        insert into public.notifications (
+          recipient_id, actor_id, project_id, submission_id, type, title, message, action_url, metadata
+        )
+        select
+          p.id,
+          null,
+          new.project_id,
+          new.id,
+          'form_submission',
+          'New ' || coalesce(form_rec.title, 'Form') || ' submission',
+          'New submission received from ' || coalesce(nullif(trim(new.respondent_name), ''), 'a client') || '.',
+          '/admin/forms/' || new.form_id::text,
+          '{}'::jsonb
+        from public.profiles p
+        where p.status = 'active' and p.role = 'admin'::public.app_role;
+      exception
+        when others then
+          raise warning 'notify_form_submission fallback failed: %', sqlerrm;
+      end;
+    when others then
+      raise warning 'notify_form_submission failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+create or replace function public.enqueue_submission_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  staff_display text;
+  rec record;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      nullif(btrim(new.respondent_email), ''),
+      'A client'
+    );
+    staff_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      'A client'
+    );
+
+    if nullif(btrim(coalesce(new.respondent_email, '')), '') is not null then
+      perform public.enqueue_email(
+        'submission-received',
+        new.respondent_email,
+        null,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'respondent_name', coalesce(nullif(btrim(new.respondent_name), ''), client_display),
+          'submitted_at', new.submitted_at,
+          'tracking_path', '/track/' || new.reference_number
+        ),
+        'submission.received:' || new.id::text
+      );
+    end if;
+
+    for rec in
+      select p.id, p.email
+      from public.profiles p
+      where public.email_staff_recipient_ok(p.id)
+        and public.user_has_permission(p.id, 'submission.view')
+    loop
+      perform public.enqueue_email(
+        'new-submission',
+        rec.email,
+        rec.id,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'client_name', staff_display,
+          'company_name', new.company_name,
+          'submission_id', new.id,
+          'submitted_at', new.submitted_at,
+          'inbox_path', '/submissions?submission=' || new.id::text
+        ),
+        'submission.created:' || new.id::text || ':' || rec.id::text
+      );
+    end loop;
+  exception
+    when others then
+      raise warning 'enqueue_submission_emails failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+commit;
+-- ── END MIGRATION: 20260913000000_public_form_trigger_safety.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260914000000_save_public_form_submission.sql ─────────────────────────────────────────────
+-- Public form save that cannot be rolled back by notification/email triggers.
+--
+-- Live submits were dying on AFTER INSERT side-effects (notify_form_submission,
+-- enqueue_submission_emails) or on pgcrypto defaults (gen_random_bytes /
+-- digest in the extensions schema). The Next.js persist path writes the row
+-- directly, but those triggers still fire and abort the transaction.
+--
+-- This migration:
+--   1. Makes the reference/token defaults pgcrypto-free
+--   2. Makes the two AFTER INSERT triggers swallow their own errors
+--   3. Adds save_public_form_submission — SECURITY DEFINER, granted to
+--      anon + authenticated — which inserts the row with
+--      session_replication_role = replica so leftover throwing triggers
+--      cannot undo the respondent's save.
+
+begin;
+
+-- ── 1. Reference / token defaults that do not need pgcrypto ─────────────────
+create or replace function public.generate_submission_reference()
+returns text
+language plpgsql
+set search_path = public
+as $$
+declare
+  prefix text;
+  rand_part text;
+  candidate text;
+  loop_count integer := 0;
+begin
+  prefix := 'REQ-' || to_char(now() at time zone 'utc', 'YYMM') || '-';
+  loop
+    loop_count := loop_count + 1;
+    rand_part := upper(substr(md5(gen_random_uuid()::text || clock_timestamp()::text || loop_count::text), 1, 6));
+    candidate := prefix || rand_part;
+    if not exists (select 1 from public.form_submissions where reference_number = candidate) then
+      return candidate;
+    end if;
+    if loop_count > 20 then
+      return prefix || upper(substr(md5(gen_random_uuid()::text), 1, 8));
+    end if;
+  end loop;
+end;
+$$;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'form_submissions'
+      and column_name = 'tracking_token'
+  ) then
+    execute $sql$
+      alter table public.form_submissions
+        alter column tracking_token set default
+          replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
+    $sql$;
+  end if;
+end
+$$;
+
+-- ── 2. Side-effect triggers must never abort the save ───────────────────────
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+  action text;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display_name := coalesce(
+      nullif(trim(new.respondent_name), ''),
+      nullif(trim(new.company_name), ''),
+      nullif(trim(new.respondent_email), ''),
+      'Anonymous client'
+    );
+
+    notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+    notif_message := 'New submission #' || substring(new.id::text, 1, 8)
+      || ' received from ' || client_display_name
+      || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+    action := '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text;
+
+    perform public.notify_staff_with_permission(
+      'submission.view',
+      'submission.created',
+      'form_submission',
+      notif_title,
+      notif_message,
+      action,
+      'submission.created:' || new.id::text,
+      (select id from public.profiles where id = auth.uid()),
+      new.project_id,
+      new.id,
+      null,
+      jsonb_build_object(
+        'submission_id', new.id,
+        'form_id', new.form_id,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', client_display_name,
+        'respondent_name', new.respondent_name,
+        'respondent_email', new.respondent_email,
+        'respondent_phone', new.respondent_phone,
+        'company_name', new.company_name,
+        'project_id', new.project_id,
+        'submitted_at', new.submitted_at,
+        'reference_number', new.reference_number
+      )
+    );
+  exception
+    when others then
+      raise warning 'notify_form_submission failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+create or replace function public.enqueue_submission_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  staff_display text;
+  rec record;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      nullif(btrim(new.respondent_email), ''),
+      'A client'
+    );
+    staff_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      'A client'
+    );
+
+    if nullif(btrim(coalesce(new.respondent_email, '')), '') is not null then
+      perform public.enqueue_email(
+        'submission-received',
+        new.respondent_email,
+        null,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'respondent_name', coalesce(nullif(btrim(new.respondent_name), ''), client_display),
+          'submitted_at', new.submitted_at,
+          'tracking_path', '/track/' || new.reference_number
+        ),
+        'submission.received:' || new.id::text
+      );
+    end if;
+
+    for rec in
+      select p.id, p.email
+      from public.profiles p
+      where public.email_staff_recipient_ok(p.id)
+        and public.user_has_permission(p.id, 'submission.view')
+    loop
+        perform public.enqueue_email(
+          'new-submission',
+          rec.email,
+          rec.id,
+          jsonb_build_object(
+            'reference_number', new.reference_number,
+            'form_name', coalesce(form_rec.title, 'Form'),
+            'client_name', staff_display,
+            'company_name', new.company_name,
+            'submission_id', new.id,
+            'submitted_at', new.submitted_at,
+            'inbox_path', '/submissions?submission=' || new.id::text
+          ),
+          'submission.created:' || new.id::text || ':' || rec.id::text
+        );
+    end loop;
+  exception
+    when others then
+      raise warning 'enqueue_submission_emails failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+-- ── 3. Dedicated public save RPC ────────────────────────────────────────────
+create or replace function public.save_public_form_submission(
+  p_form_id uuid,
+  p_answers jsonb,
+  p_reference_number text default null,
+  p_tracking_token text default null,
+  p_fingerprint text default null
+)
+returns public.form_submissions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  q public.form_questions;
+  val jsonb;
+  txt text;
+  is_empty boolean;
+  missing text[];
+  submission_rec public.form_submissions;
+  linked_client_id uuid;
+  file_item jsonb;
+  file_path text;
+  file_name text;
+  file_size bigint;
+  file_ext text;
+  rating_max_val integer;
+  respondent_email_val text;
+  respondent_name_val text;
+  respondent_phone_val text;
+  company_name_val text;
+  caller uuid := auth.uid();
+  use_status text := 'new';
+  use_ref text;
+  use_token text;
+  has_ref boolean;
+  has_track boolean;
+begin
+  select * into form_rec from public.form_templates where id = p_form_id;
+  if not found then
+    raise exception 'Form not found';
+  end if;
+  if form_rec.status <> 'published' then
+    raise exception 'This form is not accepting submissions';
+  end if;
+
+  if length(coalesce(p_answers, '{}'::jsonb)::text) > 102400 then
+    raise exception 'Your submission is too large. Please shorten your answers.';
+  end if;
+
+  for q in
+    select * from public.form_questions where form_id = p_form_id order by position, created_at
+  loop
+    if not public.is_form_question_visible(q, coalesce(p_answers, '{}'::jsonb)) then
+      continue;
+    end if;
+    val := coalesce(p_answers, '{}'::jsonb) -> q.id::text;
+    is_empty := val is null
+      or val = 'null'::jsonb
+      or (jsonb_typeof(val) = 'string' and btrim(val #>> '{}') = '')
+      or (jsonb_typeof(val) = 'array' and jsonb_array_length(val) = 0);
+
+    if q.required and is_empty then
+      missing := coalesce(missing, '{}') || q.label;
+      continue;
+    end if;
+    if is_empty then
+      continue;
+    end if;
+
+    if q.question_type in ('single_choice', 'dropdown') then
+      if jsonb_typeof(val) <> 'string'
+         or not exists (select 1 from jsonb_array_elements_text(q.options) o where o = val #>> '{}') then
+        raise exception 'Invalid option for "%"', q.label;
+      end if;
+    elsif q.question_type = 'multiple_choice' then
+      if jsonb_typeof(val) <> 'array'
+         or exists (
+           select 1 from jsonb_array_elements_text(val) v
+           where not exists (select 1 from jsonb_array_elements_text(q.options) o where o = v)
+         ) then
+        raise exception 'Invalid option for "%"', q.label;
+      end if;
+    elsif q.question_type = 'yes_no' then
+      if jsonb_typeof(val) <> 'string' or (val #>> '{}') not in ('yes', 'no') then
+        raise exception 'Invalid answer for "%"', q.label;
+      end if;
+    elsif q.question_type = 'number' then
+      if jsonb_typeof(val) <> 'number' and (jsonb_typeof(val) <> 'string' or (val #>> '{}') !~ '^-?\d+(\.\d+)?$') then
+        raise exception 'Invalid number for "%"', q.label;
+      end if;
+    elsif q.question_type = 'rating' then
+      rating_max_val := greatest(1, least(10, coalesce(nullif(q.config ->> 'rating_max', '')::integer, 5)));
+      if (val #>> '{}') !~ '^\d+$'
+         or (val #>> '{}')::integer < 1
+         or (val #>> '{}')::integer > rating_max_val then
+        raise exception 'Invalid rating for "%"', q.label;
+      end if;
+    elsif q.question_type = 'file_upload' then
+      if jsonb_typeof(val) <> 'array' then
+        raise exception 'Invalid file answer for "%"', q.label;
+      end if;
+      if jsonb_array_length(val) > 10 then
+        raise exception 'Too many files uploaded for "%". Maximum is 10.', q.label;
+      end if;
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_name := coalesce(file_item ->> 'name', '');
+        file_size := coalesce(nullif(file_item ->> 'size', '')::bigint, 0);
+        if file_size > 20971520 then
+          raise exception 'Uploaded file "%" exceeds maximum allowed size of 20 MB.', file_name;
+        end if;
+        file_ext := lower(substring(file_name from '\.([a-zA-Z0-9]+)$'));
+        if file_ext in ('exe', 'bat', 'cmd', 'sh', 'php', 'phtml', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'py', 'js', 'vbs', 'msi', 'jar', 'scr', 'hta', 'ps1') then
+          raise exception 'Uploaded file "%" has an unsafe file extension and is rejected.', file_name;
+        end if;
+      end loop;
+    end if;
+
+    txt := case when jsonb_typeof(val) = 'string' then btrim(val #>> '{}') else null end;
+    if nullif(txt, '') is not null then
+      if q.map_to = 'name' then respondent_name_val := txt; end if;
+      if q.map_to = 'email' then respondent_email_val := lower(txt); end if;
+      if q.map_to = 'phone' then respondent_phone_val := txt; end if;
+      if q.map_to = 'company' then company_name_val := txt; end if;
+    end if;
+  end loop;
+
+  if missing is not null then
+    raise exception 'Required questions are missing: %', array_to_string(missing, ', ');
+  end if;
+
+  if respondent_email_val is not null then
+    select id into linked_client_id
+    from public.clients
+    where lower(coalesce(email, '')) = respondent_email_val
+    order by created_at asc
+    limit 1;
+
+    if linked_client_id is null then
+      begin
+        insert into public.clients (name, type, status, contact_person, email, phone, notes)
+        values (
+          coalesce(nullif(company_name_val, ''), nullif(respondent_name_val, ''), respondent_email_val),
+          'potential',
+          'potential',
+          nullif(respondent_name_val, ''),
+          respondent_email_val,
+          nullif(respondent_phone_val, ''),
+          'Created automatically from form "' || form_rec.title || '"'
+        )
+        returning id into linked_client_id;
+      exception
+        when others then
+          linked_client_id := null;
+      end;
+    end if;
+  end if;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'form_submissions' and column_name = 'reference_number'
+  ) into has_ref;
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'form_submissions' and column_name = 'tracking_token'
+  ) into has_track;
+
+  use_ref := nullif(btrim(coalesce(p_reference_number, '')), '');
+  if use_ref is null and has_ref then
+    use_ref := public.generate_submission_reference();
+  end if;
+  use_token := nullif(btrim(coalesce(p_tracking_token, '')), '');
+  if use_token is null and has_track then
+    use_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  end if;
+
+  if exists (
+    select 1 from information_schema.check_constraints
+    where constraint_schema = 'public'
+      and constraint_name = 'form_submissions_status_check'
+      and check_clause ilike '%submitted%'
+      and check_clause not ilike '%''new''%'
+  ) then
+    use_status := 'submitted';
+  end if;
+
+  begin
+    perform set_config('session_replication_role', 'replica', true);
+  exception
+    when others then
+      null;
+  end;
+
+  begin
+    if has_ref and has_track then
+      insert into public.form_submissions (
+        form_id, form_version, status,
+        respondent_name, respondent_email, respondent_phone, company_name,
+        client_id, reference_number, tracking_token
+      ) values (
+        p_form_id, form_rec.version, use_status,
+        respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+        linked_client_id, use_ref, use_token
+      )
+      returning * into submission_rec;
+    else
+      insert into public.form_submissions (
+        form_id, form_version, status,
+        respondent_name, respondent_email, respondent_phone, company_name,
+        client_id
+      ) values (
+        p_form_id, form_rec.version, use_status,
+        respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+        linked_client_id
+      )
+      returning * into submission_rec;
+    end if;
+  exception
+    when check_violation then
+      if use_status = 'new' then
+        use_status := 'submitted';
+      else
+        use_status := 'new';
+      end if;
+      if has_ref and has_track then
+        insert into public.form_submissions (
+          form_id, form_version, status,
+          respondent_name, respondent_email, respondent_phone, company_name,
+          client_id, reference_number, tracking_token
+        ) values (
+          p_form_id, form_rec.version, use_status,
+          respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+          linked_client_id, use_ref, use_token
+        )
+        returning * into submission_rec;
+      else
+        insert into public.form_submissions (
+          form_id, form_version, status,
+          respondent_name, respondent_email, respondent_phone, company_name,
+          client_id
+        ) values (
+          p_form_id, form_rec.version, use_status,
+          respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+          linked_client_id
+        )
+        returning * into submission_rec;
+      end if;
+  end;
+
+  begin
+    perform set_config('session_replication_role', 'origin', true);
+  exception
+    when others then
+      null;
+  end;
+
+  begin
+    insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
+    select submission_rec.id, fq.id, to_jsonb(fq), coalesce(p_answers, '{}'::jsonb) -> fq.id::text
+    from public.form_questions fq
+    where fq.form_id = p_form_id
+      and public.is_form_question_visible(fq, coalesce(p_answers, '{}'::jsonb))
+    order by fq.position, fq.created_at;
+  exception
+    when others then
+      raise warning 'save_public_form_submission answers failed: %', sqlerrm;
+  end;
+
+  begin
+    insert into public.form_submission_events (
+      submission_id, actor_id, event_type, new_value, note, metadata
+    ) values (
+      submission_rec.id,
+      null,
+      'created',
+      submission_rec.status,
+      'Submission received',
+      jsonb_build_object(
+        'form_version', form_rec.version,
+        'form_title', form_rec.title,
+        'respondent_email', submission_rec.respondent_email,
+        'reference_number', submission_rec.reference_number
+      )
+    );
+  exception
+    when others then
+      raise warning 'save_public_form_submission event failed: %', sqlerrm;
+  end;
+
+  if p_fingerprint is not null then
+    begin
+      insert into public.form_submission_fingerprints (form_id, fingerprint)
+      values (p_form_id, p_fingerprint);
+    exception
+      when others then
+        null;
+    end;
+  end if;
+
+  for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if to_regprocedure('public.is_form_question_visible(public.form_questions, jsonb)') is not null
+       and not public.is_form_question_visible(q, coalesce(p_answers, '{}'::jsonb)) then
+      continue;
+    end if;
+    val := coalesce(p_answers, '{}'::jsonb) -> q.id::text;
+    if jsonb_typeof(val) = 'array' then
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_path := file_item ->> 'storage_path';
+        if file_path is not null
+           and position('..' in file_path) = 0
+           and (
+             (caller is not null and split_part(file_path, '/', 1) = caller::text)
+             or split_part(file_path, '/', 1) = 'anon'
+           ) then
+          begin
+            insert into public.form_submission_attachments
+              (submission_id, question_id, name, size, mime_type, storage_path, uploaded_by)
+            values (
+              submission_rec.id, q.id,
+              coalesce(nullif(file_item ->> 'name', ''), 'file'),
+              coalesce(nullif(file_item ->> 'size', '')::bigint, 0),
+              nullif(file_item ->> 'mime_type', ''),
+              file_path,
+              caller
+            )
+            on conflict (storage_path) do nothing;
+          exception
+            when others then
+              null;
+          end;
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  return submission_rec;
+end;
+$$;
+
+comment on function public.save_public_form_submission(uuid, jsonb, text, text, text) is
+  'Public form persist that cannot be rolled back by notification/email AFTER INSERT triggers.';
+
+revoke all on function public.save_public_form_submission(uuid, jsonb, text, text, text) from public;
+grant execute on function public.save_public_form_submission(uuid, jsonb, text, text, text) to anon, authenticated;
+
+commit;
+-- ── END MIGRATION: 20260914000000_save_public_form_submission.sql ───────────────────────────────────────────────

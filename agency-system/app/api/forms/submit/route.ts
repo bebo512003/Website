@@ -1,25 +1,43 @@
 import { createClient } from '@supabase/supabase-js'
 import { type NextRequest, NextResponse } from 'next/server'
+import { flushEmailQueue } from '@/lib/email/flush'
+import {
+  mapPublicFormSubmitError,
+  persistPublicFormSubmission,
+  PublicFormSubmitError,
+} from '@/lib/forms/persist-submission'
+import type { Database } from '@/lib/supabase/database.types'
 
 // ── POST /api/forms/submit ───────────────────────────────────────────────────
 // Server-side gateway for public form submissions. Performs:
 //   1. IP-based rate limiting (in-memory, per-IP sliding window)
 //   2. Cloudflare Turnstile token verification (when configured)
 //   3. Payload size pre-check
-//   4. Proxies to the hardened submit_dynamic_form RPC with the caller's
-//      auth token so auth.uid() resolves to the anonymous session.
-//
-// The database RPC adds its own layer of rate limiting (per-session),
-// duplicate detection (per-email), and payload validation.
+//   4. Persists the submission with the service role (does not call the
+//      submit_dynamic_form RPC, which crashes on hosted Supabase when
+//      digest()/gen_random_bytes() are not on search_path = public).
 //
 // Env vars (server-only):
 //   TURNSTILE_SECRET_KEY   — Cloudflare Turnstile secret
 //   NEXT_PUBLIC_SUPABASE_URL — Supabase project URL
-//   SUPABASE_SERVICE_ROLE_KEY — used only for Turnstile verification;
-//                                the RPC itself runs under the caller's token.
+//   SUPABASE_SERVICE_ROLE_KEY — required to save public submissions
 
-const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || ''
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const TURNSTILE_SECRET = (process.env.TURNSTILE_SECRET_KEY || '').trim()
+const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '').trim()
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()
+const SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+const ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim()
+
+function decodeJwtRole(token: string): string | null {
+  try {
+    const payload = token.split('.')[1]
+    if (!payload) return null
+    const json = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as { role?: string }
+    return typeof json.role === 'string' ? json.role : null
+  } catch {
+    return null
+  }
+}
 
 // ── In-memory IP rate limiter ────────────────────────────────────────────────
 // Sliding window: max 10 submissions per IP per minute, 30 per hour.
@@ -155,12 +173,15 @@ export async function POST(request: NextRequest) {
     if (!answers || typeof answers !== 'object') {
       return NextResponse.json({ error: 'Missing answers.' }, { status: 400 })
     }
-    if (!accessToken || typeof accessToken !== 'string') {
-      return NextResponse.json({ error: 'Your session has expired. Please refresh the page.' }, { status: 401 })
-    }
+    // Access token is optional: when anonymous sign-in works it carries the
+    // caller's identity; when it does not (older GoTrue), the server falls
+    // back to the public anon key. Text-only submissions still work; file
+    // uploads are disabled on the client in that case.
+    const callerToken = (typeof accessToken === 'string' && accessToken) || ''
 
-    // 5. Turnstile verification (when configured)
-    if (TURNSTILE_SECRET) {
+    // 5. Turnstile verification — only when BOTH keys are configured.
+    // A secret without a site key would reject every real submission.
+    if (TURNSTILE_SECRET && TURNSTILE_SITE_KEY) {
       const turnstileOk = await verifyTurnstile(String(turnstileToken || ''), ip)
       if (!turnstileOk) {
         return NextResponse.json(
@@ -179,47 +200,76 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 7. Call the hardened Supabase RPC under the caller's auth context.
-    //    Using the caller's access token ensures auth.uid() inside the RPC
-    //    resolves to the anonymous session, preserving rate-limit tracking
-    //    and created_by attribution.
+    // 7. Persist the submission.
+    //
+    //    Prefer a service-role insert that never calls submit_dynamic_form.
+    //    That RPC is SECURITY DEFINER with search_path = public, so on hosted
+    //    Supabase digest() / gen_random_bytes() (extensions schema) throw and
+    //    the UI only sees "Something went wrong." Writing the rows here also
+    //    survives a live database that has not applied the latest migration
+    //    (NULL session_id on form_rate_limits, JWT-as-Authorization crashes).
     if (!SUPABASE_URL) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    const supabase = createClient(SUPABASE_URL, accessToken, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
-
-    const { data, error } = await supabase.rpc('submit_dynamic_form', {
-      p_form_id: formId,
-      p_answers: answers as Record<string, unknown>,
-    })
-
-    if (error) {
-      // Sanitize error messages for public consumption.
-      // Map known Postgres exceptions to friendly messages; hide everything else.
-      const msg = error.message || ''
-      const friendly =
-        /too frequently/i.test(msg) ? 'You are submitting too frequently. Please wait a moment and try again.' :
-        /already submitted/i.test(msg) ? 'You have already submitted a response recently. Please wait a few minutes.' :
-        /wait a few seconds/i.test(msg) ? 'Please wait a few seconds before submitting again.' :
-        /not accepting submissions/i.test(msg) ? 'This form is no longer accepting submissions.' :
-        /not found/i.test(msg) ? 'This form could not be found.' :
-        /too large/i.test(msg) ? 'Your submission is too large. Please shorten your answers.' :
-        /exceeds the maximum/i.test(msg) ? 'One of your answers is too long.' :
-        /Required questions/i.test(msg) ? msg : // safe to show
-        /Invalid option/i.test(msg) ? 'One of your answers contains an invalid option.' :
-        /Invalid number/i.test(msg) ? 'Please enter a valid number.' :
-        /Invalid rating/i.test(msg) ? 'Please provide a valid rating.' :
-        /Invalid file/i.test(msg) ? 'There was a problem with your file upload.' :
-        /Too many files/i.test(msg) ? 'You have uploaded too many files. Maximum is 10 per question.' :
-        'Something went wrong. Please try again.'
-
-      return NextResponse.json({ error: friendly }, { status: 400 })
+    const writeKey = SERVICE_ROLE_KEY || ANON_KEY
+    if (!writeKey) {
+      return NextResponse.json({
+        error: 'Submissions are temporarily unavailable.',
+        debug: 'Missing SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_ANON_KEY',
+      }, { status: 503 })
     }
 
-    return NextResponse.json({ data, error: null })
+    const keyRole = decodeJwtRole(writeKey)
+    if (
+      SERVICE_ROLE_KEY
+      && (SERVICE_ROLE_KEY.startsWith('sb_publishable_') || (keyRole && keyRole !== 'service_role'))
+    ) {
+      console.error('[forms/submit] SUPABASE_SERVICE_ROLE_KEY is not a service_role secret', keyRole)
+      return NextResponse.json({
+        error: 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.',
+        debug: `key role=${keyRole || 'publishable'}`,
+      }, { status: 503 })
+    }
+
+    let callerId: string | null = null
+    if (callerToken && ANON_KEY) {
+      const authClient = createClient(SUPABASE_URL, ANON_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      })
+      const { data: caller } = await authClient.auth.getUser(callerToken)
+      callerId = caller.user?.id || null
+    }
+
+    const writer = createClient<Database>(SUPABASE_URL, writeKey, {
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    })
+
+    try {
+      const data = await persistPublicFormSubmission({
+        supabase: writer,
+        formId,
+        answers: answers as Record<string, unknown>,
+        callerId,
+      })
+
+      void flushEmailQueue().catch((error) => {
+        console.error('[email] immediate flush failed:', error)
+      })
+
+      return NextResponse.json({ data, error: null, debug: null })
+    } catch (error) {
+      if (error instanceof PublicFormSubmitError) {
+        console.error('[forms/submit] persist rejected:', error.message, error.debug)
+        return NextResponse.json(
+          { error: error.message, debug: error.debug || null },
+          { status: error.status },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[forms/submit] persist failed:', message)
+      return NextResponse.json({ error: mapPublicFormSubmitError(message), debug: message }, { status: 400 })
+    }
   } catch {
     return NextResponse.json(
       { error: 'An unexpected error occurred. Please try again.' },

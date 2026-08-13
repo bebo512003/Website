@@ -14,7 +14,7 @@ import {
   type AuthResult,
 } from '@/lib/supabase/auth'
 import type { Profile } from '@/lib/supabase/types'
-import { getCurrentUserPermissions } from '@/lib/supabase/database'
+import { getCurrentUserPermissions } from '@/lib/db'
 
 interface AuthContextType {
   user: User | null
@@ -132,7 +132,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const handleUpdateProfile = useCallback(async (updates: Partial<Profile>) => {
     if (!user) return { error: new Error('You must be signed in to update your profile.') }
     const { data, error } = await updateProfile(user.id, { ...profile, ...updates })
-    if (!error && data) setProfile(data)
+    if (!error && data) setProfile(data as Profile)
     return { error }
   }, [profile, user])
 

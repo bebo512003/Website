@@ -9,7 +9,7 @@ import {
   deleteTeamAvatar,
   updateOwnEnhancedProfile,
   uploadTeamAvatar,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import { updatePasswordAndMarkChanged, verifyCurrentPassword } from '@/lib/supabase/auth'
 import {
   linkKeyLabel,

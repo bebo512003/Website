@@ -1,101 +1,34 @@
-'use client'
-
-import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import {
-  ArrowLeft,
-  ArrowRight,
-  FileText,
-  Layers3,
-  LoaderCircle,
-  LogIn,
-  Menu,
-  Sparkles,
-  Zap,
-  X,
-  ClipboardList,
-} from 'lucide-react'
-import { getPublishedFormTemplates } from '@/lib/supabase/database'
-import type { PublicFormTemplateSummary } from '@/lib/supabase/types'
+import { ArrowLeft, ArrowRight, ClipboardList, Layers3, Sparkles } from 'lucide-react'
+import type { Metadata } from 'next'
+import { getCachedPublishedForms } from '@/lib/supabase/public-server'
+import { PublishedFormCard } from '@/components/public/published-form-card'
+import { PublicSiteHeader } from '@/components/public/public-site-header'
+import { PublicSiteFooter } from '@/components/public/public-site-footer'
+import { pageMetadata } from '@/lib/site'
 
-// ── Public Forms Listing Page ───────────────────────────────────────────────
-// Displays all published forms from the Admin Form Builder.
-// Clients click "Request a New Project" → lands here → picks a form → fills it out.
-// No authentication required.
+export const revalidate = 120
+
+export const metadata: Metadata = pageMetadata({
+  title: 'Request a New Project — Agency OS',
+  description: 'Choose a published project request form and submit your brief without creating an account.',
+  path: '/forms',
+})
 
 const HEADING = 'AGENCY OS / REQUEST A PROJECT'
 
-export default function PublicFormsPage() {
-  const [forms, setForms] = useState<PublicFormTemplateSummary[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
-
-  const load = useCallback(async () => {
-    const result = await getPublishedFormTemplates()
-    setForms(result.data)
-    setError(result.error || '')
-    setLoading(false)
-  }, [])
-
-  useEffect(() => { void load() }, [load])
+export default async function PublicFormsPage() {
+  const { data: forms, error } = await getCachedPublishedForms()
 
   return (
-    <main className="min-h-screen overflow-hidden bg-bg text-fg">
-      {/* ── Header / Nav ──────────────────────────────────────────────── */}
-      <header className="sticky inset-x-0 top-0 z-40 border-b border-border bg-bg/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-8 lg:px-10">
-          <Link href="/" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)}>
-            <span className="flex h-9 w-9 items-center justify-center border border-line-light bg-surface-raised text-accent transition group-hover:border-accent">
-              <Zap className="h-4 w-4" />
-            </span>
-            <span className="hidden sm:inline">
-              <span className="block text-sm font-bold tracking-[0.22em] text-fg">AGENCY OS</span>
-              <span className="font-mono-tech text-[8px] text-text-tertiary">CREATIVE STUDIO</span>
-            </span>
-          </Link>
-          <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
-            <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
-            <Link href="/forms" className="text-xs text-fg transition">Available forms</Link>
-          </nav>
-          <div className="hidden items-center gap-2 md:flex">
-            <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
-              <LogIn className="h-3.5 w-3.5" /> Login
-            </Link>
-          </div>
-          <button
-            type="button"
-            className="rounded-md border border-border p-2 text-fg md:hidden"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            aria-expanded={menuOpen}
-          >
-            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-        </div>
-        {menuOpen && (
-          <nav className="border-t border-border bg-surface px-5 py-4 md:hidden" aria-label="Mobile primary">
-            <div className="grid gap-1">
-              <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
-              <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-fg hover:bg-surface-raised">Available forms</Link>
-            </div>
-            <div className="mt-3 grid gap-2 border-t border-border pt-3">
-              <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
-                <LogIn className="h-4 w-4" /> Login
-              </Link>
-            </div>
-          </nav>
-        )}
-      </header>
+    <div className="min-h-screen overflow-hidden bg-bg text-fg">
+      <PublicSiteHeader />
 
-      {/* ── Page Content ─────────────────────────────────────────────── */}
       <div className="mx-auto max-w-5xl px-5 py-12 sm:px-8 lg:px-10 lg:py-16">
-        {/* Back link */}
         <Link href="/" className="inline-flex items-center gap-2 text-xs text-text-secondary transition hover:text-fg">
           <ArrowLeft className="h-3.5 w-3.5" /> Back to home
         </Link>
 
-        {/* Header */}
         <div className="mt-8">
           <p className="mb-4 flex items-center gap-3 font-mono-tech text-[10px] tracking-[0.28em] text-accent">
             <span className="h-px w-10 bg-accent" /> {HEADING}
@@ -116,13 +49,8 @@ export default function PublicFormsPage() {
           </ol>
         </div>
 
-        {/* Forms Grid */}
         <div className="mt-10">
-          {loading ? (
-            <div className="flex min-h-64 items-center justify-center gap-3 text-sm text-text-secondary">
-              <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> Loading available forms…
-            </div>
-          ) : error ? (
+          {error ? (
             <div className="rounded-md border border-red-500/30 bg-red-500/5 px-5 py-4 text-sm text-red-400">
               {error}
             </div>
@@ -151,31 +79,10 @@ export default function PublicFormsPage() {
               </p>
               <div className="grid gap-4 md:grid-cols-2">
                 {forms.map((form) => (
-                  <article
-                    key={form.id}
-                    className="group flex flex-col gap-4 rounded-md border border-border bg-surface p-6 transition hover:border-line-light hover:shadow-lg"
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <h3 className="min-w-0 break-words text-lg font-semibold text-fg">{form.title}</h3>
-                      <span className="rounded border border-green-500/30 bg-green-500/5 px-1.5 py-0.5 font-mono-tech text-[9px] text-green-400">LIVE</span>
-                    </div>
-                    {form.description && (
-                      <p className="line-clamp-2 text-sm leading-5 text-text-secondary">{form.description}</p>
-                    )}
-                    <p className="font-mono-tech text-[10px] text-text-tertiary">
-                      {form.form_questions?.[0]?.count ?? 0} QUESTIONS · NO ACCOUNT REQUIRED
-                    </p>
-                    <Link
-                      href={`/f/${form.slug}`}
-                      className="mt-auto inline-flex items-center gap-2 self-start rounded-md border border-accent bg-accent px-5 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110"
-                    >
-                      <FileText className="h-4 w-4" /> Open form <ArrowRight className="h-4 w-4" />
-                    </Link>
-                  </article>
+                  <PublishedFormCard key={form.id} form={form} />
                 ))}
               </div>
 
-              {/* Additional info */}
               <div className="mt-10 rounded-md border border-border bg-surface p-6">
                 <div className="flex items-start gap-4">
                   <Sparkles className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
@@ -206,7 +113,26 @@ export default function PublicFormsPage() {
           )}
         </div>
 
-        {/* Browse Portfolio CTA */}
+        <div className="mt-8 rounded-md border border-border bg-surface-raised p-5">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-center gap-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-bg text-accent">
+                <Sparkles className="h-4 w-4" />
+              </span>
+              <div>
+                <h3 className="text-sm font-semibold text-fg">Already submitted a request?</h3>
+                <p className="text-xs text-text-secondary">Check the live progress of your submission anytime with your reference number.</p>
+              </div>
+            </div>
+            <Link
+              href="/track"
+              className="inline-flex min-h-10 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-4 py-2 text-xs font-semibold text-fg transition hover:border-line-light hover:text-accent"
+            >
+              Track request status <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          </div>
+        </div>
+
         <div className="mt-10 border-t border-border pt-8">
           <p className="text-sm text-text-secondary">
             Want to see our work first?{' '}
@@ -217,26 +143,7 @@ export default function PublicFormsPage() {
         </div>
       </div>
 
-      {/* ── Footer ──────────────────────────────────────────────────── */}
-      <footer className="border-t border-border bg-bg px-5 py-8 sm:px-8 lg:px-10">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center border border-line-light bg-surface-raised text-accent">
-              <Zap className="h-4 w-4" />
-            </span>
-            <div>
-              <p className="text-sm font-bold tracking-[0.22em] text-fg">AGENCY OS</p>
-              <p className="font-mono-tech text-[8px] text-text-tertiary">CREATIVE STUDIO</p>
-            </div>
-          </div>
-          <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
-            <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
-            <Link href="/forms" className="hover:text-fg">Request a project</Link>
-            <Link href="/auth" className="hover:text-fg">Login</Link>
-          </nav>
-          <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>
-        </div>
-      </footer>
-    </main>
+      <PublicSiteFooter />
+    </div>
   )
 }

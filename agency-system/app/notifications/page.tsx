@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Bell,
@@ -21,12 +21,23 @@ import {
 import {
   deleteAllReadNotifications,
   deleteNotification,
-  getNotifications,
+  getNotificationTabCounts,
+  getNotificationsPage,
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
-} from '@/lib/supabase/database'
-import type { Notification, NotificationMetadata, NotificationType } from '@/lib/supabase/types'
+} from '@/lib/db'
+import type { Notification } from '@/lib/supabase/types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
+import {
+  getNotificationMetadata,
+  isSubmissionNotification,
+  isTaskNotification,
+  notificationEvent,
+  notificationTypeLabel,
+  type NotificationFilterTab,
+} from '@/lib/notifications'
 import {
   EmptyState,
   InlineAlert,
@@ -38,69 +49,83 @@ import {
   primaryButtonClassName,
   secondaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
-type FilterTab = 'all' | 'unread' | 'submissions' | 'projects' | 'tasks'
-
-function getMetadata(notification: Notification): NotificationMetadata {
-  if (notification.metadata && typeof notification.metadata === 'object' && !Array.isArray(notification.metadata)) {
-    return notification.metadata as NotificationMetadata
+function getNotificationTypeBadge(notification: Notification) {
+  const event = notificationEvent(notification)
+  if (isSubmissionNotification(notification)) {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FileText,
+      badgeStyle: 'border-accent/40 bg-accent/10 text-accent',
+    }
   }
-  return {}
+  if (isTaskNotification(notification)) {
+    return {
+      label: notificationTypeLabel(event),
+      icon: CheckSquare,
+      badgeStyle: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
+    }
+  }
+  if (event.startsWith('client.') || notification.type === 'client_feedback' || notification.type === 'client_approval' || notification.type === 'client_revision') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: Info,
+      badgeStyle: 'border-violet-500/40 bg-violet-500/10 text-violet-400',
+    }
+  }
+  if (event === 'file.shared' || notification.type === 'file_shared') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FileText,
+      badgeStyle: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
+    }
+  }
+  if (event === 'delivery.ready' || notification.type === 'delivery_ready') {
+    return {
+      label: notificationTypeLabel(event),
+      icon: FolderKanban,
+      badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
+    }
+  }
+  return {
+    label: notificationTypeLabel(event),
+    icon: FolderKanban,
+    badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
+  }
 }
 
-function getNotificationTypeBadge(type: NotificationType) {
-  switch (type) {
-    case 'form_submission':
-    case 'submission':
-      return {
-        label: 'FORM SUBMISSION',
-        icon: FileText,
-        badgeStyle: 'border-accent/40 bg-accent/10 text-accent',
-        dotStyle: 'bg-accent',
-      }
-    case 'assignment':
-    case 'project_update':
-      return {
-        label: type === 'assignment' ? 'PROJECT ASSIGNMENT' : 'PROJECT UPDATE',
-        icon: FolderKanban,
-        badgeStyle: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400',
-        dotStyle: 'bg-emerald-400',
-      }
-    case 'task_assignment':
-    case 'task_update':
-      return {
-        label: type === 'task_assignment' ? 'TASK ASSIGNMENT' : 'TASK UPDATE',
-        icon: CheckSquare,
-        badgeStyle: 'border-sky-500/40 bg-sky-500/10 text-sky-400',
-        dotStyle: 'bg-sky-400',
-      }
-    default:
-      return {
-        label: 'SYSTEM INFO',
-        icon: Info,
-        badgeStyle: 'border-amber-500/40 bg-amber-500/10 text-amber-400',
-        dotStyle: 'bg-amber-400',
-      }
-  }
-}
+const PAGE_SIZE = 25
 
 export default function NotificationsPage() {
   const router = useRouter()
+  const confirm = useConfirm()
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [total, setTotal] = useState(0)
+  const [tabCounts, setTabCounts] = useState<{ all: number; unread: number; submissions: number; projects: number; tasks: number; client: number }>({ all: 0, unread: 0, submissions: 0, projects: 0, tasks: 0, client: 0 })
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [tab, setTab] = useState<FilterTab>('all')
+  const [tab, setTab] = useState<NotificationFilterTab>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
   const [clearingRead, setClearingRead] = useState(false)
 
+  const debouncedSearch = useDebouncedValue(searchQuery, 300)
+
   const load = useCallback(async () => {
-    const result = await getNotifications(100)
-    setNotifications(result.data)
-    setError(result.error || '')
+    setLoading(true)
+    const [pageResult, countsResult] = await Promise.all([
+      getNotificationsPage({ tab, search: debouncedSearch, page, pageSize: PAGE_SIZE }),
+      getNotificationTabCounts(),
+    ])
+    setNotifications(pageResult.data)
+    setTotal(pageResult.total)
+    setTabCounts(countsResult.data)
+    setError(pageResult.error || countsResult.error || '')
     setLoading(false)
-  }, [])
+  }, [tab, debouncedSearch, page])
 
   useEffect(() => {
     void load()
@@ -109,56 +134,16 @@ export default function NotificationsPage() {
     return () => window.removeEventListener('agency-notifications-changed', handleChanged)
   }, [load])
 
-  const unreadCount = useMemo(() => notifications.filter((n) => !n.read_at).length, [notifications])
-  const readCount = useMemo(() => notifications.filter((n) => !!n.read_at).length, [notifications])
-  const submissionCount = useMemo(
-    () => notifications.filter((n) => n.type === 'form_submission' || n.type === 'submission').length,
-    [notifications]
-  )
-  const projectCount = useMemo(
-    () => notifications.filter((n) => n.type === 'assignment' || n.type === 'project_update').length,
-    [notifications]
-  )
-  const taskCount = useMemo(
-    () => notifications.filter((n) => n.type === 'task_assignment' || n.type === 'task_update').length,
-    [notifications]
-  )
+  // A new tab or search always starts from page 1.
+  useEffect(() => { setPage(1) }, [tab, debouncedSearch])
 
-  const filteredNotifications = useMemo(() => {
-    let list = notifications
-
-    // Filter by tab
-    if (tab === 'unread') {
-      list = list.filter((n) => !n.read_at)
-    } else if (tab === 'submissions') {
-      list = list.filter((n) => n.type === 'form_submission' || n.type === 'submission')
-    } else if (tab === 'projects') {
-      list = list.filter((n) => n.type === 'assignment' || n.type === 'project_update')
-    } else if (tab === 'tasks') {
-      list = list.filter((n) => n.type === 'task_assignment' || n.type === 'task_update')
-    }
-
-    // Filter by search query
-    const q = searchQuery.trim().toLowerCase()
-    if (q) {
-      list = list.filter((n) => {
-        const meta = getMetadata(n)
-        return (
-          n.title.toLowerCase().includes(q) ||
-          n.message.toLowerCase().includes(q) ||
-          (meta.client_name && meta.client_name.toLowerCase().includes(q)) ||
-          (meta.form_name && meta.form_name.toLowerCase().includes(q)) ||
-          (meta.project_name && meta.project_name.toLowerCase().includes(q)) ||
-          (meta.task_title && meta.task_title.toLowerCase().includes(q)) ||
-          (meta.assigned_by && meta.assigned_by.toLowerCase().includes(q)) ||
-          (meta.submission_id && meta.submission_id.toLowerCase().includes(q)) ||
-          (n.submission_id && n.submission_id.toLowerCase().includes(q))
-        )
-      })
-    }
-
-    return list
-  }, [notifications, tab, searchQuery])
+  const unreadCount = tabCounts.unread
+  const readCount = Math.max(0, tabCounts.all - tabCounts.unread)
+  const submissionCount = tabCounts.submissions
+  const projectCount = tabCounts.projects
+  const taskCount = tabCounts.tasks
+  const clientCount = tabCounts.client
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const openNotification = async (notification: Notification) => {
     if (!notification.read_at) {
@@ -209,7 +194,13 @@ export default function NotificationsPage() {
   }
 
   const clearAllRead = async () => {
-    if (!window.confirm('Delete all read notifications from your inbox?')) return
+    const ok = await confirm({
+      title: 'Clear all read notifications?',
+      description: 'This removes every read notification from your inbox. Unread notifications are kept.',
+      confirmLabel: 'Clear read',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setClearingRead(true)
     const result = await deleteAllReadNotifications()
     setClearingRead(false)
@@ -232,7 +223,7 @@ export default function NotificationsPage() {
       <PageHeader
         eyebrow="NOTIFICATIONS / INBOX"
         title="Notifications"
-        description="Internal notifications for form submissions, project assignments, and task updates."
+        description="In-app inbox for domain events: submissions, assignments, tasks, client feedback, shared files, and deliveries."
         action={
           <div className="flex items-center gap-2">
             {readCount > 0 && (
@@ -321,6 +312,17 @@ export default function NotificationsPage() {
           >
             Tasks <span className="font-mono-tech text-[10px] text-text-tertiary">({taskCount})</span>
           </button>
+          <button
+            type="button"
+            onClick={() => setTab('client')}
+            className={`rounded-md border px-3 py-1.5 text-xs font-medium transition ${
+              tab === 'client'
+                ? 'border-accent bg-accent/10 text-accent font-semibold'
+                : 'border-border bg-surface text-text-secondary hover:border-line-light hover:text-fg'
+            }`}
+          >
+            Client <span className="font-mono-tech text-[10px] text-text-tertiary">({clientCount})</span>
+          </button>
         </div>
 
         {/* Search Input */}
@@ -347,19 +349,19 @@ export default function NotificationsPage() {
       {/* Notifications List */}
       <Panel
         title="Inbox"
-        description={`${filteredNotifications.length} notification${
-          filteredNotifications.length === 1 ? '' : 's'
+        description={`${total} notification${
+          total === 1 ? '' : 's'
         } ${tab !== 'all' ? `(${tab})` : ''}`}
       >
         {loading ? (
           <LoadingState label="Loading notifications…" />
-        ) : notifications.length === 0 ? (
+        ) : tabCounts.all === 0 ? (
           <EmptyState
             icon={Bell}
             title="Your inbox is empty"
             description="Form submissions, project assignments, and task updates will be delivered here automatically."
           />
-        ) : filteredNotifications.length === 0 ? (
+        ) : notifications.length === 0 ? (
           <EmptyState
             icon={Filter}
             title="No matching notifications"
@@ -385,10 +387,10 @@ export default function NotificationsPage() {
           />
         ) : (
           <div className="divide-y divide-border">
-            {filteredNotifications.map((notification) => {
+            {notifications.map((notification) => {
               const isUnread = !notification.read_at
-              const meta = getMetadata(notification)
-              const badge = getNotificationTypeBadge(notification.type)
+              const meta = getNotificationMetadata(notification)
+              const badge = getNotificationTypeBadge(notification)
               const BadgeIcon = badge.icon
               const isBusy = busyActionId === notification.id
               const dateObj = new Date(notification.created_at)
@@ -633,6 +635,7 @@ export default function NotificationsPage() {
             })}
           </div>
         )}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))} />
       </Panel>
     </Page>
   )

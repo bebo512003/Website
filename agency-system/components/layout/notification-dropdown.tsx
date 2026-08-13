@@ -12,6 +12,9 @@ import {
   FileText,
   FolderKanban,
   LoaderCircle,
+  MessageSquare,
+  Package,
+  Paperclip,
   Trash2,
 } from 'lucide-react'
 import {
@@ -20,8 +23,10 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
-} from '@/lib/supabase/database'
-import type { Notification, NotificationMetadata } from '@/lib/supabase/types'
+} from '@/lib/db'
+import type { Notification } from '@/lib/supabase/types'
+import { getNotificationMetadata, notificationEvent, resolveNotificationHref } from '@/lib/notifications'
+import { useAuth } from '@/contexts/auth-context'
 
 function formatRelativeTime(dateString: string): string {
   try {
@@ -39,37 +44,37 @@ function formatRelativeTime(dateString: string): string {
   }
 }
 
-function getNotificationTypeIcon(type: Notification['type']) {
-  switch (type) {
-    case 'form_submission':
-    case 'submission':
-      return { icon: FileText, color: 'text-accent border-accent/30 bg-accent/10', label: 'Form Submission' }
-    case 'assignment':
-    case 'project_update':
-      return { icon: FolderKanban, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Project' }
-    case 'task_assignment':
-    case 'task_update':
-      return { icon: CheckSquare, color: 'text-sky-400 border-sky-500/30 bg-sky-500/10', label: 'Task' }
-    default:
-      return { icon: Bell, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10', label: 'Notification' }
+function getNotificationTypeIcon(notification: Notification) {
+  const event = notificationEvent(notification)
+  if (event.startsWith('submission.') || notification.type === 'form_submission' || notification.type === 'submission') {
+    return { icon: FileText, color: 'text-accent border-accent/30 bg-accent/10', label: 'Submission' }
   }
+  if (event.startsWith('task.') || notification.type === 'task_assignment' || notification.type === 'task_update') {
+    return { icon: CheckSquare, color: 'text-sky-400 border-sky-500/30 bg-sky-500/10', label: 'Task' }
+  }
+  if (event.startsWith('client.') || notification.type === 'client_feedback' || notification.type === 'client_approval' || notification.type === 'client_revision') {
+    return { icon: MessageSquare, color: 'text-violet-400 border-violet-500/30 bg-violet-500/10', label: 'Client' }
+  }
+  if (event === 'file.shared' || notification.type === 'file_shared') {
+    return { icon: Paperclip, color: 'text-amber-400 border-amber-500/30 bg-amber-500/10', label: 'File' }
+  }
+  if (event === 'delivery.ready' || notification.type === 'delivery_ready') {
+    return { icon: Package, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Delivery' }
+  }
+  return { icon: FolderKanban, color: 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10', label: 'Project' }
 }
 
-function getMetadata(notification: Notification): NotificationMetadata {
-  if (notification.metadata && typeof notification.metadata === 'object' && !Array.isArray(notification.metadata)) {
-    return notification.metadata as NotificationMetadata
-  }
-  return {}
-}
-
-export function NotificationDropdown() {
+export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewAllHref?: string }) {
   const router = useRouter()
+  const { isClient } = useAuth()
   const [open, setOpen] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [loading, setLoading] = useState(false)
   const [unreadCount, setUnreadCount] = useState(0)
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelId = 'notification-dropdown-panel'
 
   const load = useCallback(async () => {
     const result = await getNotifications(20)
@@ -90,7 +95,9 @@ export function NotificationDropdown() {
     }
   }, [load])
 
-  // Close on outside click
+  // Close on outside click or Escape, and restore focus to the trigger button
+  // when the panel closes so keyboard users don't lose their place in the top
+  // bar's tab order.
   useEffect(() => {
     if (!open) return
     const handleClickOutside = (event: MouseEvent) => {
@@ -99,7 +106,12 @@ export function NotificationDropdown() {
       }
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        setOpen(false)
+        // Explicit restoration: without this the browser drops focus to the
+        // <body>, which is a jarring keyboard experience.
+        triggerRef.current?.focus()
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     document.addEventListener('keydown', handleKeyDown)
@@ -123,11 +135,7 @@ export function NotificationDropdown() {
       window.dispatchEvent(new Event('agency-notifications-changed'))
     }
     setOpen(false)
-    if (notification.action_url) {
-      router.push(notification.action_url)
-    } else {
-      router.push('/notifications')
-    }
+    router.push(resolveNotificationHref(notification, isClient))
   }
 
   const handleToggleRead = async (event: React.MouseEvent, notification: Notification) => {
@@ -163,10 +171,13 @@ export function NotificationDropdown() {
     <div className="relative" ref={containerRef}>
       {/* Bell Button */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={toggleDropdown}
         aria-expanded={open}
-        aria-label={`Open notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+        aria-haspopup="dialog"
+        aria-controls={open ? panelId : undefined}
+        aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
         className={`relative rounded-md border p-2 transition ${
           open
             ? 'border-accent bg-surface-raised text-fg shadow-sm'
@@ -183,7 +194,12 @@ export function NotificationDropdown() {
 
       {/* Floating Dropdown Panel */}
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-lg border border-border bg-surface shadow-2xl z-50 overflow-hidden backdrop-blur-lg">
+        <div
+          id={panelId}
+          role="dialog"
+          aria-label="Notifications"
+          className="absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-lg border border-border bg-surface shadow-2xl z-50 overflow-hidden backdrop-blur-lg"
+        >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border bg-surface-raised/80 px-4 py-3">
             <div className="flex items-center gap-2">
@@ -232,8 +248,8 @@ export function NotificationDropdown() {
               </div>
             ) : (
               notifications.slice(0, 10).map((notification) => {
-                const { icon: Icon, color } = getNotificationTypeIcon(notification.type)
-                const meta = getMetadata(notification)
+                const { icon: Icon, color } = getNotificationTypeIcon(notification)
+                const meta = getNotificationMetadata(notification)
                 const isUnread = !notification.read_at
                 const isBusy = busyActionId === notification.id
 
@@ -347,7 +363,7 @@ export function NotificationDropdown() {
           {/* Footer */}
           <div className="border-t border-border bg-surface-raised/50 p-2 text-center">
             <Link
-              href="/notifications"
+              href={viewAllHref}
               onClick={() => setOpen(false)}
               className="inline-flex items-center justify-center gap-1.5 w-full rounded py-1.5 text-xs font-semibold text-accent hover:brightness-110 transition"
             >

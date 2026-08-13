@@ -1,34 +1,19 @@
-'use client'
-
-import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import {
   ArrowRight,
   ArrowUpRight,
   ChevronRight,
   ClipboardList,
-  FileText,
   ImageIcon,
   Layers3,
-  LoaderCircle,
   Lock,
-  LogIn,
-  Menu,
   Sparkles,
-  X,
-  Zap,
 } from 'lucide-react'
-import { getPublishedFormTemplates, getPublicPortfolioProjects } from '@/lib/supabase/database'
 import type { PortfolioProjectWithRelations, PublicFormTemplateSummary } from '@/lib/supabase/types'
 import { PortfolioProjectCard } from '@/components/portfolio/portfolio-project-card'
-
-// ── Client Landing Page ──────────────────────────────────────────────────────
-// The first page every visitor sees. Three public paths are surfaced clearly:
-//   1. Landing → Request a Project (/forms) → Available Forms → Select Form → Submit
-//   2. Landing → Portfolio (/portfolio) → Project Details (/portfolio/<slug>)
-//   3. Landing → Login (/auth)
-// No authentication is required to start any of the first two flows.
-// Portfolio data is loaded via the public RPC (published + not archived only).
+import { PublishedFormCard } from '@/components/public/published-form-card'
+import { PublicSiteHeader } from '@/components/public/public-site-header'
+import { PublicSiteFooter } from '@/components/public/public-site-footer'
 
 const SERVICES = [
   {
@@ -71,101 +56,32 @@ const STEPS = [
   },
 ] as const
 
-export function ClientLandingPage() {
-  const [projects, setProjects] = useState<PortfolioProjectWithRelations[]>([])
-  const [forms, setForms] = useState<PublicFormTemplateSummary[]>([])
-  const [loadingPortfolio, setLoadingPortfolio] = useState(true)
-  const [loadingForms, setLoadingForms] = useState(true)
-  const [error, setError] = useState('')
-  const [menuOpen, setMenuOpen] = useState(false)
-
-  const load = useCallback(async () => {
-    const [portfolioResult, formsResult] = await Promise.all([
-      getPublicPortfolioProjects(),
-      // This public query explicitly filters lifecycle state even for staff sessions.
-      getPublishedFormTemplates(),
-    ])
-    setProjects(portfolioResult.data)
-    setForms(formsResult.data)
-    setError(portfolioResult.error || formsResult.error || '')
-    setLoadingPortfolio(false)
-    setLoadingForms(false)
-  }, [])
-
-  useEffect(() => { void load() }, [load])
-
-  const categories = useMemo(() => {
-    const seen = new Map<string, { slug: string; name: string }>()
-    projects.forEach((project) => {
-      if (project.portfolio_categories) seen.set(project.portfolio_categories.slug, { slug: project.portfolio_categories.slug, name: project.portfolio_categories.name })
-    })
-    return [...seen.values()]
-  }, [projects])
-
-  const featured = useMemo(() => {
-    const featuredOnly = projects.filter((project) => project.featured)
-    return (featuredOnly.length ? featuredOnly : projects).slice(0, 3)
-  }, [projects])
+export function ClientLandingPage({
+  projects,
+  forms,
+  error,
+}: {
+  projects: PortfolioProjectWithRelations[]
+  forms: PublicFormTemplateSummary[]
+  error: string | null
+}) {
+  const categories = new Map<string, { slug: string; name: string }>()
+  projects.forEach((project) => {
+    if (project.portfolio_categories) {
+      categories.set(project.portfolio_categories.slug, {
+        slug: project.portfolio_categories.slug,
+        name: project.portfolio_categories.name,
+      })
+    }
+  })
+  const categoryList = [...categories.values()]
+  const featuredOnly = projects.filter((project) => project.featured)
+  const featured = (featuredOnly.length ? featuredOnly : projects).slice(0, 3)
 
   return (
-    <main className="min-h-screen overflow-hidden bg-bg text-fg">
-      {/* ── Header / Nav ──────────────────────────────────────────────── */}
-      <header className="sticky inset-x-0 top-0 z-40 border-b border-border bg-bg/85 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-5 py-4 sm:px-8 lg:px-10">
-          <Link href="/" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)}>
-            <span className="flex h-9 w-9 items-center justify-center border border-line-light bg-surface-raised text-accent transition group-hover:border-accent">
-              <Zap className="h-4 w-4" />
-            </span>
-            <span className="hidden sm:inline">
-              <span className="block text-sm font-bold tracking-[0.22em] text-fg">AGENCY OS</span>
-              <span className="font-mono-tech text-[8px] text-text-tertiary">CREATIVE STUDIO</span>
-            </span>
-          </Link>
-          <nav className="hidden items-center gap-7 md:flex" aria-label="Primary">
-            <a href="#services" className="text-xs text-text-secondary transition hover:text-fg">Services</a>
-            <a href="#how" className="text-xs text-text-secondary transition hover:text-fg">How it works</a>
-            <Link href="/portfolio" className="text-xs text-text-secondary transition hover:text-fg">Portfolio</Link>
-            <Link href="/forms" className="text-xs text-text-secondary transition hover:text-fg">Available forms</Link>
-          </nav>
-          <div className="hidden items-center gap-2 md:flex">
-            <Link href="/auth" className="inline-flex items-center gap-2 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg">
-              <LogIn className="h-3.5 w-3.5" /> Login
-            </Link>
-            <Link href="/forms" className="inline-flex items-center gap-2 rounded-md border border-accent bg-accent px-3.5 py-2 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
-              Request a project <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          </div>
-          <button
-            type="button"
-            className="rounded-md border border-border p-2 text-fg md:hidden"
-            onClick={() => setMenuOpen((open) => !open)}
-            aria-label={menuOpen ? 'Close menu' : 'Open menu'}
-            aria-expanded={menuOpen}
-          >
-            {menuOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
-          </button>
-        </div>
-        {menuOpen && (
-          <nav className="border-t border-border bg-surface px-5 py-4 md:hidden" aria-label="Mobile primary">
-            <div className="grid gap-1">
-              <a href="#services" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Services</a>
-              <a href="#how" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">How it works</a>
-              <Link href="/portfolio" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Portfolio</Link>
-              <Link href="/forms" onClick={() => setMenuOpen(false)} className="rounded px-3 py-2.5 text-sm text-text-secondary hover:bg-surface-raised hover:text-fg">Available forms</Link>
-            </div>
-            <div className="mt-3 grid gap-2 border-t border-border pt-3">
-              <Link href="/auth" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary">
-                <LogIn className="h-4 w-4" /> Login
-              </Link>
-              <Link href="/forms" onClick={() => setMenuOpen(false)} className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground">
-                Request a project <ArrowRight className="h-4 w-4" />
-              </Link>
-            </div>
-          </nav>
-        )}
-      </header>
+    <div className="min-h-screen overflow-hidden bg-bg text-fg">
+      <PublicSiteHeader />
 
-      {/* ── Hero ─────────────────────────────────────────────────────── */}
       <section className="relative overflow-hidden border-b border-border bg-[radial-gradient(circle_at_85%_15%,hsl(var(--accent)/0.18),transparent_40%),linear-gradient(135deg,hsl(var(--color-bg))_0%,hsl(var(--surface))_60%,hsl(var(--surface-raised))_100%)] px-5 pb-20 pt-16 sm:px-8 sm:pt-24 lg:px-10 lg:pt-32">
         <div className="pointer-events-none absolute inset-0 opacity-25 [background-image:linear-gradient(hsl(var(--border))_1px,transparent_1px),linear-gradient(90deg,hsl(var(--border))_1px,transparent_1px)] [background-size:72px_72px] [mask-image:linear-gradient(to_bottom,black,transparent_85%)]" />
         <div className="pointer-events-none absolute right-[10%] top-[18%] hidden h-56 w-56 rounded-full border border-accent/25 lg:block" />
@@ -199,17 +115,16 @@ export function ClientLandingPage() {
                 <p className="mt-1 font-mono-tech text-[9px] text-text-tertiary">SERVICES</p>
               </div>
               <div>
-                <p className="font-display text-2xl leading-none text-fg">{loadingPortfolio ? '—' : projects.length}</p>
+                <p className="font-display text-2xl leading-none text-fg">{projects.length}</p>
                 <p className="mt-1 font-mono-tech text-[9px] text-text-tertiary">PUBLISHED PROJECTS</p>
               </div>
               <div>
-                <p className="font-display text-2xl leading-none text-fg">{loadingForms ? '—' : forms.length}</p>
+                <p className="font-display text-2xl leading-none text-fg">{forms.length}</p>
                 <p className="mt-1 font-mono-tech text-[9px] text-text-tertiary">AVAILABLE FORMS</p>
               </div>
             </div>
           </div>
 
-          {/* Flow card — quick visual of the three public paths */}
           <aside className="rounded-md border border-border bg-surface/85 p-6 backdrop-blur sm:p-7">
             <p className="font-mono-tech text-[10px] text-accent">CLIENT FLOW</p>
             <h2 className="mt-3 font-display text-3xl leading-tight">Choose your next step.</h2>
@@ -239,7 +154,6 @@ export function ClientLandingPage() {
         </div>
       </section>
 
-      {/* ── Services ─────────────────────────────────────────────────── */}
       <section id="services" className="border-b border-border bg-surface px-5 py-20 sm:px-8 lg:px-10 lg:py-24">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -266,7 +180,6 @@ export function ClientLandingPage() {
         </div>
       </section>
 
-      {/* ── How it works ────────────────────────────────────────────── */}
       <section id="how" className="border-b border-border bg-bg px-5 py-20 sm:px-8 lg:px-10 lg:py-24">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -283,10 +196,7 @@ export function ClientLandingPage() {
                 <h3 className="mt-3 text-lg font-semibold text-fg">{step.title}</h3>
                 <p className="mt-2 text-sm leading-6 text-text-secondary">{step.description}</p>
                 {'cta' in step && step.cta && (
-                  <Link
-                    href={step.cta.href}
-                    className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-accent transition hover:brightness-110"
-                  >
+                  <Link href={step.cta.href} className="mt-5 inline-flex items-center gap-1.5 text-xs font-semibold text-accent transition hover:brightness-110">
                     {step.cta.label} <ArrowRight className="h-3.5 w-3.5" />
                   </Link>
                 )}
@@ -296,7 +206,6 @@ export function ClientLandingPage() {
         </div>
       </section>
 
-      {/* ── Portfolio ────────────────────────────────────────────────── */}
       <section className="border-b border-border bg-surface px-5 py-20 sm:px-8 lg:px-10 lg:py-24">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-5 border-b border-border pb-8 sm:flex-row sm:items-end sm:justify-between">
@@ -318,21 +227,17 @@ export function ClientLandingPage() {
             </div>
           )}
 
-          {loadingPortfolio ? (
-            <div className="mt-10 flex min-h-72 items-center justify-center gap-3 text-sm text-text-secondary">
-              <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> Loading published projects…
-            </div>
-          ) : featured.length > 0 ? (
+          {featured.length > 0 ? (
             <>
               <div className="mt-10 grid gap-5 md:grid-cols-2">
-                {featured.map((project) => (
-                  <PortfolioProjectCard key={project.id} project={project} featured />
+                {featured.map((project, index) => (
+                  <PortfolioProjectCard key={project.id} project={project} featured priority={index === 0} />
                 ))}
               </div>
-              {categories.length > 0 && (
+              {categoryList.length > 0 && (
                 <div className="mt-8 flex flex-wrap items-center gap-2 text-xs text-text-secondary">
                   <span className="font-mono-tech text-[10px] text-text-tertiary">CATEGORIES</span>
-                  {categories.slice(0, 6).map((category) => (
+                  {categoryList.slice(0, 6).map((category) => (
                     <span key={category.slug} className="rounded border border-border bg-surface-raised px-2.5 py-1">
                       {category.name}
                     </span>
@@ -365,7 +270,6 @@ export function ClientLandingPage() {
         </div>
       </section>
 
-      {/* ── Available Forms ─────────────────────────────────────────── */}
       <section id="available-forms" className="border-b border-border bg-bg px-5 py-20 sm:px-8 lg:px-10 lg:py-24">
         <div className="mx-auto max-w-7xl">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -381,11 +285,7 @@ export function ClientLandingPage() {
             </Link>
           </div>
 
-          {loadingForms ? (
-            <div className="mt-10 flex min-h-48 items-center justify-center gap-3 text-sm text-text-secondary">
-              <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> Loading forms…
-            </div>
-          ) : forms.length === 0 ? (
+          {forms.length === 0 ? (
             <div className="mt-10 rounded-md border border-border bg-surface px-6 py-14 text-center">
               <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
                 <ClipboardList className="h-5 w-5 text-text-tertiary" />
@@ -406,26 +306,13 @@ export function ClientLandingPage() {
           ) : (
             <div className="mt-10 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {forms.map((form) => (
-                <article key={form.id} className="group flex flex-col gap-4 rounded-md border border-border bg-surface p-6 transition hover:border-line-light">
-                  <div className="flex items-center justify-between gap-3">
-                    <h3 className="min-w-0 break-words text-base font-semibold text-fg">{form.title}</h3>
-                    <span className="rounded border border-green-500/30 bg-green-500/5 px-1.5 py-0.5 font-mono-tech text-[9px] text-green-400">LIVE</span>
-                  </div>
-                  {form.description && <p className="line-clamp-2 text-sm leading-5 text-text-secondary">{form.description}</p>}
-                  <p className="font-mono-tech text-[10px] text-text-tertiary">
-                    {(form.form_questions?.[0]?.count ?? 0)} QUESTIONS · NO ACCOUNT REQUIRED
-                  </p>
-                  <Link href={`/f/${form.slug}`} className="mt-auto inline-flex items-center gap-2 self-start rounded-md border border-accent bg-accent px-4 py-2.5 text-xs font-semibold text-accent-foreground transition hover:brightness-110">
-                    <FileText className="h-3.5 w-3.5" /> Open form <ArrowUpRight className="h-3.5 w-3.5" />
-                  </Link>
-                </article>
+                <PublishedFormCard key={form.id} form={form} compact />
               ))}
             </div>
           )}
         </div>
       </section>
 
-      {/* ── Closing CTA ─────────────────────────────────────────────── */}
       <section className="bg-accent px-5 py-20 text-accent-foreground sm:px-8 lg:px-10 lg:py-24">
         <div className="mx-auto flex max-w-7xl flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -446,26 +333,7 @@ export function ClientLandingPage() {
         </div>
       </section>
 
-      {/* ── Footer ──────────────────────────────────────────────────── */}
-      <footer className="border-t border-border bg-bg px-5 py-10 sm:px-8 lg:px-10">
-        <div className="mx-auto flex max-w-7xl flex-col gap-6 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3">
-            <span className="flex h-8 w-8 items-center justify-center border border-line-light bg-surface-raised text-accent">
-              <Zap className="h-4 w-4" />
-            </span>
-            <div>
-              <p className="text-sm font-bold tracking-[0.22em] text-fg">AGENCY OS</p>
-              <p className="font-mono-tech text-[8px] text-text-tertiary">CREATIVE STUDIO</p>
-            </div>
-          </div>
-          <nav className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs text-text-secondary" aria-label="Footer">
-            <Link href="/portfolio" className="hover:text-fg">Portfolio</Link>
-            <Link href="/forms" className="hover:text-fg">Request a project</Link>
-            <Link href="/auth" className="hover:text-fg">Login</Link>
-          </nav>
-          <p className="font-mono-tech text-[9px] text-text-tertiary">© {new Date().getFullYear()} AGENCY OS</p>
-        </div>
-      </footer>
-    </main>
+      <PublicSiteFooter />
+    </div>
   )
 }

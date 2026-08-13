@@ -61,6 +61,11 @@ export const PROJECT_ACTIVITY_LABELS: Record<ProjectActivityEventType, string> =
   approval_recorded: 'Internal approval recorded',
   archived: 'Project archived',
   unarchived: 'Project unarchived',
+  file_shared: 'File shared with client',
+  file_unshared: 'File unshared with client',
+  client_feedback: 'Client feedback',
+  client_approved: 'Client approved delivery',
+  client_revision_requested: 'Client requested a revision',
 }
 
 /** Who performed the event — falls back to "System" for automatic rows. */

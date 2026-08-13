@@ -4,13 +4,15 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Download, FileText, LoaderCircle, Trash2, Upload } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { deleteFile, getFileDownloadUrl, getFiles, getProjects, uploadProjectFile } from '@/lib/supabase/database'
+import { deleteFile, getFileDownloadUrl, getFiles, getProjects, uploadProjectFile } from '@/lib/db'
 import { formatBytes, validateFile, STORAGE_RULES } from '@/lib/storage-config'
 import type { FileWithProject, ProjectWithClient } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 export default function FilesPage() {
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const [files, setFiles] = useState<FileWithProject[]>([])
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
   const [loading, setLoading] = useState(true)
@@ -51,7 +53,13 @@ export default function FilesPage() {
   }
 
   const remove = async (file: FileWithProject) => {
-    if (!window.confirm(`Delete “${file.name}”?`)) return
+    const ok = await confirm({
+      title: `Delete “${file.name}”?`,
+      description: 'The file is removed from storage and can no longer be downloaded.',
+      confirmLabel: 'Delete file',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteFile(file)
     if (result.error) setError(result.error)
     else { setMessage('File deleted.'); await load() }

@@ -4,7 +4,7 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addProjectMember, completeProject, deleteTask, getFilesByProjectId, getProfiles, getProjectById, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
+import { addProjectMember, completeProject, deleteTask, getFilesByProjectId, getProfiles, getProjectById, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/db'
 import type { FileItem, Profile, ProjectDeliveryWithFiles, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
@@ -19,6 +19,7 @@ import { ProjectActivityTimeline } from '@/components/projects/project-activity-
 import { ProjectDeliveryPanel } from '@/components/projects/project-delivery-panel'
 import { currentDelivery, deliveryReadiness } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type Member = ProjectMember & { profiles: Pick<Profile, 'id' | 'full_name' | 'email' | 'role'> | null }
 const taskStatuses: TaskStatus[] = ['todo', 'inprogress', 'review', 'done']
@@ -30,6 +31,7 @@ const PRIORITY_LABELS: Record<ProjectPriority, string> = {
 export default function ProjectDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const [project, setProject] = useState<ProjectWithClient | null>(null)
   const [tasks, setTasks] = useState<TaskWithRelations[]>([])
   const [members, setMembers] = useState<Member[]>([])
@@ -114,7 +116,13 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const removeTask = async (task: TaskWithRelations) => {
-    if (!window.confirm(`Delete “${task.title}”?`)) return
+    const ok = await confirm({
+      title: `Delete “${task.title}”?`,
+      description: 'This removes the task and its activity history from the project.',
+      confirmLabel: 'Delete task',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteTask(task.id)
     if (result.error) setError(result.error)
     else await load()
@@ -145,10 +153,20 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         setError(`Cannot complete this project: ${readiness.blockers.join('; ')}`)
         return
       }
-      if (!window.confirm('Complete this project? This is a terminal status and requires the delivery checklist.')) return
+      const ok = await confirm({
+        title: 'Complete this project?',
+        description: 'Completed is a terminal status and requires the delivery checklist.',
+        confirmLabel: 'Mark complete',
+      })
+      if (!ok) return
     }
     if (status === 'in-review' && project && (project.status === 'delivered' || project.status === 'ready-for-delivery')) {
-      if (!window.confirm('Move back to In review? This records a revision and opens a new delivery package.')) return
+      const ok = await confirm({
+        title: 'Move back to In review?',
+        description: 'This records a revision and opens a new delivery package.',
+        confirmLabel: 'Move to In review',
+      })
+      if (!ok) return
     }
     setSaving(true)
     setError('')
@@ -167,7 +185,14 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const removeMember = async (member: Member) => {
-    if (!window.confirm(`Remove ${member.profiles?.full_name || member.profiles?.email || 'this member'} from the team?`)) return
+    const displayName = member.profiles?.full_name || member.profiles?.email || 'this member'
+    const ok = await confirm({
+      title: `Remove ${displayName} from the team?`,
+      description: 'Their open tasks on this project are released. Completed work stays attributed to them.',
+      confirmLabel: 'Remove member',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setError('')
     const result = await removeProjectMember(id, member.user_id)
     if (result.error) setError(result.error)

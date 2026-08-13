@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { PortfolioManagement } from '@/components/admin/portfolio-management'
 import { EmptyState, Page, PageHeader, Panel } from '@/components/ui/page'
+import { AdminSectionNav } from '@/components/admin/admin-section-nav'
 
 export default function AdminPortfolioPage() {
   const { can } = useAuth()
@@ -30,6 +31,7 @@ export default function AdminPortfolioPage() {
         title="Portfolio"
         description="Anyone with Manage portfolio can publish, archive, and reorder public work. This page is not locked behind Manage system."
       />
+      <AdminSectionNav />
       <PortfolioManagement />
     </Page>
   )

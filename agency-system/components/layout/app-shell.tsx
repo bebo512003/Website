@@ -109,15 +109,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isFormsPage = pathname === '/forms'
   // The company portfolio is intentionally outside the authenticated staff shell.
   const isPortfolioPage = pathname === '/portfolio' || pathname.startsWith('/portfolio/')
-  const isPortalPage = pathname === '/portal'
+  const isTrackPage = pathname === '/track' || pathname.startsWith('/track/')
+  const isPortalPage = pathname === '/portal' || pathname.startsWith('/portal/')
   // The root is a public Client Landing Page. Staff users are routed to the
   // dashboard so the landing stays client-focused for visitors.
   const isLandingPage = pathname === '/'
   const isStaffDashboard = pathname === '/dashboard'
+  const isServicesPage = pathname === '/services'
   // The client landing page, public portfolio, public forms listing, public forms,
-  // and the auth screen are the only publicly reachable pages. Everything else sits
-  // behind the staff shell.
-  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage
+  // public tracking, services redirect, and the auth screen are the only publicly reachable pages.
+  // Everything else sits behind the staff shell.
+  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage || isTrackPage || isServicesPage
 
   useEffect(() => {
     if (loading) return
@@ -138,23 +140,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     }
 
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage) {
+    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage && !isTrackPage && !isServicesPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
     if (!isClient && isPortalPage) router.replace('/dashboard')
-  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isStaffDashboard, loading, profile, router, user])
+  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isServicesPage, isStaffDashboard, isTrackPage, loading, profile, router, user])
 
   const style = {
     ['--accent' as string]: accent.hsl,
     ['--accent-glow' as string]: accent.glow,
   }
 
-  // Public pages render without the workspace shell.
-  if (isAuthPage) return <div style={style}>{children}</div>
-  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}>{children}</div>
+  // Public pages render without the workspace shell but still expose a main
+  // landmark so a screen reader (or the skip link) can jump straight to the
+  // primary content.
+  if (isAuthPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
+  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage || isTrackPage || isServicesPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 
@@ -168,11 +172,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   // Accounts still holding their temporary password cannot reach any workspace
   // page — including /profile — until they replace it. The database enforces the
-  // same block by withholding all permissions while the flag is pending.
-  if (!isClient && mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
+  // same block by withholding all permissions while the flag is pending. Client
+  // portal accounts go through the same gate so a temporary password is never
+  // left in place.
+  if (mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
 
   if (isPortalPage) {
-    if (isClient) return <div style={style}>{children}</div>
+    if (isClient) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
     return <LoadingScreen style={style} />
   }
 
@@ -189,11 +195,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-fg" style={style}>
+      <SkipToMain />
       <Sidebar />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main id="main-content" className="flex-1 overflow-y-auto" tabIndex={-1}>{children}</main>
       </div>
     </div>
+  )
+}
+
+/**
+ * Skip link: the first Tab press on any page reveals a jump-to-content
+ * shortcut. Keyboard-only users don't have to Tab through the sidebar and top
+ * bar every time they land on a new page. The link is styled entirely in
+ * globals.css (`.skip-link`) so the animation and the visible-on-focus rules
+ * stay in one place.
+ */
+function SkipToMain() {
+  return (
+    <a href="#main-content" className="skip-link">
+      Skip to main content
+    </a>
   )
 }

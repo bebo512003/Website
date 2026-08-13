@@ -16,7 +16,7 @@ import {
   requestProjectRevision,
   unarchiveProject,
   uploadProjectFile,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { FileItem, ProjectDeliveryWithFiles, ProjectWithClient } from '@/lib/supabase/types'
 import {
   PROJECT_APPROVAL_STATE_LABELS,
@@ -28,6 +28,7 @@ import {
 } from '@/lib/project-delivery'
 import { validateFile, formatBytes, STORAGE_RULES } from '@/lib/storage-config'
 import { InlineAlert, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 export function ProjectDeliveryPanel({
   project,
@@ -46,6 +47,7 @@ export function ProjectDeliveryPanel({
   userId: string | null
   onChanged: () => Promise<void>
 }) {
+  const confirm = useConfirm()
   const delivery = useMemo(() => currentDelivery(deliveries), [deliveries])
   const deliveryFileIds = useMemo(() => new Set((delivery?.files || []).map((item) => item.file_id)), [delivery])
   const fileCount = delivery?.files.length || 0
@@ -147,9 +149,9 @@ export function ProjectDeliveryPanel({
           <div className="flex items-start gap-2">
             <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-cyan-300" />
             <p>
-              <strong>Internal record only.</strong> Recording approval here is a staff placeholder for what the
-              client said. It is stored separately from comments and is not a client-facing action. A future client
-              portal will use its own approval table.
+              <strong>Two approval paths.</strong> The client can approve (or request a revision) from the portal —
+              that writes <em>client_approvals</em> and stamps this package <em>Approved by client</em>. Recording
+              approval here is still a staff-only placeholder for off-portal sign-off. Internal comments stay private.
             </p>
           </div>
         </div>
@@ -160,7 +162,7 @@ export function ProjectDeliveryPanel({
             {[
               ['At least one final delivery file', fileCount >= 1],
               ['Package marked delivered', delivery?.status === 'delivered' || delivery?.status === 'approved'],
-              ['Internal client-approval placeholder recorded', delivery?.approval_state === 'approved_internally'],
+              ['Client approval recorded', delivery?.approval_state === 'approved_internally' || delivery?.approval_state === 'approved_by_client'],
               ['Project status is Delivered', project.status === 'delivered' || project.status === 'completed'],
               ['Not archived', !archived],
             ].map(([label, done]) => (
@@ -356,8 +358,13 @@ export function ProjectDeliveryPanel({
                   className={primaryButtonClassName}
                   disabled={saving || !readiness.canComplete}
                   onClick={() => {
-                    if (!window.confirm('Complete this project? This is a terminal status.')) return
-                    void run(() => completeProject(project.id), 'Project completed.')
+                    void confirm({
+                      title: 'Complete this project?',
+                      description: 'Completed is a terminal status and cannot be undone.',
+                      confirmLabel: 'Mark complete',
+                    }).then((ok) => {
+                      if (ok) void run(() => completeProject(project.id), 'Project completed.')
+                    })
                   }}
                 >
                   <CheckCircle2 className="h-4 w-4" /> Complete project
@@ -367,8 +374,13 @@ export function ProjectDeliveryPanel({
                   className={secondaryButtonClassName}
                   disabled={saving || !readiness.canArchive}
                   onClick={() => {
-                    if (!window.confirm('Archive this project? It will leave the default project list.')) return
-                    void run(() => archiveProject(project.id), 'Project archived.')
+                    void confirm({
+                      title: 'Archive this project?',
+                      description: 'It will leave the default project list. You can still find it via filters.',
+                      confirmLabel: 'Archive project',
+                    }).then((ok) => {
+                      if (ok) void run(() => archiveProject(project.id), 'Project archived.')
+                    })
                   }}
                 >
                   <Archive className="h-4 w-4" /> Archive

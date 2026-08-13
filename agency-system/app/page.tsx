@@ -1,12 +1,27 @@
 import type { Metadata } from 'next'
 import { ClientLandingPage } from './_components/client-landing-page'
+import { getCachedPublishedForms, getCachedPublicPortfolioProjects } from '@/lib/supabase/public-server'
+import { pageMetadata, SITE_DEFAULT_DESCRIPTION, SITE_DEFAULT_TITLE } from '@/lib/site'
 
-export const metadata: Metadata = {
-  title: 'Agency OS — Build something extraordinary',
-  description:
-    'Start a new project, browse our portfolio of published work, and access the forms you need — all without an account. Sign in to access the staff workspace.',
-}
+export const revalidate = 120
 
-export default function HomePage() {
-  return <ClientLandingPage />
+export const metadata: Metadata = pageMetadata({
+  title: SITE_DEFAULT_TITLE,
+  description: SITE_DEFAULT_DESCRIPTION,
+  path: '/',
+})
+
+export default async function HomePage() {
+  const [portfolio, forms] = await Promise.all([
+    getCachedPublicPortfolioProjects(),
+    getCachedPublishedForms(),
+  ])
+
+  return (
+    <ClientLandingPage
+      projects={portfolio.data}
+      forms={forms.data}
+      error={portfolio.error || forms.error}
+    />
+  )
 }

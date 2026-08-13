@@ -12,10 +12,11 @@ import {
   getProfiles,
   setRolePermissions,
   updateAppRole,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { AppRoleWithPermissions, Permission, Profile } from '@/lib/supabase/types'
 import { ROLE_CAPABILITY_MATRIX, ROLE_MATRIX_LABELS, categoryLabel, categorySlug, compareCategories, permissionName } from '@/lib/permissions'
 import { EmptyState, InlineAlert, LoadingState, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type PermissionGroup = { slug: string; label: string; items: Permission[] }
 
@@ -95,6 +96,7 @@ function PermissionGrid({
 
 export function RolesPermissionsAdmin() {
   const { can, profile, refreshPermissions } = useAuth()
+  const confirm = useConfirm()
   const [roles, setRoles] = useState<AppRoleWithPermissions[]>([])
   const [permissions, setPermissions] = useState<Permission[]>([])
   const [profiles, setProfiles] = useState<Profile[]>([])
@@ -152,17 +154,22 @@ export function RolesPermissionsAdmin() {
   }, [permissions])
 
   // Revoking the "Manage system" permission can lock every Admin out of the
-  // administration area, so confirm it explicitly.
-  const confirmRevoke = (key: string, checked: boolean): boolean => {
+  // administration area, so confirm it explicitly. Because the accessible
+  // confirm dialog is async, the toggle handlers below are async too — they
+  // await the user's answer before updating the draft permission set.
+  const confirmRevoke = async (key: string, checked: boolean): Promise<boolean> => {
     if (key !== 'admin.manage' || checked) return true
-    return window.confirm(
-      'You are unchecking "Manage system". If no role keeps this permission, nobody will be able to open the administration area anymore — including you. Continue?',
-    )
+    return confirm({
+      title: 'Revoke “Manage system”?',
+      description: 'If no role keeps this permission, nobody will be able to open the administration area anymore — including you.',
+      confirmLabel: 'Revoke permission',
+      tone: 'destructive',
+    })
   }
 
   const toggleKeys = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
-    (key: string, checked: boolean) => {
-      if (!confirmRevoke(key, checked)) return
+    async (key: string, checked: boolean) => {
+      if (!(await confirmRevoke(key, checked))) return
       setter((current) => {
         const next = new Set(current)
         if (checked) next.add(key)
@@ -172,8 +179,8 @@ export function RolesPermissionsAdmin() {
     }
 
   const toggleCategoryKeys = (setter: React.Dispatch<React.SetStateAction<Set<string>>>) =>
-    (keys: string[], checked: boolean) => {
-      if (!checked && keys.includes('admin.manage') && !confirmRevoke('admin.manage', false)) return
+    async (keys: string[], checked: boolean) => {
+      if (!checked && keys.includes('admin.manage') && !(await confirmRevoke('admin.manage', false))) return
       setter((current) => {
         const next = new Set(current)
         for (const key of keys) {
@@ -269,7 +276,13 @@ export function RolesPermissionsAdmin() {
 
   const removeRole = async (role: AppRoleWithPermissions) => {
     if (role.is_system) return
-    if (!window.confirm(`Delete the role “${role.name}”? Employees assigned to it lose its permissions immediately.`)) return
+    const ok = await confirm({
+      title: `Delete the role “${role.name}”?`,
+      description: 'Employees assigned to it lose its permissions immediately.',
+      confirmLabel: 'Delete role',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setError('')
     const result = await deleteAppRole(role.id)
     if (result.error) { setError(result.error); return }
@@ -294,8 +307,8 @@ export function RolesPermissionsAdmin() {
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
       <Panel title="Capability matrix" description="What the four system roles receive by default. Custom roles start empty — they get only the boxes you check. Role names never imply extra access.">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-border text-left">
+        <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable capability matrix">
+          <table className="min-w-[640px] divide-y divide-border text-left">
             <thead className="bg-surface-raised">
               <tr className="text-[11px] uppercase tracking-wide text-text-tertiary">
                 <th className="px-5 py-3 font-medium">Role</th>
@@ -347,7 +360,7 @@ export function RolesPermissionsAdmin() {
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-xs font-semibold uppercase tracking-wide text-text-secondary">Permissions for this role</p>
                 <div className="flex gap-2">
-                  <button type="button" className={secondaryButtonClassName} onClick={() => toggleCategoryKeys(setCreateKeys)(allPermissionKeys, true)}>Select all</button>
+                  <button type="button" className={secondaryButtonClassName} onClick={() => void toggleCategoryKeys(setCreateKeys)(allPermissionKeys, true)}>Select all</button>
                   <button type="button" className={secondaryButtonClassName} onClick={() => setCreateKeys(new Set())}>Clear all</button>
                 </div>
               </div>
@@ -413,8 +426,8 @@ export function RolesPermissionsAdmin() {
                       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                         <p className="text-xs text-text-secondary">Check what this role should be allowed to do, then press <strong>Save permissions</strong>. Changes take effect immediately for everyone with this role.</p>
                         <div className="flex gap-2">
-                          <button type="button" className={secondaryButtonClassName} onClick={() => toggleCategoryKeys(setDraftKeys)(allPermissionKeys, true)} disabled={!canManagePermissions}>Select all</button>
-                          <button type="button" className={secondaryButtonClassName} onClick={() => { if (confirmRevoke('admin.manage', false)) setDraftKeys(new Set()) }} disabled={!canManagePermissions}>Clear all</button>
+                          <button type="button" className={secondaryButtonClassName} onClick={() => void toggleCategoryKeys(setDraftKeys)(allPermissionKeys, true)} disabled={!canManagePermissions}>Select all</button>
+                          <button type="button" className={secondaryButtonClassName} onClick={() => void confirmRevoke('admin.manage', false).then((ok) => { if (ok) setDraftKeys(new Set()) })} disabled={!canManagePermissions}>Clear all</button>
                         </div>
                       </div>
 

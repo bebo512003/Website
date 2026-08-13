@@ -4,14 +4,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Calendar, FolderKanban, LoaderCircle, Pencil, Plus, Search, Trash2, UserRound, Users } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { createProjectWithTeam, deleteProject, getClients, getProfiles, getProjects, updateProject } from '@/lib/supabase/database'
+import { createProjectWithTeam, deleteProject, getClients, getProjectListCounts, getProfiles, getProjectsPage, updateProject } from '@/lib/db'
 import type { Client, Profile, ProjectHealth, ProjectPriority, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import {
   PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS, PROJECT_STATUS_ORDER,
   nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
 } from '@/lib/project-lifecycle'
 import { PROJECT_CREATE_STATUSES } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
+
+const PAGE_SIZE = 12
 
 const blankForm = {
   name: '', description: '', client_id: '', type: 'General', status: 'draft' as ProjectStatus,
@@ -53,12 +58,15 @@ function displayName(member: Pick<Profile, 'full_name' | 'email' | 'job_title'> 
 
 export default function ProjectsPage() {
   const { can, profile } = useAuth()
+  const confirm = useConfirm()
   const canCreate = can('project.create')
   const canEdit = can('project.edit')
   const canAssign = can('project.assign')
   const [projects, setProjects] = useState<ProjectWithClient[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [team, setTeam] = useState<Profile[]>([])
+  const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState({ all: 0, active: 0, review: 0, delivery: 0, completed: 0, archived: 0 })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -66,39 +74,44 @@ export default function ProjectsPage() {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'all' | 'delivery' | ProjectStatus>('all')
   const [showArchived, setShowArchived] = useState(false)
+  const [sort, setSort] = useState<'newest' | 'oldest' | 'name' | 'deadline'>('newest')
+  const [page, setPage] = useState(1)
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<ProjectWithClient | null>(null)
   const [form, setForm] = useState<ProjectForm>(blankForm)
   const [teamMemberIds, setTeamMemberIds] = useState<string[]>([])
 
+  const debouncedQuery = useDebouncedValue(query, 300)
+
   const load = useCallback(async () => {
     setLoading(true)
-    const [projectsResult, clientsResult, teamResult] = await Promise.all([getProjects(), getClients(), getProfiles()])
+    const [projectsResult, clientsResult, teamResult, countsResult] = await Promise.all([
+      getProjectsPage({ search: debouncedQuery, status, showArchived, sort, page, pageSize: PAGE_SIZE }),
+      getClients(),
+      getProfiles(),
+      getProjectListCounts(),
+    ])
     setProjects(projectsResult.data)
+    setTotal(projectsResult.total)
     setClients(clientsResult.data)
     setTeam(teamResult.data)
-    setError(projectsResult.error || clientsResult.error || teamResult.error || '')
+    setCounts(countsResult.data)
+    setError(projectsResult.error || clientsResult.error || teamResult.error || countsResult.error || '')
     setLoading(false)
-  }, [])
+  }, [debouncedQuery, status, showArchived, sort, page])
 
   useEffect(() => {
     setQuery(new URLSearchParams(window.location.search).get('q') || '')
     void load()
   }, [load])
 
+  // Search, filters, and sort always start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedQuery, status, showArchived, sort])
+
   const activeTeam = useMemo(
     () => team.filter((member) => member.status === 'active' && member.role !== 'client'),
     [team]
   )
-
-  const filtered = useMemo(() => projects.filter((project) => {
-    const matchesArchive = showArchived ? Boolean(project.archived_at) : !project.archived_at
-    const matchesStatus = status === 'all'
-      || (status === 'delivery' && (project.status === 'ready-for-delivery' || project.status === 'delivered'))
-      || project.status === status
-    const search = query.trim().toLowerCase()
-    return matchesArchive && matchesStatus && (!search || project.name.toLowerCase().includes(search) || project.clients?.name.toLowerCase().includes(search) || project.type.toLowerCase().includes(search))
-  }), [projects, query, status, showArchived])
 
   const openCreate = () => {
     setEditing(null)
@@ -153,7 +166,13 @@ export default function ProjectsPage() {
   }
 
   const remove = async (project: ProjectWithClient) => {
-    if (!window.confirm(`Delete “${project.name}”? This action cannot be undone.`)) return
+    const ok = await confirm({
+      title: `Delete “${project.name}”?`,
+      description: 'This deletes the project along with its assignments, tasks, and files.',
+      confirmLabel: 'Delete project',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteProject(project.id)
     if (result.error) setError(result.error)
     else {
@@ -168,15 +187,7 @@ export default function ProjectsPage() {
       : [...current, memberId])
   }
 
-  const live = useMemo(() => projects.filter((item) => !item.archived_at), [projects])
-  const counts = useMemo(() => ({
-    all: live.length,
-    active: live.filter((item) => item.status === 'active').length,
-    review: live.filter((item) => item.status === 'in-review').length,
-    delivery: live.filter((item) => item.status === 'ready-for-delivery' || item.status === 'delivered').length,
-    completed: live.filter((item) => item.status === 'completed').length,
-    archived: projects.filter((item) => Boolean(item.archived_at)).length,
-  }), [live, projects])
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
     <Page>
@@ -208,25 +219,32 @@ export default function ProjectsPage() {
       <Panel>
         <div className="flex flex-col gap-3 border-b border-border p-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="relative w-full max-w-md"><Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" /><input className={`${inputClassName} pl-9`} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search projects, clients, or project types" /></div>
-          <div className="flex items-center gap-3">
-            <select aria-label="Filter by status" className={`${inputClassName} w-52`} value={status} onChange={(event) => setStatus(event.target.value as 'all' | 'delivery' | ProjectStatus)}>
+          <div className="flex flex-wrap items-center gap-3">
+            <select aria-label="Filter by status" className={`${inputClassName} w-44`} value={status} onChange={(event) => setStatus(event.target.value as 'all' | 'delivery' | ProjectStatus)}>
               <option value="all">All statuses</option>
               <option value="delivery">Ready / Delivered</option>
               {PROJECT_STATUS_ORDER.map((value) => <option key={value} value={value}>{PROJECT_STATUS_LABELS[value]}</option>)}
+            </select>
+            <select aria-label="Sort projects" className={`${inputClassName} w-44`} value={sort} onChange={(event) => setSort(event.target.value as 'newest' | 'oldest' | 'name' | 'deadline')}>
+              <option value="newest">Newest first</option>
+              <option value="oldest">Oldest first</option>
+              <option value="name">Name A–Z</option>
+              <option value="deadline">Deadline soonest</option>
             </select>
             <label className="flex items-center gap-2 text-xs text-text-secondary">
               <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
               Archived ({counts.archived})
             </label>
-            <p className="text-xs text-text-tertiary">{filtered.length} result{filtered.length === 1 ? '' : 's'}</p>
+            <p className="text-xs text-text-tertiary">{total} result{total === 1 ? '' : 's'}</p>
           </div>
         </div>
 
-        {loading ? <LoadingState label="Loading projects…" /> : filtered.length === 0 ? (
-          <EmptyState icon={FolderKanban} title={projects.length ? 'No projects match your filters' : 'No projects yet'} description={projects.length ? 'Change the search text or status filter.' : canCreate ? 'Create the first project after adding a client.' : 'An administrator or manager must assign a project to your account.'} action={canCreate && clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New project</button> : undefined} />
+        {loading ? <LoadingState label="Loading projects…" /> : projects.length === 0 ? (
+          <EmptyState icon={FolderKanban} title={total ? 'No projects match your filters' : 'No projects yet'} description={total ? 'Change the search text or status filter.' : canCreate ? 'Create the first project after adding a client.' : 'An administrator or manager must assign a project to your account.'} action={canCreate && clients.length ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New project</button> : undefined} />
         ) : (
+          <>
           <div className="grid gap-px bg-border md:grid-cols-2 xl:grid-cols-3">
-            {filtered.map((project) => (
+            {projects.map((project) => (
               <article key={project.id} className="flex min-h-64 flex-col bg-surface p-5 transition hover:bg-surface-raised">
                 <div className="flex items-start justify-between gap-4">
                   <div className="flex flex-wrap items-center gap-1.5">
@@ -248,6 +266,8 @@ export default function ProjectsPage() {
               </article>
             ))}
           </div>
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))} />
+          </>
         )}
       </Panel>
 

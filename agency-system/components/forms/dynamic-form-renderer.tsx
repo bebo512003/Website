@@ -38,6 +38,10 @@ export type DynamicFormRendererProps = {
   onFileRemove?: (question: FormQuestion, index: number) => void
   uploadingQuestionId?: string | null
   disabled?: boolean
+  /** Disables only file-upload fields (e.g. when the respondent has no session
+   *  yet). Text/choice/rating inputs stay interactive so the form can always be
+   *  completed; uploads are re-enabled once a session exists. */
+  fileUploadDisabled?: boolean
   lang?: RendererLang
   errors?: Record<string, string>
 }
@@ -61,6 +65,7 @@ export function DynamicFormRenderer({
   onFileRemove,
   uploadingQuestionId = null,
   disabled = false,
+  fileUploadDisabled = false,
   lang = 'ar',
   errors = {},
 }: DynamicFormRendererProps) {
@@ -127,11 +132,11 @@ export function DynamicFormRenderer({
       {/* Progress + current section */}
       {sections.length > 0 && (
         <div className="sm:col-span-2">
-          <div className="mb-1.5 flex items-center justify-between text-xs text-text-tertiary">
-            <span>
+          <div className="mb-1.5 flex items-center justify-between gap-3 text-xs text-text-tertiary">
+            <span className="min-w-0 truncate">
               {lang === 'ar' ? 'القسم' : 'Section'} {currentSection + 1} / {sections.length} · {sections[currentSection]?.name || (lang === 'ar' ? 'استبيان' : 'Form')}
             </span>
-            <span>{progress}%</span>
+            <span className="shrink-0">{progress}%</span>
           </div>
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
             <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${progress}%` }} />
@@ -174,7 +179,7 @@ export function DynamicFormRenderer({
             <textarea
               disabled={disabled}
               placeholder={question.placeholder || undefined}
-              className={cn(inputClassName, 'mt-2 min-h-28', error && 'border-red-500/50')}
+              className={cn(inputClassName, 'mt-2 min-h-28 resize-y', error && 'border-red-500/50')}
               value={stringValue(question.id)}
               onChange={(event) => onAnswer(question.id, event.target.value)}
             />,
@@ -289,11 +294,12 @@ export function DynamicFormRenderer({
           const files = fileValue(question.id)
           const uploading = uploadingQuestionId === question.id
           const maxReached = files.length >= 10
+          const uploadDisabled = disabled || fileUploadDisabled || uploading || maxReached
           return fieldShell(
             question,
             false,
             <div className="mt-2 space-y-2">
-              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent', (disabled || maxReached) && 'cursor-not-allowed opacity-60')}>
+              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent', (disabled || fileUploadDisabled || maxReached) && 'cursor-not-allowed opacity-60')}>
                 {uploading ? <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> : <CloudUpload className="h-5 w-5 text-accent" />}
                 <div className="flex flex-col">
                   <span>{uploading ? t.uploading : maxReached ? t.maxFilesReached : t.upload}</span>
@@ -303,7 +309,7 @@ export function DynamicFormRenderer({
                   className="hidden"
                   type="file"
                   accept={STORAGE_RULES['form-files'].acceptAttribute}
-                  disabled={disabled || uploading || maxReached}
+                  disabled={uploadDisabled}
                   onChange={(event) => {
                     const file = event.target.files?.[0]
                     if (file && onFileSelect) onFileSelect(question, file)

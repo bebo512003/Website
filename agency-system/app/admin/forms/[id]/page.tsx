@@ -41,7 +41,7 @@ import {
   updateFormQuestion,
   updateFormSubmissionStatus,
   updateFormTemplate,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type {
   FormQuestion,
   FormQuestionType,
@@ -56,6 +56,7 @@ import { QUESTION_TYPES, QUESTION_TYPE_MAP, formatAnswer, questionSection, ratin
 import { submissionStatusLabel, submissionStatusStyle } from '@/lib/submissions'
 import { DynamicFormRenderer, type RendererLang } from '@/components/forms/dynamic-form-renderer'
 import { EmptyState, InlineAlert, LoadingState, Modal, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 // ── Form builder ─────────────────────────────────────────────────────────────
 // Full admin editor for one dynamic form: details, status lifecycle, questions
@@ -102,6 +103,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   const { id } = use(params)
   const router = useRouter()
   const { can } = useAuth()
+  const confirm = useConfirm()
   const canManage = can('form.manage')
   const canConfigureAutomation = can('admin.manage')
   const canViewForm = canManage || can('form.view')
@@ -213,12 +215,18 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
 
   const removeForm = async () => {
     if (!template) return
-    if (!window.confirm(`Delete “${template.title}” and all of its questions permanently? Forms with responses cannot be deleted (archive them instead).`)) return
+    const ok = await confirm({
+      title: `Delete “${template.title}”?`,
+      description: 'This deletes the form and all of its questions permanently. Forms with responses cannot be deleted — archive them instead.',
+      confirmLabel: 'Delete form',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setBusy(true)
     const result = await deleteFormTemplate(template.id)
     setBusy(false)
     if (result.error) return setError(result.error)
-    router.replace('/admin')
+    router.replace('/admin/forms')
   }
 
   const copyLink = async () => {
@@ -295,7 +303,13 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
   }
 
   const removeQuestion = async (question: FormQuestion) => {
-    if (!window.confirm(`Delete the question “${question.label}”? Answers already collected keep their snapshot.`)) return
+    const ok = await confirm({
+      title: `Delete the question “${question.label}”?`,
+      description: 'Answers already collected keep their snapshot.',
+      confirmLabel: 'Delete question',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteFormQuestion(question.id)
     if (result.error) return setError(result.error)
     if (editingId === question.id) { setEditingId(null); setEditForm(null) }
@@ -419,8 +433,19 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                       checked={details.create_project_on_submit}
                       onChange={(e) => {
                         const enabled = e.target.checked
-                        if (enabled && !window.confirm('Enable automatic project creation for every public submission? This bypasses the normal qualification, configuration, and confirmation workflow. Use only when this automation is intentional.')) return
-                        setDetails({ ...details, create_project_on_submit: enabled })
+                        if (!enabled) {
+                          setDetails({ ...details, create_project_on_submit: false })
+                          return
+                        }
+                        // Async confirm: the checkbox stays visually unchanged
+                        // until the user acknowledges the automation warning.
+                        void confirm({
+                          title: 'Enable automatic project creation?',
+                          description: 'Every public submission will bypass the Qualified / Approved → Convert to Project workflow. Use only when this automation is intentional.',
+                          confirmLabel: 'Enable automation',
+                        }).then((ok) => {
+                          if (ok) setDetails({ ...details, create_project_on_submit: true })
+                        })
                       }}
                       className="mt-0.5 h-4 w-4 accent-[hsl(var(--accent))]"
                     />

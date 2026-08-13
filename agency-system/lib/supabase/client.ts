@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Database } from './types'
+import type { Database } from './database.types'
 
 // Check if env vars are set
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -16,14 +16,3 @@ export const supabase = supabaseUrl && supabaseAnonKey
   : null
 
 export const isDatabaseConnected = !!(supabaseUrl && supabaseAnonKey)
-
-// Helper: Check if DB is ready
-export function checkDatabase(): { ready: boolean; message: string } {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return {
-      ready: false,
-      message: 'Supabase credentials not set. Copy .env.local.example to .env.local and fill in your credentials.',
-    }
-  }
-  return { ready: true, message: 'Database connected' }
-}

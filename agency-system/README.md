@@ -20,14 +20,19 @@ The application contains no seeded users or placeholder business records. All da
 - **Controlled Submission → Project Conversion**: Admins deliberately convert only Qualified/Approved submissions through client selection/creation, project configuration, owner/manager/team assignment, and a final confirmation; the database keeps immutable submission provenance and rejects duplicate/concurrent conversions
 - **Project ownership, status & lifecycle** (Session 12): every project carries an Owner, Manager, priority, deadline, health (`On track` / `At risk` / `Off track` / `Blocked`), and an assigned team. Projects move through a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — where only valid transitions are accepted, the owner and manager are always project members, and ownership is shown across the project list, project detail, dashboard, and reports
 - **Project delivery & closure** (Session 15): after Active / In Review, staff assemble a **final delivery package**, mark it Ready / Delivered, record **revision required**, record an **internal client-approval placeholder**, then Complete and Archive. The database rejects Complete unless those delivery conditions are met. Delivery data is internal and kept separate from any future client-facing approval UI
-- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing
+- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing. Public pages are server-rendered and cached; unpublished work stays private.
+- **Public performance & SEO** (Session 27): landing, forms, and portfolio pages fetch published data on the server (session-less anon client + 120s cache), emit Open Graph / Twitter metadata, a sitemap, and robots rules, and serve portfolio images through a published-only proxy with responsive `next/image` sizes and alt text.
+- **Client Portal** (Session 17–18) at `/portal`: an invitation-only, authenticated area for the Client role. Admins invite a client from the client detail page (creating a linked login with a temporary password); the invited client sees a dashboard with their own projects, live lifecycle status and progress, **selected/shared files**, **deliverables**, a **client-visible conversation**, and **approve / request revision** actions. All portal reads and writes go through SECURITY DEFINER RPCs scoped to the client's own CRM record — internal notes, employee tasks, staff permissions, internal activity, private working files, and other clients/projects are never exposed. Client feedback notifies the project owner; approval updates the delivery state; a revision request is a first-class operational event
 - Project and client create, read, update, and delete workflows
 - **Employee My Work workspace** (Session 13) at `/my-work`: every task assigned to the signed-in user across authorized projects, with live Open / Due today / Upcoming (7 days) / Overdue / High-priority summaries that act as one-click filters, a per-project grouping with completion progress, an inline status control, and a completed-work archive; task-assignment notifications deep-link straight into it
 - **Task management with accountability**: a shared task detail dialog (status, priority, assignee, due date, description, project) plus an append-only per-task activity feed — automatic change history (created, status, priority, assignee, due date, title, description, project moves) with actor attribution, and permission-checked work notes
 - **Database-enforced task assignment**: tasks can only be assigned to active team accounts that belong to the project, or to staff the permission model explicitly grants project-wide access (`project.view_all`); assigning to other people requires `task.assign`, and removing a project member releases their open tasks back to unassigned while completed work keeps its attribution
 - Private file upload and download through Supabase Storage
 - Assignment and project update notifications
-- Reports calculated from authorized live records
+- **Deadline & escalation reminders** (Session 20): a daily server job (not the browser) notifies assignees of tasks due soon / today / overdue, escalates overdue tasks to the project manager and owner, and reminds owner/manager when a project deadline is approaching or overdue. Deliveries are recorded in `reminder_events` and never duplicated.
+- **Transactional email notifications** (Session 21): server-side transactional email through Resend for the high-value events only. Client emails: submission received (with reference + tracking link), portal invitation (no credentials in email), delivery ready, and revision/approval confirmations. Internal emails: new submission (to staff with `submission.view`), important assignments (task / project owner-manager / team member), and important project updates (client feedback, approval, revision requests → owner + manager). Events are enqueued into a server-only `email_outbox` (dedupe-unique), flushed by a cron-protected server job, and delivery status is tracked via signed Resend webhooks into `email_delivery_events`. Every other in-app notification remains inbox-only for now.
+- **Search, filtering & pagination in the database** (Session 23): every large collection — submissions inbox, clients, projects, tasks board, team (admin table + public directory), forms, portfolio, and notifications — is now filtered, sorted, and paged server-side; the browser receives only one page of rows plus the exact total. Shared pieces: debounced search inputs, a reusable pager, and parameterized Supabase queries (ilike/eq/in/order/range + exact counts). The submission inbox additionally uses two SECURITY INVOKER functions — `get_submission_inbox_page` (search across respondent fields, form title, and reviewer name; status/reviewer/form filters; newest/oldest/workflow-priority sorts; one round trip returns the page + total) and `get_submission_pipeline_counts` (summary cards aggregated in Postgres) — so RLS still governs every row read. The tasks board pages per column with "show more"; project/clients/forms/portfolio/notifications/team get explicit page controls; summary counts (pipeline stages, project status cards, notification tabs) are computed with database head queries instead of shipping whole collections to the browser.
+- **Operational analytics** (Session 24) at `/reports`: one permission-checked database aggregate turns real workflow history into management reporting — submission volume and source, submission-to-project conversion, median first staff response, active projects and lifecycle mix, overdue/unassigned work, team workload, and first-delivery timeliness/revisions. Select 7/30/90-day or 12-month windows; submissions and deliveries follow the selected period while project/task/workload cards remain a live snapshot. Project data follows the caller's project access and submission data additionally requires `submission.view`. The report deliberately contains no budget, revenue, invoice, profit, rate, client-value, or other financial metrics.
 - Dark/light themes and a responsive desktop/mobile shell
 
 ## Role model
@@ -37,7 +42,7 @@ The application contains no seeded users or placeholder business records. All da
 | Admin | Manages users, system roles, job roles, statuses, project assignments, clients, projects, tasks, and files. |
 | Manager | Manages clients, projects, tasks, and files. Cannot change account roles. |
 | Employee | Sees only assigned projects and related clients, tasks, and files. Can work with tasks and files in those projects. Carries an admin-assigned job role (Designer, Translator, …) and an Active/Inactive status. |
-| Client | Reserved portal role for existing/legacy client accounts. Public form submitters do not need accounts and are stored as CRM clients only. Client roles never appear in employee lists and have no staff permissions. |
+| Client | Invitation-only portal role. Sees their own projects, selected/shared files, deliverables, and client-visible messages; can leave feedback, approve a delivery, or request a revision. Never sees internal comments, staff tasks, or other clients. Public form submitters do not receive this role until an Admin invites them. |
 
 Public account creation is disabled. After the one-time bootstrap Admin, every Employee, Manager, custom internal role, or additional Admin account is created from **Administration → Team Management**. The Admin selects the existing metadata-driven role and sets an initial password, then gives those credentials to the team member. Database Auth triggers reject direct sign-up requests and anonymous-account conversion, while the server provisioning route independently verifies the caller's `admin.manage` permission. The database still prevents removal or deactivation of the final active Admin. Inactive accounts remain blocked by RLS throughout the database and by the application shell.
 
@@ -55,7 +60,66 @@ NEXT_PUBLIC_SUPABASE_URL=https://your-project.supabase.co
 NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key # server only; never NEXT_PUBLIC
 NEXT_PUBLIC_SITE_URL=http://localhost:3000
+CRON_SECRET=generate-a-long-random-string
+RESEND_API_KEY=                    # transactional email (Session 21)
+RESEND_WEBHOOK_SECRET=             # delivery-status webhooks (optional)
+EMAIL_FROM_ADDRESS=                # verified sender, e.g. notifications@yourdomain.com
 ```
+
+Deadline reminders run on the server. After deploy, set `CRON_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` in the host environment. Vercel Cron hits `GET /api/cron/reminders` every day at 07:00 UTC and sends `Authorization: Bearer $CRON_SECRET` automatically when `CRON_SECRET` is set. Apply `supabase/migrations/20260905000000_deadline_escalation_reminders.sql` (or regenerate `schema.sql`) first. You can also trigger the same route from any external scheduler.
+
+## Transactional email (Session 21)
+
+Email goes through **Resend**, triggered by a server-side queue — the browser never
+touches provider credentials.
+
+| Event | Template | Recipients | When |
+| --- | --- | --- | --- |
+| Submission received | `submission-received` | The submitter (respondent email) | Every public form submission (includes the reference number + public tracking link) |
+| Client invitation | `client-invitation` | The invited portal client | Admin provisions a portal account (never contains the password) |
+| Delivery ready | `delivery-ready` | Client portal accounts | A delivery package is marked delivered |
+| Revision / approval update | `revision-approval-update` | The acting client | The client approves or requests a revision (confirmation receipt) |
+| New submission | `new-submission` | Staff with `submission.view` | Every public form submission (no respondent email/phone in the mail) |
+| Important assignment | `task-assigned` / `project-assigned` | Task assignee · new owner/manager · new team member | Task assignment, ownership changes, team member added |
+| Important project update | `project-update` | Project owner + manager | Client feedback, approval, or revision request |
+
+How it works:
+
+1. Database triggers (plus the admin provisioning route for invitations) enqueue rows
+   into `email_outbox`. A unique `(template_key, dedupe_key)` index makes duplicate
+   delivery structurally impossible.
+2. `GET /api/cron/emails` (Vercel Cron, once daily at 07:10 UTC, protected by
+   `Authorization: Bearer $CRON_SECRET`) claims a batch with an optimistic status
+   guard, renders the branded template, and sends via the Resend API. Transient
+   failures back off exponentially (up to 6 attempts); stale rows expire after 72h.
+   The form-submit and client-invitation server routes also flush immediately as a
+   best effort. The daily reminders job flushes the same queue so Hobby-plan
+   deployments still deliver mail the same day.
+3. `POST /api/email/resend-webhook` verifies the Svix-style signature with
+   `RESEND_WEBHOOK_SECRET` and records `sent`/`delivered`/`bounced`/`complained`
+   events in `email_delivery_events`, updating the matching outbox row by
+   `provider_message_id`.
+
+Setup:
+
+1. Apply `supabase/migrations/20260906000000_transactional_email.sql` (or regenerate
+   `schema.sql`).
+2. Create an API key at **resend.com → API Keys** and set `RESEND_API_KEY` in the
+   host environment. Until a sending domain is verified, Resend only delivers to
+   your own account email from `onboarding@resend.dev`.
+3. Verify your domain (Resend → Domains) and set
+   `EMAIL_FROM_ADDRESS=notifications@yourdomain.com` (and optionally
+   `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME`).
+4. Create a webhook at **resend.com → Webhooks** pointing at
+   `https://<your-deploy>/api/email/resend-webhook` for `sent`, `delivered`,
+   `bounced`, and `complained` events, copy its signing secret into
+   `RESEND_WEBHOOK_SECRET`.
+5. Confirm Vercel Cron runs `/api/cron/emails` (`vercel.json` ships a 5-minute
+   schedule; adjust for your plan — the Hobby plan only runs daily). Any external
+   scheduler that sends the cron secret works too.
+
+Until `RESEND_API_KEY` is set the queue simply accumulates and the cron route
+returns 503; nothing is ever sent from the client.
 
 For a new Supabase project, apply the generated `supabase/schema.sql` snapshot in the SQL Editor. For an existing project, apply every unapplied file in `supabase/migrations/` in filename order (or use the Supabase CLI migration workflow). The ordered migration directory is authoritative; `schema.sql` is generated from it and can be verified with `npm run db:schema:check`.
 
@@ -183,15 +247,16 @@ The project detail page has a **Delivery & closure** panel. This is a staff work
 5. **Complete project**. The database rejects this if any checklist item is missing.
 6. **Archive** after Completed or Cancelled. Archived projects leave the default list and cannot change status until restored.
 
-Client accounts cannot read or write delivery packages. Future client-facing approval must use a separate table; do not reuse `project_deliveries`.
+Client accounts cannot read or write delivery packages directly. Real client approval lives in `client_approvals` (Session 18) and is applied to the package by a SECURITY DEFINER RPC as `approved_by_client`. The internal placeholder remains as a fallback for off-portal sign-off.
 
-Apply `supabase/migrations/20260831000000_project_delivery_closure.sql` (or the regenerated `supabase/schema.sql`) before using this UI.
+Apply `supabase/migrations/20260831000000_project_delivery_closure.sql` and `supabase/migrations/20260903000000_client_feedback_shared_files.sql` (or the regenerated `supabase/schema.sql`) before using this UI.
 
 ## Public company portfolio
 
 The public portfolio is deliberately separate from the internal employee workspace:
 
-- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in.
+- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in. Those pages are server-rendered from the public RPC (published + not archived only) and cached for two minutes.
+- Portfolio images stay in the private `portfolio-images` bucket. The public site never embeds a signed URL in HTML; it requests `/api/public/portfolio-image/<path>`, which 404s unless `is_public_portfolio_image` is true.
 - Admins open **Administration → Portfolio Management** to create and edit portfolio projects, manage categories, upload images, choose a cover image, reorder projects, feature projects, and publish/unpublish them.
 - A project is visible publicly only when `published = true` and `archived = false`. Drafts, unpublished projects, archived projects, and their images remain private through PostgreSQL RLS and the private `portfolio-images` Storage bucket.
 - The migration `supabase/migrations/20260814000000_public_portfolio.sql` creates the portfolio tables, default categories, the `portfolio.manage` permission, RLS policies, and storage policies. Apply all migrations (or the complete `supabase/schema.sql`) before using this feature.
@@ -223,6 +288,8 @@ The client-facing flow is deliberately separate from the staff workspace:
 | `/portfolio` | Lists only published, non-archived portfolio projects. |
 | `/portfolio/<slug>` | Shows a public project only while it remains published and non-archived. |
 | `/auth` | Login/reset for existing team accounts only; there is no public sign-up. |
+| `/portal` | Authenticated Client Portal dashboard (invitation-only; clients are routed here after login). |
+| `/portal/projects/<id>` | A client's own project status detail — sanitized, never internal staff data. |
 
 **Request a New Project** always opens `/forms`. There is no competing `/intake` wizard; old `/intake` bookmarks permanently redirect forward to `/forms`. No current CTA points to `/intake`.
 
@@ -236,7 +303,21 @@ Before production launch:
 4. Apply every migration in `supabase/migrations/` (or `supabase/schema.sql` for a fresh project).
 5. Set the deployment values from `.env.local.example`, especially the Supabase URL/anon key and the real `NEXT_PUBLIC_SITE_URL`.
 6. Publish at least one form in **Administration → Forms** and, optionally, portfolio projects in **Administration → Portfolio Management**.
-7. Smoke-test `/forms`, one `/f/<slug>`, and `/portfolio` in an incognito window.
+7. Smoke-test `/forms`, one `/f/<slug>`, `/portfolio`, and `/track` in an incognito window. After a publish/unpublish, wait up to two minutes (or redeploy) for the public cache to refresh.
+
+## Client portal
+
+The authenticated portal is the destination for the **Client** role only. It is deliberately invitation-only: submitting a public form never creates a login, and a client can only reach `/portal` after an Administrator invites them.
+
+1. In **Clients → a client record → Portal access**, an Admin clicks **Invite to portal** and enters the client's name and login e-mail.
+2. The server provisions a client profile linked to that CRM record, creates the Auth login, and returns a one-time temporary password for the Admin to share securely.
+3. The client signs in at `/auth` and replaces the temporary password (the same forced-password gate staff accounts use).
+4. The client lands on `/portal`: a dashboard of their own projects (live lifecycle stage + progress) and their service requests, plus a per-project detail page at `/portal/projects/<id>`.
+5. On that detail page the client can download **only selected files**, receive **deliverables**, leave **feedback**, **approve** a delivery, or **request a revision**. Feedback notifies the project owner. Approval stamps the package `approved_by_client`. A revision request records `client_revision_requested` and returns the project to In review with a new preparing package.
+
+Every portal read (`get_client_portal_projects`, `get_client_portal_project`, `get_client_portal_client`, `get_client_portal_collaboration`) is a SECURITY DEFINER function that resolves the caller's linked CRM record and returns only that client's projects, and only client-appropriate fields. Clients never see internal notes (`comments`), employee tasks, staff permissions, internal activity, private working files, or other clients/projects — and they never read the raw `projects`/`clients`/`files`/`project_deliveries` tables (RLS still returns nothing to them). Storage signed URLs work only for allow-listed objects. Suspended (inactive) client accounts lose portal access immediately; revoking access removes both the profile and the Auth login.
+
+Apply `supabase/migrations/20260902000000_client_portal.sql` and `supabase/migrations/20260903000000_client_feedback_shared_files.sql` (or the regenerated `supabase/schema.sql`) before using the portal.
 
 ## Security notes
 

@@ -1125,7 +1125,7 @@ async function runCapabilityEnforcementSuite(db, ids, label) {
 }
 
 async function runNotificationSuite(db, ids, label) {
-  const { anonVisitor, alice, bob } = ids
+  const { anonVisitor, alice, bob, erin } = ids
 
   // 1. Dynamic Form Submission -> Admin receives notification
   await asUser(db, alice)
@@ -1191,6 +1191,82 @@ async function runNotificationSuite(db, ids, label) {
   ok(`${label}: employee cannot update admin notifications (RLS)`, bobUpdatesAlice <= 0)
   const bobDeletesAlice = await db.query(`delete from public.notifications where recipient_id = $1`, [alice]).then((r) => r.affectedRows ?? 0).catch(() => -1)
   ok(`${label}: employee cannot delete admin notifications (RLS)`, bobDeletesAlice <= 0)
+
+  // 6. Domain-event catalog + dedupe
+  await asUser(db, alice)
+  await scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submission.id, erin])
+  await scalar(db, `select public.assign_form_submission_reviewer($1, $2)`, [submission.id, erin])
+  await superUser(db)
+  const erinAssign = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.assigned'`,
+    [erin, submission.id],
+  )).rows
+  ok(`${label}: submission assignment notifies the reviewer once (deduped)`, erinAssign.length === 1)
+  ok(`${label}: submission assignment carries a domain event key`, erinAssign[0]?.event === 'submission.assigned' && !!erinAssign[0]?.dedupe_key)
+
+  await asUser(db, alice)
+  await scalar(db, `select public.update_form_submission_status($1, 'reviewing')`, [submission.id])
+  await superUser(db)
+  const erinStatus = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.status_changed'`,
+    [erin, submission.id],
+  )).rows
+  ok(`${label}: submission status change notifies the assigned reviewer`, erinStatus.length === 1 && erinStatus[0].action_url === `/submissions?submission=${submission.id}`)
+  const aliceStatus = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and submission_id = $2 and event = 'submission.status_changed'`,
+    [alice, submission.id],
+  )).rows
+  ok(`${label}: actor does not receive their own submission status notification`, aliceStatus.length === 0)
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id = $1`, [bob])
+  await asUser(db, alice)
+  const ownedProj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id) select 'Owned by Bob', id, 'active', $1 from public.clients limit 1 returning id`,
+    [bob],
+  )).rows[0]
+  await asUser(db, bob)
+  const bobCreated = (await db.query(
+    `select event, type from public.notifications where recipient_id = $1 and project_id = $2`,
+    [bob, ownedProj.id],
+  )).rows
+  ok(`${label}: project created notifies the owner once as project.created`,
+    bobCreated.length === 1 && bobCreated[0].event === 'project.created')
+  ok(`${label}: owner is not also emailed a duplicate team_member.assigned row`,
+    !bobCreated.some((row) => row.event === 'team_member.assigned'))
+
+  await asUser(db, alice)
+  await db.query(`update public.projects set manager_id = $1 where id = $2`, [erin, ownedProj.id])
+  await superUser(db)
+  const erinAssigned = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and project_id = $2 and event = 'project.assigned'`,
+    [erin, ownedProj.id],
+  )).rows
+  ok(`${label}: changing the manager emits project.assigned once`, erinAssigned.length === 1)
+
+  await asUser(db, alice)
+  await db.query(`update public.tasks set status = 'inprogress' where id = $1`, [taskId])
+  await superUser(db)
+  const bobTaskUpdate = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.updated'`,
+    [bob, taskId],
+  )).rows
+  ok(`${label}: task update notifies the assignee`, bobTaskUpdate.length === 1 && bobTaskUpdate[0].action_url === `/my-work?task=${taskId}`)
+  await asUser(db, alice)
+  await db.query(`update public.tasks set status = 'inprogress' where id = $1`, [taskId])
+  await superUser(db)
+  const bobTaskUpdateAgain = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.updated'`,
+    [bob, taskId],
+  )).rows
+  ok(`${label}: repeating the same task update does not create a second notification`, bobTaskUpdateAgain.length === 1)
+
+  await asUser(db, alice)
+  const selfCreated = (await db.query(
+    `select count(*)::int n from public.notifications where recipient_id = $1 and event = 'project.created' and project_id = $2`,
+    [alice, ownedProj.id],
+  )).rows[0]
+  ok(`${label}: creator does not notify themself of project.created`, selfCreated.n === 0)
 
   await superUser(db)
 }
@@ -2192,6 +2268,801 @@ async function runStorageSecuritySuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runSubmissionTrackingSuite(db, ids, label) {
+  const { anonVisitor, alice } = ids
+
+  // 1. Reference generator format check
+  const generatedRef = (await scalar(db, `select public.generate_submission_reference() as ref`)).ref
+  ok(`${label}: submission reference matches expected format REQ-YYMM-XXXXXX`, /^REQ-\d{4}-[A-Z0-9]{6,}$/.test(generatedRef))
+
+  // 2. Submit dynamic form and verify unique reference_number and tracking_token
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, description, status) values ('track-form', 'Branding Track Form', 'Tracking test form', 'published') on conflict do nothing`)
+  const trackForm = (await db.query(`select id from public.form_templates where slug = 'track-form'`)).rows[0]
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Your Name', true, 'name', 1),
+    ($1, 'short_text', 'Email Address', true, 'email', 2)
+    on conflict do nothing`, [trackForm.id])
+  const qRows = (await db.query(`select id, map_to from public.form_questions where form_id = $1`, [trackForm.id])).rows
+  const qName = qRows.find((q) => q.map_to === 'name').id
+  const qEmail = qRows.find((q) => q.map_to === 'email').id
+
+  await asUser(db, anonVisitor, 'anon')
+  const subRec = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [
+    trackForm.id,
+    JSON.stringify({ [qName]: 'Tracking Client', [qEmail]: 'tracker@domain.test' }),
+  ])).rows[0]
+
+  ok(`${label}: new submission receives unique reference number`,
+    typeof subRec?.reference_number === 'string' && subRec.reference_number.startsWith('REQ-'))
+  ok(`${label}: new submission receives unguessable tracking token`,
+    typeof subRec?.tracking_token === 'string' && subRec.tracking_token.length >= 32)
+
+  // 3. Anonymous visitor can track using reference_number (case-insensitive)
+  const trackingByRef = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: tracking lookup by exact reference succeeds`,
+    trackingByRef?.reference_number === subRec.reference_number && trackingByRef?.form_title === 'Branding Track Form')
+  ok(`${label}: tracking stage index defaults to 1 (Received)`,
+    trackingByRef?.stage_index === 1 && trackingByRef?.status === 'new' && trackingByRef?.client_status_label === 'Received')
+
+  const trackingLower = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number.toLowerCase()])).t
+  ok(`${label}: tracking lookup by lowercase reference succeeds (case-insensitive)`,
+    trackingLower?.reference_number === subRec.reference_number)
+
+  // 4. Anonymous visitor can track using tracking_token
+  const trackingByToken = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.tracking_token])).t
+  ok(`${label}: tracking lookup by tracking token succeeds`,
+    trackingByToken?.reference_number === subRec.reference_number && trackingByToken?.tracking_token === subRec.tracking_token)
+
+  // 5. Invalid / non-existent key returns null
+  const trackingNotFound = (await scalar(db, `select public.get_public_submission_tracking('REQ-NON-EXISTENT-999') as t`)).t
+  ok(`${label}: tracking lookup for unknown reference returns null`, trackingNotFound === null)
+
+  const trackingBlank = (await scalar(db, `select public.get_public_submission_tracking('   ') as t`)).t
+  ok(`${label}: tracking lookup for blank key returns null`, trackingBlank === null)
+
+  // 6. Verification of payload security: NO internal notes, reviewer ID, or audit logs leaked
+  ok(`${label}: public tracking payload contains SLA and contact metadata`,
+    typeof trackingByRef?.expected_response_time === 'string' && typeof trackingByRef?.contact_email === 'string')
+  ok(`${label}: public tracking payload does not leak internal reviewer_id`,
+    trackingByRef?.reviewer_id === undefined)
+  ok(`${label}: public tracking payload does not leak internal notes or audit events`,
+    trackingByRef?.notes === undefined && trackingByRef?.events === undefined)
+
+  // 7. Status transitions update client tracking projection in real time
+  await asUser(db, alice)
+  await db.query(`select public.update_form_submission_status($1, 'reviewing', 'Starting review')`, [subRec.id])
+  await asUser(db, anonVisitor, 'anon')
+  const trackingReviewing = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: moving status to reviewing updates tracking stage to 2`,
+    trackingReviewing?.stage_index === 2 && trackingReviewing?.client_status_label === 'Under Review')
+
+  await asUser(db, alice)
+  await db.query(`select public.update_form_submission_status($1, 'qualified', 'Qualified for branding')`, [subRec.id])
+  await asUser(db, anonVisitor, 'anon')
+  const trackingQualified = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: moving status to qualified updates tracking stage to 3`,
+    trackingQualified?.stage_index === 3 && trackingQualified?.client_status_label === 'Qualified')
+
+  // 8. Anonymous visitor cannot query form_submissions table directly for other users' rows
+  await superUser(db)
+  const otherVisitor = await addUser(db, null, { anon: true })
+  await asUser(db, otherVisitor, 'anon')
+  const otherSeesZero = (await scalar(db, `select count(*)::int n from public.form_submissions`)).n
+  ok(`${label}: other anonymous visitor cannot read foreign submissions directly from table (RLS enforced)`,
+    otherSeesZero === 0)
+  const otherTracksSuccess = (await scalar(db, `select public.get_public_submission_tracking($1) as t`, [subRec.reference_number])).t
+  ok(`${label}: other anonymous visitor CAN track submission using reference number without account`,
+    otherTracksSuccess?.reference_number === subRec.reference_number)
+
+  await superUser(db)
+}
+
+async function runClientPortalSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  // ── Setup: two clients, each with their own project ─────────────────────
+  await asUser(db, alice)
+  const portalClientId = (await db.query(
+    `insert into public.clients (name, email) values ('Portal Client Co', 'portal@client.test') returning id`,
+  )).rows[0].id
+  const portalProjectId = (await db.query(
+    `insert into public.projects (name, client_id, status, progress, phase) values ('Portal Project', $1, 'active', 40, 2) returning id`,
+    [portalClientId],
+  )).rows[0].id
+  const otherClientId = (await db.query(
+    `insert into public.clients (name, email) values ('Other Co', 'other@client.test') returning id`,
+  )).rows[0].id
+  const otherProjectId = (await db.query(
+    `insert into public.projects (name, client_id, status) values ('Other Project', $1, 'active') returning id`,
+    [otherClientId],
+  )).rows[0].id
+
+  // ── Non-admins cannot invite clients ─────────────────────────────────────
+  await asUser(db, erin) // manager
+  const managerInviteFails = await expectError(db, () => db.query(
+    `select public.admin_create_client_account($1, 'sneaky@client.test', 'Sneaky')`,
+    [portalClientId],
+  ))
+  ok(`${label}: manager cannot create a client portal account (admin.manage only)`, managerInviteFails)
+
+  // ── Admin invites the client: placeholder with the CRM link ─────────────
+  await asUser(db, alice)
+  const placeholder = (await db.query(
+    `select * from public.admin_create_client_account($1, 'portal@client.test', 'Portal Client')`,
+    [portalClientId],
+  )).rows[0]
+  ok(`${label}: admin creates a client portal placeholder linked to the CRM record`,
+    placeholder?.role === 'client' && placeholder?.client_id === portalClientId && placeholder?.status === 'active')
+
+  const duplicateEmailRejected = await expectError(db, () => db.query(
+    `select public.admin_create_client_account($1, 'portal@client.test', 'Duplicate')`,
+    [portalClientId],
+  ))
+  ok(`${label}: duplicate client account e-mail is rejected`, duplicateEmailRejected)
+
+  // ── Trusted Auth provisioning claims the client placeholder ──────────────
+  await superUser(db)
+  const portalUser = await addUser(db, 'portal@client.test', { fullName: 'Portal Client', adminProvisioned: true })
+  const claimed = await scalar(db,
+    `select role, client_id, status, must_change_password from public.profiles where id = $1`, [portalUser])
+  ok(`${label}: trusted Auth provisioning claims the client placeholder preserving the CRM link`,
+    claimed?.role === 'client' && claimed?.client_id === portalClientId && claimed?.must_change_password === true)
+  ok(`${label}: claiming a client placeholder leaves no second profile`,
+    (await scalar(db, `select count(*)::int n from public.profiles where lower(email) = 'portal@client.test'`)).n === 1)
+
+  // ── The client sees only their own, sanitized projects ───────────────────
+  await asUser(db, portalUser)
+  await db.query(`select public.mark_password_changed($1)`, [portalUser])
+
+  const projects = (await db.query(`select * from public.get_client_portal_projects()`)).rows
+  ok(`${label}: portal lists only the client's own projects`, projects.length === 1 && projects[0].id === portalProjectId)
+  ok(`${label}: portal project rows are sanitized (no owner, manager, team, budget, health, priority)`,
+    projects[0]?.owner_id === undefined
+      && projects[0]?.manager_id === undefined
+      && projects[0]?.budget === undefined
+      && projects[0]?.health === undefined
+      && projects[0]?.priority === undefined)
+
+  const detail = (await db.query(`select * from public.get_client_portal_project($1)`, [portalProjectId])).rows[0]
+  ok(`${label}: portal project detail returns the client's own project`, detail?.id === portalProjectId && detail?.status === 'active')
+  ok(`${label}: portal project detail returns nothing for another client's project`,
+    (await db.query(`select * from public.get_client_portal_project($1)`, [otherProjectId])).rows.length === 0)
+
+  const clientInfo = (await db.query(`select * from public.get_client_portal_client()`)).rows[0]
+  ok(`${label}: portal returns the client's own CRM record`, clientInfo?.id === portalClientId && clientInfo?.name === 'Portal Client Co')
+
+  // Raw table reads remain blocked by RLS (the portal uses SECURITY DEFINER RPCs).
+  ok(`${label}: client still cannot read the raw projects table`,
+    (await scalar(db, `select count(*)::int n from public.projects`)).n === 0)
+  ok(`${label}: client still cannot read the raw clients table`,
+    (await scalar(db, `select count(*)::int n from public.clients`)).n === 0)
+
+  // ── Staff get nothing from the client-scoped RPCs ────────────────────────
+  await asUser(db, bob)
+  ok(`${label}: staff calling the portal RPC get no projects`,
+    (await db.query(`select * from public.get_client_portal_projects()`)).rows.length === 0)
+
+  // ── Suspended clients lose portal access immediately ─────────────────────
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [portalUser])
+  await asUser(db, portalUser)
+  ok(`${label}: suspended client portal returns no projects`,
+    (await db.query(`select * from public.get_client_portal_projects()`)).rows.length === 0)
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [portalUser])
+
+  // ── Anonymous visitors cannot call the portal RPC at all ─────────────────
+  await asUser(db, anonVisitor, 'anon')
+  const anonBlocked = await expectError(db, () => db.query(`select * from public.get_client_portal_projects()`))
+  ok(`${label}: anonymous visitor cannot execute the portal RPC`, anonBlocked)
+
+  // ── Revoking access removes the profile and Auth login atomically ────────
+  await asUser(db, alice)
+  await db.query(`select public.admin_delete_client_account($1)`, [portalUser])
+  await superUser(db)
+  const revoked = await scalar(db, `select
+    (select count(*)::int from public.profiles where id = $1) p,
+    (select count(*)::int from auth.users where id = $1) a`, [portalUser])
+  ok(`${label}: revoking client access removes both profile and Auth account`, revoked.p === 0 && revoked.a === 0)
+
+  await superUser(db)
+}
+
+// ── Session 18: client feedback, shared files & approval ─────────────────────
+// Isolation is the point of this suite. Clients see only the files staff
+// selected (or delivered), never internal comments, never another client's
+// data, and never write `project_deliveries` directly.
+async function runClientFeedbackSuite(db, ids, label) {
+  const { anonVisitor, alice, bob, erin } = ids
+
+  await asUser(db, alice)
+  const clientAId = (await db.query(
+    `insert into public.clients (name, email) values ('Feedback Co', 'feedback@client.test') returning id`,
+  )).rows[0].id
+  const clientBId = (await db.query(
+    `insert into public.clients (name, email) values ('Other Feedback Co', 'other-feedback@client.test') returning id`,
+  )).rows[0].id
+  const projectA = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id)
+     values ('Feedback Brand', $1, 'active', $2, $3) returning id`,
+    [clientAId, alice, erin],
+  )).rows[0]
+  const projectB = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id)
+     values ('Secret Other Brand', $1, 'active', $2) returning id`,
+    [clientBId, alice],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [projectA.id, bob, alice])
+
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('working-draft.ai', 'other', 800, $1, $2, $3)`, [`${projectA.id}/working-draft.ai`, projectA.id, alice])
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('final-logo.pdf', 'pdf', 1200, $1, $2, $3)`, [`${projectA.id}/final-logo.pdf`, projectA.id, alice])
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('other-secret.pdf', 'pdf', 400, $1, $2, $3)`, [`${projectB.id}/other-secret.pdf`, projectB.id, alice])
+  const workingId = (await db.query(`select id from public.files where project_id = $1 and name = 'working-draft.ai'`, [projectA.id])).rows[0].id
+  const finalId = (await db.query(`select id from public.files where project_id = $1 and name = 'final-logo.pdf'`, [projectA.id])).rows[0].id
+  const otherFileId = (await db.query(`select id from public.files where project_id = $1 and name = 'other-secret.pdf'`, [projectB.id])).rows[0].id
+
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values
+    ('project-files', $1, $2), ('project-files', $3, $2), ('project-files', $4, $2)`,
+    [`${projectA.id}/working-draft.ai`, alice, `${projectA.id}/final-logo.pdf`, `${projectB.id}/other-secret.pdf`])
+
+  // Internal staff comment — must stay invisible to the client.
+  await db.query(`insert into public.comments (content, entity_type, entity_id, author_id)
+    values ('Do not show the client this internal note.', 'project', $1, $2)`, [projectA.id, alice])
+
+  // Invite two portal clients and claim them.
+  const placeholderA = (await db.query(
+    `select * from public.admin_create_client_account($1, 'feedback@client.test', 'Feedback Client')`,
+    [clientAId],
+  )).rows[0]
+  const placeholderB = (await db.query(
+    `select * from public.admin_create_client_account($1, 'other-feedback@client.test', 'Other Client')`,
+    [clientBId],
+  )).rows[0]
+  ok(`${label}: admin provisions two isolated portal accounts`,
+    placeholderA?.client_id === clientAId && placeholderB?.client_id === clientBId)
+
+  await superUser(db)
+  const clientUserA = await addUser(db, 'feedback@client.test', { fullName: 'Feedback Client', adminProvisioned: true })
+  const clientUserB = await addUser(db, 'other-feedback@client.test', { fullName: 'Other Client', adminProvisioned: true })
+  await asUser(db, clientUserA)
+  await db.query(`select public.mark_password_changed($1)`, [clientUserA])
+  await asUser(db, clientUserB)
+  await db.query(`select public.mark_password_changed($1)`, [clientUserB])
+
+  // ── Unshared working files stay private ────────────────────────────────
+  await asUser(db, clientUserA)
+  const emptyCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees no files before anything is shared or delivered`,
+    Array.isArray(emptyCollab?.files) && emptyCollab.files.length === 0)
+  ok(`${label}: client cannot read the raw files table`,
+    (await scalar(db, `select count(*)::int n from public.files`)).n === 0)
+  ok(`${label}: client cannot read internal comments`,
+    (await scalar(db, `select count(*)::int n from public.comments`)).n === 0)
+  ok(`${label}: client cannot read internal delivery packages`,
+    (await scalar(db, `select count(*)::int n from public.project_deliveries`)).n === 0)
+  ok(`${label}: client cannot read the project activity audit feed`,
+    (await scalar(db, `select count(*)::int n from public.project_activity`)).n === 0)
+  ok(`${label}: client cannot read unshared storage objects`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 0)
+  const clientInsertsComment = await expectError(db, () => db.query(
+    `insert into public.comments (content, entity_type, entity_id) values ('sneaky', 'project', $1)`, [projectA.id]))
+  ok(`${label}: client cannot insert an internal comment`, clientInsertsComment)
+  const clientSharesFails = await expectError(db, () => db.query(
+    `select public.share_project_file_with_client($1, $2)`, [projectA.id, finalId]))
+  ok(`${label}: client cannot call the staff share RPC`, clientSharesFails)
+
+  // ── Staff share a selected file ────────────────────────────────────────
+  await asUser(db, alice)
+  await db.query(`select public.share_project_file_with_client($1, $2, 'Please review the draft.')`, [projectA.id, workingId])
+  const shareEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'file_shared'`, [projectA.id])).rows
+  ok(`${label}: sharing a file records a file_shared operational event`,
+    shareEvent.length === 1 && shareEvent[0].new_value === 'working-draft.ai')
+
+  await asUser(db, clientUserA)
+  const afterShare = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees only the explicitly shared file`,
+    afterShare.files.length === 1 && afterShare.files[0].id === workingId && afterShare.files[0].source === 'shared')
+  ok(`${label}: client can read the shared storage object and only that object`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 1
+      && (await scalar(db, `select name from storage.objects where bucket_id = 'project-files'`)).name === `${projectA.id}/working-draft.ai`)
+
+  // ── Other client's project is invisible ────────────────────────────────
+  const otherProjectBlocked = await expectError(db, () =>
+    scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectB.id]))
+  ok(`${label}: client A cannot open client B's collaboration payload`, otherProjectBlocked)
+  await asUser(db, clientUserB)
+  const clientBSeesNothing = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectB.id])).c
+  ok(`${label}: client B does not see client A's shared files`,
+    Array.isArray(clientBSeesNothing?.files) && clientBSeesNothing.files.length === 0)
+  ok(`${label}: client B cannot read client A's storage objects`,
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'project-files'`)).n === 0)
+
+  // ── Feedback notifies the project owner ────────────────────────────────
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1`, [projectA.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.add_client_portal_feedback($1, 'The blue is too dark on the draft.')`, [projectA.id])
+  const feedbackCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client feedback appears in the client-visible thread`,
+    feedbackCollab.messages.some((m) => m.kind === 'feedback' && m.mine === true && m.body.includes('blue is too dark')))
+
+  await superUser(db)
+  const ownerNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_feedback' and project_id = $2`,
+    [alice, projectA.id],
+  )).rows
+  ok(`${label}: client feedback notifies the project owner`,
+    ownerNotifs.length === 1 && ownerNotifs[0].action_url === `/projects/${projectA.id}`)
+  const managerNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_feedback' and project_id = $2`,
+    [erin, projectA.id],
+  )).rows
+  ok(`${label}: client feedback also notifies the project manager`, managerNotifs.length === 1)
+  const feedbackEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_feedback'`, [projectA.id])).rows
+  ok(`${label}: client feedback is recorded as a project activity event`, feedbackEvent.length === 1)
+
+  // Internal comments stay out of the client payload.
+  await asUser(db, clientUserA)
+  ok(`${label}: client-visible thread does not include the internal staff comment`,
+    !feedbackCollab.messages.some((m) => String(m.body).includes('Do not show')))
+  ok(`${label}: client still cannot read the comments table after leaving feedback`,
+    (await scalar(db, `select count(*)::int n from public.comments`)).n === 0)
+
+  // Staff can read the client thread and post a client-visible reply.
+  await asUser(db, alice)
+  ok(`${label}: staff can read client messages through RLS`,
+    (await scalar(db, `select count(*)::int n from public.client_messages where project_id = $1`, [projectA.id])).n >= 1)
+  await db.query(`select public.add_client_visible_message($1, 'We will lighten the blue in the next round.')`, [projectA.id])
+  const staffCommentStillPrivate = (await scalar(db,
+    `select count(*)::int n from public.comments where entity_id = $1 and content like 'Do not show%'`, [projectA.id])).n
+  ok(`${label}: staff internal comment remains stored separately from the client thread`, staffCommentStillPrivate === 1)
+
+  await asUser(db, clientUserA)
+  const afterReply = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: client sees the staff reply and never the internal note`,
+    afterReply.messages.some((m) => m.from_client === false && String(m.body).includes('lighten the blue'))
+      && !afterReply.messages.some((m) => String(m.body).includes('Do not show')))
+
+  // ── Deliverables become visible only after delivery ────────────────────
+  await asUser(db, alice)
+  await db.query(`update public.projects set status = 'in-review' where id = $1`, [projectA.id])
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [projectA.id, finalId])
+  const preparingCollab = await (async () => {
+    await asUser(db, clientUserA)
+    return (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  })()
+  ok(`${label}: a preparing delivery file is not visible until the package is delivered`,
+    !preparingCollab.files.some((f) => f.id === finalId))
+
+  await asUser(db, alice)
+  await db.query(`select public.mark_project_delivered($1, 'Handoff for client review')`, [projectA.id])
+  await superUser(db)
+  const staffDeliveryNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and event = 'delivery.ready' and project_id = $2`,
+    [erin, projectA.id],
+  )).rows
+  ok(`${label}: marking delivery ready notifies the project manager`,
+    staffDeliveryNotifs.length >= 1 && staffDeliveryNotifs[0].action_url === `/projects/${projectA.id}`)
+
+  await asUser(db, clientUserA)
+  const clientDeliveryNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and event = 'delivery.ready' and project_id = $2`,
+    [clientUserA, projectA.id],
+  )).rows
+  ok(`${label}: a delivered package notifies the client that delivery is ready`,
+    clientDeliveryNotifs.length === 1 && clientDeliveryNotifs[0].action_url === `/portal/projects/${projectA.id}`)
+
+  await asUser(db, clientUserA)
+  const deliveredCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: delivered package files become visible to the client`,
+    deliveredCollab.files.some((f) => f.id === finalId)
+      && deliveredCollab.delivery?.status === 'delivered'
+      && deliveredCollab.can_approve === true
+      && deliveredCollab.can_request_revision === true)
+  ok(`${label}: client can now read the delivered storage object`,
+    (await scalar(db, `select count(*)::int n from storage.objects where name = $1`, [`${projectA.id}/final-logo.pdf`])).n === 1)
+
+  // Staff cannot use the client-owned approval RPC.
+  await asUser(db, alice)
+  const staffApproveFails = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'I am staff')`, [projectA.id]))
+  ok(`${label}: staff cannot record a client-portal approval`, staffApproveFails)
+
+  // ── Client approval updates delivery state ─────────────────────────────
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1 and type = 'client_approval'`, [projectA.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.approve_client_portal_delivery($1, 'Looks great — approved.')`, [projectA.id])
+
+  await asUser(db, alice)
+  const approvedPkg = (await db.query(
+    `select status, approval_state, approval_recorded_by from public.project_deliveries
+     where project_id = $1 order by version desc limit 1`, [projectA.id])).rows[0]
+  ok(`${label}: client approval stamps the delivery as approved_by_client`,
+    approvedPkg?.status === 'approved' && approvedPkg?.approval_state === 'approved_by_client' && approvedPkg?.approval_recorded_by === clientUserA)
+  const blockersAfterClient = (await scalar(db, `select public.project_completion_blockers($1) blockers`, [projectA.id])).blockers
+  ok(`${label}: client approval satisfies the completion blockers`,
+    Array.isArray(blockersAfterClient) && blockersAfterClient.length === 0, JSON.stringify(blockersAfterClient))
+  const approvalNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_approval' and project_id = $2`,
+    [alice, projectA.id],
+  )).rows
+  ok(`${label}: client approval notifies the project owner`, approvalNotifs.length === 1)
+  const clientApprovedEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_approved'`, [projectA.id])).rows
+  ok(`${label}: client approval is a distinct operational event (not the internal placeholder)`,
+    clientApprovedEvent.length === 1 && clientApprovedEvent[0].metadata?.client_facing === true)
+
+  await asUser(db, clientUserA)
+  const alreadyApproved = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'again')`, [projectA.id]))
+  ok(`${label}: a second approval of the same package is rejected`, alreadyApproved)
+
+  // Client B still cannot approve project A.
+  await asUser(db, clientUserB)
+  const crossApproveFails = await expectError(db, () =>
+    db.query(`select public.approve_client_portal_delivery($1, 'not mine')`, [projectA.id]))
+  ok(`${label}: client B cannot approve client A's delivery`, crossApproveFails)
+
+  // ── Client revision request is an operational event ────────────────────
+  await asUser(db, alice)
+  // Re-open a delivered package on a fresh project so we can request a revision.
+  const revProject = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id)
+     values ('Revision Brand', $1, 'in-review', $2) returning id`,
+    [clientAId, alice],
+  )).rows[0]
+  await db.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('rev-v1.pdf', 'pdf', 900, $1, $2, $3)`, [`${revProject.id}/rev-v1.pdf`, revProject.id, alice])
+  const revFileId = (await db.query(`select id from public.files where project_id = $1`, [revProject.id])).rows[0].id
+  await db.query(`select public.add_project_delivery_file($1, $2)`, [revProject.id, revFileId])
+  await db.query(`select public.mark_project_delivered($1, 'First pass')`, [revProject.id])
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where project_id = $1`, [revProject.id])
+  await asUser(db, clientUserA)
+  await db.query(`select public.request_client_portal_revision($1, 'Please enlarge the wordmark and lighten the blue.')`, [revProject.id])
+
+  await asUser(db, alice)
+  const afterClientRev = await scalar(db, `
+    select
+      (select status from public.projects where id = $1) project_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 1) v1_status,
+      (select status from public.project_deliveries where project_id = $1 and version = 2) v2_status,
+      (select approval_state from public.project_deliveries where project_id = $1 and version = 1) v1_approval,
+      (select revision_note from public.project_deliveries where project_id = $1 and version = 1) v1_note
+  `, [revProject.id])
+  ok(`${label}: client revision returns the project to In review and opens a new package`,
+    afterClientRev?.project_status === 'in-review'
+      && afterClientRev?.v1_status === 'revision_requested'
+      && afterClientRev?.v2_status === 'preparing'
+      && afterClientRev?.v1_approval === 'revision_required'
+      && String(afterClientRev?.v1_note || '').includes('enlarge the wordmark'))
+  const revEvent = (await db.query(
+    `select * from public.project_activity where project_id = $1 and event_type = 'client_revision_requested'`,
+    [revProject.id],
+  )).rows
+  ok(`${label}: client revision request is a clear operational event`,
+    revEvent.length === 1 && revEvent[0].metadata?.client_facing === true)
+  const revNotifs = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'client_revision' and project_id = $2`,
+    [alice, revProject.id],
+  )).rows
+  ok(`${label}: client revision request notifies the project owner`, revNotifs.length === 1)
+
+  await asUser(db, clientUserA)
+  const afterRevCollab = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [revProject.id])).c
+  ok(`${label}: after a revision the client can no longer approve the superseded package`,
+    afterRevCollab.can_approve === false
+      && afterRevCollab.messages.some((m) => m.kind === 'revision'))
+
+  // Unshare hides a working file that is not on a delivered package.
+  await asUser(db, alice)
+  await db.query(`select public.unshare_project_file_with_client($1, $2)`, [projectA.id, workingId])
+  await asUser(db, clientUserA)
+  const afterUnshare = (await scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id])).c
+  ok(`${label}: unsharing a working file hides it; delivered files stay visible`,
+    !afterUnshare.files.some((f) => f.id === workingId) && afterUnshare.files.some((f) => f.id === finalId))
+
+  // Suspended client loses collaboration access immediately.
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [clientUserA])
+  await asUser(db, clientUserA)
+  const suspendedBlocked = await expectError(db, () =>
+    scalar(db, `select public.get_client_portal_collaboration($1) c`, [projectA.id]))
+  ok(`${label}: suspended client loses collaboration access`, suspendedBlocked)
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [clientUserA])
+
+  // Anonymous visitors cannot call the collaboration RPCs.
+  await asUser(db, anonVisitor, 'anon')
+  const anonCollabBlocked = await expectError(db, () =>
+    db.query(`select public.get_client_portal_collaboration($1)`, [projectA.id]))
+  ok(`${label}: anonymous visitor cannot read portal collaboration`, anonCollabBlocked)
+
+  // Employee outside the project cannot share its files.
+  await superUser(db)
+  const rania = (await db.query(`select id from public.profiles where email = 'rania@agency.test'`)).rows[0]?.id
+  if (rania) {
+    await asUser(db, rania)
+    const outsiderShareFails = await expectError(db, () =>
+      db.query(`select public.share_project_file_with_client($1, $2)`, [projectA.id, otherFileId]))
+    ok(`${label}: non-member employee cannot share files on another project`, outsiderShareFails)
+  }
+
+  await superUser(db)
+}
+
+async function runDeadlineReminderSuite(db, ids, label) {
+  const { alice, bob, erin } = ids
+
+  await asUser(db, alice)
+  const clientId = (await db.query(`select id from public.clients order by created_at limit 1`)).rows[0].id
+  const proj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id, due_date)
+     values ('Deadline Scan', $1, 'active', $2, $3, current_date + 5) returning id`,
+    [clientId, alice, erin],
+  )).rows[0]
+  await db.query(`insert into public.project_members (project_id, user_id, assigned_by) values ($1, $2, $3)`, [proj.id, bob, alice])
+
+  const soonTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Soon task', $1, $2, current_date + 2) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const todayTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Today task', $1, $2, current_date) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const overdueTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date) values ('Late task', $1, $2, current_date - 3) returning id`,
+    [proj.id, bob],
+  )).rows[0]
+  const doneTask = (await db.query(
+    `insert into public.tasks (title, project_id, assignee_id, due_date, status) values ('Done late', $1, $2, current_date - 1, 'done') returning id`,
+    [proj.id, bob],
+  )).rows[0]
+
+  const overdueProj = (await db.query(
+    `insert into public.projects (name, client_id, status, owner_id, manager_id, due_date)
+     values ('Overdue Brand', $1, 'active', $2, $3, current_date - 4) returning id`,
+    [clientId, alice, erin],
+  )).rows[0]
+
+  await superUser(db)
+  await db.query(`delete from public.notifications where recipient_id in ($1, $2, $3)`, [alice, bob, erin])
+  await db.query(`delete from public.reminder_events`)
+
+  const first = (await scalar(db, `select public.run_deadline_reminders(current_date) r`)).r
+  ok(`${label}: reminder job reports sent > 0`, first?.ok === true && Number(first.sent) >= 5, JSON.stringify(first))
+
+  const bobSoon = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.due_soon'`,
+    [bob, soonTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is due soon`, bobSoon.length === 1 && bobSoon[0].type === 'deadline_reminder')
+
+  const bobToday = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.due_today'`,
+    [bob, todayTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is due today`, bobToday.length === 1)
+
+  const bobOverdue = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [bob, overdueTask.id],
+  )).rows
+  ok(`${label}: assignee is notified when a task is overdue`, bobOverdue.length === 1)
+
+  const erinEscalation = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [erin, overdueTask.id],
+  )).rows
+  ok(`${label}: overdue task escalates to the project manager`,
+    erinEscalation.length === 1 && erinEscalation[0].metadata?.escalation === true)
+
+  const aliceEscalation = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and task_id = $2 and event = 'task.overdue'`,
+    [alice, overdueTask.id],
+  )).rows
+  ok(`${label}: overdue task also escalates to the project owner`, aliceEscalation.length === 1)
+
+  const doneNotifs = (await db.query(
+    `select * from public.notifications where task_id = $1 and type = 'deadline_reminder'`,
+    [doneTask.id],
+  )).rows
+  ok(`${label}: completed tasks do not receive deadline reminders`, doneNotifs.length === 0)
+
+  const approaching = (await db.query(
+    `select recipient_id from public.notifications where project_id = $1 and event = 'project.deadline_approaching'`,
+    [proj.id],
+  )).rows.map((r) => r.recipient_id)
+  ok(`${label}: approaching project deadline notifies owner and manager`,
+    approaching.includes(alice) && approaching.includes(erin))
+
+  const overdueProjectNotifs = (await db.query(
+    `select recipient_id from public.notifications where project_id = $1 and event = 'project.overdue'`,
+    [overdueProj.id],
+  )).rows.map((r) => r.recipient_id)
+  ok(`${label}: overdue project notifies owner and manager`,
+    overdueProjectNotifs.includes(alice) && overdueProjectNotifs.includes(erin))
+
+  const logCount = (await scalar(db, `select count(*)::int n from public.reminder_events`)).n
+  ok(`${label}: reminder events are recorded for each delivery`, logCount >= 5)
+
+  const second = (await scalar(db, `select public.run_deadline_reminders(current_date) r`)).r
+  const notifCount = (await scalar(db,
+    `select count(*)::int n from public.notifications where type = 'deadline_reminder' and (
+      task_id in ($1, $2, $3) or project_id in ($4, $5)
+    )`,
+    [soonTask.id, todayTask.id, overdueTask.id, proj.id, overdueProj.id],
+  )).n
+  const logCountAfter = (await scalar(db, `select count(*)::int n from public.reminder_events`)).n
+  ok(`${label}: a second run does not duplicate reminders`,
+    Number(second.sent) === 0 && notifCount === logCountAfter || (Number(second.sent) === 0 && logCountAfter === logCount),
+    JSON.stringify({ second, notifCount, logCount, logCountAfter }))
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'inactive')`, [bob])
+  await superUser(db)
+  await db.query(`delete from public.reminder_events`)
+  await db.query(`delete from public.notifications where recipient_id = $1 and type = 'deadline_reminder'`, [bob])
+  await scalar(db, `select public.run_deadline_reminders(current_date)`)
+  const inactiveBob = (await db.query(
+    `select * from public.notifications where recipient_id = $1 and type = 'deadline_reminder'`,
+    [bob],
+  )).rows
+  ok(`${label}: inactive assignees are not notified`, inactiveBob.length === 0)
+
+  await asUser(db, alice)
+  await db.query(`select public.set_user_status($1, 'active')`, [bob])
+  await asUser(db, bob)
+  const employeeInsertsLog = await expectError(db, () => db.query(
+    `insert into public.reminder_events (kind, entity_type, entity_id, recipient_id, due_date, dedupe_key)
+     values ('task.due_today', 'task', $1, $2, current_date, 'forged')`,
+    [todayTask.id, bob],
+  ))
+  ok(`${label}: reminder_events cannot be forged by authenticated users`, employeeInsertsLog)
+
+  await asUser(db, bob)
+  const employeeRunsJob = await expectError(db, () => db.query(`select public.run_deadline_reminders(current_date)`))
+  ok(`${label}: authenticated users cannot execute the reminder job`, employeeRunsJob)
+
+  await superUser(db)
+}
+
+async function runPublicFormReliabilitySuite(db, ids, label) {
+  const { alice, anonVisitor } = ids
+
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, status) values ('sessionless-form', 'Sessionless Form', 'published')`)
+  const form = (await db.query(`select id from public.form_templates where slug = 'sessionless-form'`)).rows[0]
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Name', true, 'name', 1),
+    ($1, 'short_text', 'Email', true, 'email', 2),
+    ($1, 'file_upload', 'Logo', false, null, 3)`, [form.id])
+  const qs = (await db.query(`select id from public.form_questions where form_id = $1 order by position`, [form.id])).rows
+  const [qName, qEmail, qFile] = qs.map((row) => row.id)
+
+  // No session (empty auth.uid), anon role — this is the public fallback path.
+  await superUser(db)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const sessionless = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({
+    [qName]: 'No Session',
+    [qEmail]: 'nosession@test.local',
+  })])).rows[0]
+  ok(`${label}: public submit works with no auth.uid() (anon-key fallback)`,
+    sessionless?.status === 'new' && sessionless?.respondent_email === 'nosession@test.local')
+
+  await superUser(db)
+  const clientCreated = (await db.query(`select id from public.clients where email = 'nosession@test.local'`)).rows[0]
+  ok(`${label}: sessionless submit still creates the CRM client`, !!clientCreated)
+
+  await db.query(`insert into storage.objects (bucket_id, name) values ('form-files', 'anon/logo-nosession.png')`)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const withFile = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({
+    [qName]: 'With File',
+    [qEmail]: 'withfile@test.local',
+    [qFile]: [{ name: 'logo-nosession.png', size: 2048, mime_type: 'image/png', storage_path: 'anon/logo-nosession.png' }],
+  })])).rows[0]
+  await superUser(db)
+  const attached = (await db.query(`select * from public.form_submission_attachments where submission_id = $1`, [withFile.id])).rows[0]
+  ok(`${label}: sessionless submit attaches files from the shared anon/ folder`,
+    attached?.storage_path === 'anon/logo-nosession.png')
+
+  // Storage insert no longer requires owner_id to match at WITH CHECK time.
+  await asUser(db, anonVisitor, 'anon')
+  const noOwnerInsert = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', $1)`,
+    [`${anonVisitor}/no-owner.png`],
+  ))
+  ok(`${label}: form-files insert is allowed without owner_id when the folder matches the caller`, !noOwnerInsert)
+
+  const otherFolder = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', 'someone-else/x.png')`,
+  ))
+  ok(`${label}: form-files insert rejects a folder that is not the caller or anon`, otherFolder)
+
+  await superUser(db)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const anonFolderInsert = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', 'anon/direct.png')`,
+  ))
+  ok(`${label}: no-session caller can insert into the shared anon/ folder`, !anonFolderInsert)
+
+  await superUser(db)
+  const submitConfig = (await scalar(db, `
+    select array_to_string(proconfig, ',') as cfg
+    from pg_proc
+    where proname = 'submit_dynamic_form'
+    limit 1
+  `)).cfg || ''
+  ok(`${label}: submit_dynamic_form search_path includes extensions (pgcrypto)`,
+    /extensions/.test(submitConfig), submitConfig)
+  const refWithoutCrypto = (await scalar(db, `select public.generate_submission_reference() as ref`)).ref
+  ok(`${label}: generate_submission_reference works without pgcrypto`,
+    typeof refWithoutCrypto === 'string' && /^REQ-\d{4}-[A-Z0-9]{6,}$/.test(refWithoutCrypto), refWithoutCrypto)
+
+  // A throwing AFTER INSERT trigger must not block the dedicated save RPC.
+  await db.query(`
+    create or replace function public.notify_form_submission()
+    returns trigger language plpgsql as $fn$
+    begin
+      raise exception 'forced notify failure';
+    end;
+    $fn$;
+  `)
+  const directInsertFails = await expectError(db, () => db.query(
+    `insert into public.form_submissions (form_id, form_version, status, respondent_email, reference_number, tracking_token)
+     values ($1, 1, 'new', 'trigger-fail@test.local', 'REQ-2608-FAIL01', 'tokentriggerfail00000000000000000000000000000000')`,
+    [form.id],
+  ))
+  ok(`${label}: throwing notify trigger rolls back a raw insert`, directInsertFails)
+
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const savedViaRpc = (await db.query(
+    `select * from public.save_public_form_submission($1, $2::jsonb, 'REQ-2608-SAFE01', 'tokensafe0000000000000000000000000000000000000000')`,
+    [form.id, JSON.stringify({ [qName]: 'Trigger Safe', [qEmail]: 'triggersafe@test.local' })],
+  )).rows[0]
+  ok(`${label}: save_public_form_submission persists even when notify trigger throws`,
+    savedViaRpc?.reference_number === 'REQ-2608-SAFE01' && savedViaRpc?.respondent_email === 'triggersafe@test.local')
+  await superUser(db)
+  const answersKept = (await scalar(db, `select count(*)::int n from public.form_submission_answers where submission_id = $1`, [savedViaRpc.id])).n
+  ok(`${label}: save_public_form_submission stores answers next to the row`, answersKept >= 2)
+
+  await db.query(`
+    create or replace function public.notify_form_submission()
+    returns trigger
+    language plpgsql
+    security definer
+    set search_path = public, extensions
+    as $fn$
+    begin
+      begin
+        null;
+      exception
+        when others then
+          raise warning 'notify_form_submission failed: %', sqlerrm;
+      end;
+      return new;
+    end;
+    $fn$;
+  `)
+
+  await asUser(db, alice)
+  await db.query(`update public.form_templates set status = 'archived' where id = $1`, [form.id])
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2205,11 +3076,16 @@ async function main() {
   await runCapabilityEnforcementSuite(dbA, idsA, 'upgrade')
   await runNotificationSuite(dbA, idsA, 'upgrade')
   await runStorageSecuritySuite(dbA, idsA, 'upgrade')
+  await runPublicFormReliabilitySuite(dbA, idsA, 'upgrade')
   await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
   await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
   await runTaskManagementSuite(dbA, idsA, 'upgrade')
   await runProjectActivitySuite(dbA, idsA, 'upgrade')
   await runProjectDeliveryClosureSuite(dbA, idsA, 'upgrade')
+  await runSubmissionTrackingSuite(dbA, idsA, 'upgrade')
+  await runClientPortalSuite(dbA, idsA, 'upgrade')
+  await runClientFeedbackSuite(dbA, idsA, 'upgrade')
+  await runDeadlineReminderSuite(dbA, idsA, 'upgrade')
   await dbA.close()
 
   console.log('\n=== Path B: fresh install from updated schema.sql ===')
@@ -2251,8 +3127,20 @@ async function main() {
   ok('fresh: published dynamic form is publicly readable', (await scalar(dbB, 'select count(*)::int n from public.form_templates')).n === 1)
   const freshSubmission = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'visitor@fresh.test' })])).rows[0]
   ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'new' && freshSubmission?.respondent_email === 'visitor@fresh.test')
+  await superUser(dbB)
+  await dbB.query(`set role anon`)
+  await dbB.query(`select set_config('app.request.uid', '', false)`)
+  const sessionlessFresh = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'sessionless@fresh.test' })])).rows[0]
+  ok('fresh: sessionless submit persists without auth.uid()', sessionlessFresh?.status === 'new' && sessionlessFresh?.respondent_email === 'sessionless@fresh.test')
+  await asUser(dbB, anonVisitorB, 'anon')
+  ok('fresh: anonymous submission generates reference number and tracking token',
+    typeof freshSubmission?.reference_number === 'string' && freshSubmission.reference_number.startsWith('REQ-') && typeof freshSubmission?.tracking_token === 'string')
+  const freshTracking = (await scalar(dbB, `select public.get_public_submission_tracking($1) as t`, [freshSubmission.reference_number])).t
+  ok('fresh: public tracking lookup by reference number succeeds',
+    freshTracking?.reference_number === freshSubmission.reference_number && freshTracking?.stage_index === 1)
+
   await asUser(dbB, aliceB)
-  ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
+  ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 2)
   const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows
   ok('fresh: admin receives notification on submission', freshAdminNotifs.length >= 1 && freshAdminNotifs[0].type === 'form_submission')
 
@@ -2265,6 +3153,54 @@ async function main() {
   await dbB.query(`select public.update_form_submission_status($1, 'qualified', 'Fresh qualification note')`, [freshSubmission.id])
   const freshEvents = (await dbB.query(`select * from public.form_submission_events where submission_id = $1 order by created_at asc`, [freshSubmission.id])).rows
   ok('fresh: full event audit log recorded on fresh schema', freshEvents.length === 3 && freshEvents.map((e) => e.event_type).includes('status_changed'))
+  const freshTrackingQualified = (await scalar(dbB, `select public.get_public_submission_tracking($1) as t`, [freshSubmission.reference_number])).t
+  ok('fresh: public tracking reflects qualification status',
+    freshTrackingQualified?.stage_index === 3 && freshTrackingQualified?.client_status_label === 'Qualified')
+
+  // Session 23 — server-side inbox pagination RPCs (SECURITY INVOKER).
+  const inboxPage = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC returns the page plus exact total',
+    Array.isArray(inboxPage?.data) && inboxPage.data.length === 2 && inboxPage.total === 2)
+  const visitorInboxRow = (inboxPage?.data || []).find((row) => row.respondent_email === 'visitor@fresh.test')
+  ok('fresh: inbox page RPC joins form title and reviewer',
+    visitorInboxRow?.form_templates?.title === 'Fresh Form' && visitorInboxRow?.reviewer?.email === 'employee@fresh.test')
+  const inboxSearchHit = (await dbB.query(
+    `select * from public.get_submission_inbox_page('visitor@fresh.test', null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC searches respondent fields', inboxSearchHit?.total === 1)
+  const inboxSearchMiss = (await dbB.query(
+    `select * from public.get_submission_inbox_page('no-such-person', null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC returns an empty page on no match', inboxSearchMiss?.total === 0 && inboxSearchMiss?.data?.length === 0)
+  const inboxStatus = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, 'qualified', null, null, null, 'status', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC filters by status', inboxStatus?.total === 1 && inboxStatus?.data?.[0]?.status === 'qualified')
+  const inboxReviewer = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, $1, null, 'newest', 1, 25)`,
+    [employeeB]
+  )).rows[0]
+  ok('fresh: inbox page RPC filters by reviewer id', inboxReviewer?.total === 1)
+  const inboxAssignedToMe = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, 'assigned_to_me', null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC assigned-to-me honors auth.uid()', inboxAssignedToMe?.total === 0)
+  await asUser(dbB, employeeB)
+  const employeeInbox = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC is RLS-scoped (staff without submission.view sees nothing)',
+    employeeInbox?.total === 0 && employeeInbox?.data?.length === 0)
+  await asUser(dbB, aliceB)
+  const pipelineBefore = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
+  ok('fresh: pipeline counts aggregate in the database',
+    pipelineBefore?.total === 2 && pipelineBefore?.by_status?.qualified === 1 && pipelineBefore?.assigned_to_me === 0)
+  await dbB.query(`select public.assign_form_submission_reviewer($1, $2, 'Pagination suite')`, [freshSubmission.id, aliceB])
+  const pipelineAssigned = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
+  ok('fresh: pipeline counts track the assigned-to-me bucket',
+    pipelineAssigned?.assigned_to_me === 1 && pipelineAssigned?.total === 2)
 
   const freshProject = (await dbB.query(
     `select * from public.convert_submission_to_project(
@@ -2298,6 +3234,167 @@ async function main() {
   const freshClosed = await scalar(dbB, `select status, archived_at from public.projects where id = $1`, [freshProject.id])
   ok('fresh: delivery → internal approval → complete → archive works end to end',
     freshClosed?.status === 'completed' && freshClosed?.archived_at !== null)
+
+  const collabFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'get_client_portal_collaboration'`)).n
+  const approvalsTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'client_approvals'`)).n
+  ok('fresh: client collaboration RPCs and tables are installed', collabFn === 1 && approvalsTable === 1)
+
+  ok('fresh: save_public_form_submission RPC is installed',
+    (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'save_public_form_submission'`)).n >= 1)
+
+  const reminderFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'run_deadline_reminders'`)).n
+  const reminderTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'reminder_events'`)).n
+  ok('fresh: deadline reminder job and event log are installed', reminderFn === 1 && reminderTable === 1)
+
+  // ── Transactional email outbox (Session 21) ─────────────────────────────
+  // The database only ENQUEUES; the server-side job sends. These checks pin
+  // down the enqueue rules: event coverage, dedupe, eligibility, and RLS.
+
+  // freshSubmission (visitor@fresh.test) was inserted above → the trigger must
+  // have enqueued the client receipt and the staff new-submission email.
+  await superUser(dbB)
+  ok('fresh: submission insert enqueues transactional emails',
+    (await scalar(dbB, 'select count(*)::int n from public.email_outbox')).n >= 2)
+  const receiptRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'submission-received' and recipient_email = 'visitor@fresh.test'`)
+  ok('fresh: respondent receipt carries the reference + public tracking link',
+    receiptRow?.recipient_email === 'visitor@fresh.test'
+      && receiptRow?.payload?.reference_number === freshSubmission.reference_number
+      && receiptRow?.payload?.tracking_path === `/track/${freshSubmission.reference_number}`)
+  const staffSubRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'new-submission' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: new-submission email goes to staff with submission.view',
+    staffSubRow?.recipient_email === 'admin@fresh.test')
+  ok('fresh: staff submission email does not leak the respondent email address',
+    staffSubRow !== undefined && !JSON.stringify(staffSubRow.payload).includes('visitor@fresh.test'))
+
+  // Dedupe + normalization on the enqueue helper.
+  await dbB.query(`select public.enqueue_email('client-invitation', 'Dedupe@Fresh.test', null, '{}'::jsonb, 'test.dedupe.1')`)
+  await dbB.query(`select public.enqueue_email('client-invitation', 'dedupe@fresh.test', null, '{}'::jsonb, 'test.dedupe.1')`)
+  ok('fresh: enqueue_email dedupes on (template_key, dedupe_key)',
+    (await scalar(dbB, `select count(*)::int n from public.email_outbox where dedupe_key = 'test.dedupe.1'`)).n === 1)
+  ok('fresh: recipient email is normalized to lowercase',
+    (await scalar(dbB, `select recipient_email e from public.email_outbox where dedupe_key = 'test.dedupe.1'`)).e === 'dedupe@fresh.test')
+
+  // Browser roles can neither call the enqueue helper nor touch the queue.
+  await asUser(dbB, aliceB)
+  ok('fresh: authenticated users cannot execute enqueue_email',
+    await expectError(dbB, () => dbB.query(`select public.enqueue_email('client-invitation', 'x@fresh.test', null, '{}'::jsonb, 'test.forbidden')`)))
+  // The outbox revokes table privileges from browser roles outright (RLS
+  // deny-all policies sit on top as defense in depth) → permission denied.
+  ok('fresh: authenticated users cannot read the outbox',
+    await expectError(dbB, () => dbB.query('select count(*) from public.email_outbox')))
+  ok('fresh: authenticated users cannot write the outbox',
+    await expectError(dbB, () => dbB.query(`insert into public.email_outbox (template_key, recipient_email, dedupe_key) values ('task-assigned', 'x@fresh.test', 'test.rls')`)))
+
+  // Assignment emails: team member → project-assigned; task → task-assigned;
+  // self-assignment never emails the actor.
+  await asUser(dbB, employeeB)
+  await dbB.query(`select public.mark_password_changed($1)`, [employeeB])
+  await asUser(dbB, aliceB)
+  const emailProject = (await dbB.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('Email Brand', $1, 'in-review', $2) returning id`,
+    [carolClient, aliceB],
+  )).rows[0]
+  await dbB.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [emailProject.id, employeeB])
+  await dbB.query(`insert into public.tasks (title, project_id, assignee_id, priority, due_date)
+    values ('Email Test Task', $1, $2, 'high', current_date + 2)`, [emailProject.id, employeeB])
+  await dbB.query(`insert into public.tasks (title, project_id, assignee_id) values ('Self Task', $1, $2)`, [emailProject.id, aliceB])
+  await superUser(dbB)
+  const memberEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-assigned' and recipient_user_id = $1 and dedupe_key like 'team.member.assigned:%'`, [employeeB])
+  ok('fresh: adding a team member enqueues a project-assigned email',
+    memberEmail?.recipient_email === 'employee@fresh.test')
+  const taskEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'task-assigned' and recipient_user_id = $1`, [employeeB])
+  ok('fresh: task assignment enqueues an email to the assignee',
+    taskEmail?.recipient_email === 'employee@fresh.test'
+      && taskEmail?.payload?.task_title === 'Email Test Task'
+      && taskEmail?.payload?.project_name === 'Email Brand')
+  ok('fresh: self-assignment never emails the actor',
+    (await scalar(dbB, `select count(*)::int n from public.email_outbox where template_key = 'task-assigned' and recipient_user_id = $1`, [aliceB])).n === 0)
+
+  // Delivery → delivery-ready email to client portal accounts.
+  await asUser(dbB, aliceB)
+  const carolPlaceholder = (await dbB.query(
+    `select * from public.admin_create_client_account($1, 'carol@beta.test', 'Carol Beta')`, [carolClient])).rows[0]
+  ok('fresh: portal invitation placeholder provisions a client account', carolPlaceholder?.client_id === carolClient)
+  await superUser(dbB)
+  const carolUser = await addUser(dbB, 'carol@beta.test', { adminProvisioned: true, fullName: 'Carol Beta' })
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.mark_password_changed($1)`, [carolUser])
+  await asUser(dbB, aliceB)
+  await dbB.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('email-brand-final.pdf', 'pdf', 900, $1, $2, $3)`, [`${emailProject.id}/email-brand-final.pdf`, emailProject.id, aliceB])
+  const emailFileId = (await dbB.query(`select id from public.files where project_id = $1`, [emailProject.id])).rows[0].id
+  await dbB.query(`select public.add_project_delivery_file($1, $2)`, [emailProject.id, emailFileId])
+  await dbB.query(`select public.mark_project_delivered($1, 'Handoff for the email test')`, [emailProject.id])
+  await superUser(dbB)
+  const deliveryEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'delivery-ready' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: delivering a package enqueues a delivery-ready email to the client',
+    deliveryEmail?.recipient_email === 'carol@beta.test' && deliveryEmail?.payload?.version === 1)
+
+  // Approval → confirmation to the client + project-update to owner/manager.
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.approve_client_portal_delivery($1, 'Approved via email test.')`, [emailProject.id])
+  await superUser(dbB)
+  const approvalEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'revision-approval-update' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: client approval enqueues a confirmation email to the client',
+    approvalEmail?.recipient_email === 'carol@beta.test' && approvalEmail?.payload?.action === 'approved')
+  const ownerUpdateEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-update' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: client approval enqueues a project-update email to the owner',
+    ownerUpdateEmail?.recipient_email === 'admin@fresh.test' && ownerUpdateEmail?.payload?.label === 'Client approval')
+
+  // Revision request → confirmation to the client + project-update to owner.
+  await asUser(dbB, aliceB)
+  const revEmailProject = (await dbB.query(
+    `insert into public.projects (name, client_id, status, owner_id) values ('Email Revision Brand', $1, 'in-review', $2) returning id`,
+    [carolClient, aliceB],
+  )).rows[0]
+  await dbB.query(`insert into public.files (name, type, size, storage_path, project_id, uploaded_by)
+    values ('rev-email.pdf', 'pdf', 900, $1, $2, $3)`, [`${revEmailProject.id}/rev-email.pdf`, revEmailProject.id, aliceB])
+  const revEmailFileId = (await dbB.query(`select id from public.files where project_id = $1`, [revEmailProject.id])).rows[0].id
+  await dbB.query(`select public.add_project_delivery_file($1, $2)`, [revEmailProject.id, revEmailFileId])
+  await dbB.query(`select public.mark_project_delivered($1, 'First pass')`, [revEmailProject.id])
+  await asUser(dbB, carolUser)
+  await dbB.query(`select public.request_client_portal_revision($1, 'Please change the font.')`, [revEmailProject.id])
+  await superUser(dbB)
+  const revisionEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'revision-approval-update' and payload->>'action' = 'revision_requested' and recipient_user_id = $1`, [carolUser])
+  ok('fresh: client revision request enqueues a confirmation email to the client',
+    revisionEmail?.recipient_email === 'carol@beta.test')
+  const revisionOwnerEmail = await scalar(dbB, `select * from public.email_outbox where template_key = 'project-update' and payload->>'label' = 'Revision request' and recipient_user_id = $1`, [aliceB])
+  ok('fresh: client revision request enqueues a project-update email to the owner',
+    revisionOwnerEmail?.recipient_email === 'admin@fresh.test')
+
+  // The unique index makes double-delivery structurally impossible.
+  ok('fresh: every outbox row is unique per (template_key, dedupe_key)',
+    (await scalar(dbB, `select count(*)::int n from (select 1 from public.email_outbox group by template_key, dedupe_key having count(*) > 1) d`)).n === 0)
+
+  // ── Operational analytics (Session 24) ─────────────────────────────────
+  // The report is one database aggregate over real workflow rows. It must
+  // return management data to report viewers, explicitly narrow the payload
+  // for project-scoped employees, reject clients, and never expose finance.
+  await asUser(dbB, aliceB)
+  const operationalReport = (await scalar(dbB, `select public.get_operational_analytics(30) report`)).report
+  ok('fresh: operational report aggregates submissions, projects, tasks, workload, and delivery',
+    operationalReport?.window?.days === 30
+      && Number(operationalReport?.submissions?.volume) >= 1
+      && Number(operationalReport?.submissions?.converted) >= 1
+      && Array.isArray(operationalReport?.submissions?.by_form)
+      && Array.isArray(operationalReport?.projects?.by_status)
+      && Number(operationalReport?.tasks?.open) >= 1
+      && Array.isArray(operationalReport?.team_workload)
+      && Number(operationalReport?.delivery?.delivered) >= 2)
+  ok('fresh: operational report contains no financial reporting fields',
+    !/(budget|revenue|invoice|profit|cost|client_value)/i.test(JSON.stringify(operationalReport)))
+
+  await asUser(dbB, employeeB)
+  const scopedOperationalReport = (await scalar(dbB, `select public.get_operational_analytics(30) report`)).report
+  ok('fresh: employee report is project-scoped and excludes submissions without submission.view',
+    scopedOperationalReport?.scope?.all_projects === false
+      && scopedOperationalReport?.scope?.submissions_included === false
+      && Number(scopedOperationalReport?.submissions?.volume) === 0)
+
+  await asUser(dbB, carolUser)
+  ok('fresh: client cannot execute the staff operational report',
+    await expectError(dbB, () => dbB.query(`select public.get_operational_analytics(30)`)))
+  await superUser(dbB)
 
   await dbB.close()
 
