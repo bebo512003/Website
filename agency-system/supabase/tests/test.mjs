@@ -2936,6 +2936,74 @@ async function runDeadlineReminderSuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runPublicFormReliabilitySuite(db, ids, label) {
+  const { alice, anonVisitor } = ids
+
+  await asUser(db, alice)
+  await db.query(`insert into public.form_templates (slug, title, status) values ('sessionless-form', 'Sessionless Form', 'published')`)
+  const form = (await db.query(`select id from public.form_templates where slug = 'sessionless-form'`)).rows[0]
+  await db.query(`insert into public.form_questions (form_id, question_type, label, required, map_to, position) values
+    ($1, 'short_text', 'Name', true, 'name', 1),
+    ($1, 'short_text', 'Email', true, 'email', 2),
+    ($1, 'file_upload', 'Logo', false, null, 3)`, [form.id])
+  const qs = (await db.query(`select id from public.form_questions where form_id = $1 order by position`, [form.id])).rows
+  const [qName, qEmail, qFile] = qs.map((row) => row.id)
+
+  // No session (empty auth.uid), anon role — this is the public fallback path.
+  await superUser(db)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const sessionless = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({
+    [qName]: 'No Session',
+    [qEmail]: 'nosession@test.local',
+  })])).rows[0]
+  ok(`${label}: public submit works with no auth.uid() (anon-key fallback)`,
+    sessionless?.status === 'new' && sessionless?.respondent_email === 'nosession@test.local')
+
+  await superUser(db)
+  const clientCreated = (await db.query(`select id from public.clients where email = 'nosession@test.local'`)).rows[0]
+  ok(`${label}: sessionless submit still creates the CRM client`, !!clientCreated)
+
+  await db.query(`insert into storage.objects (bucket_id, name) values ('form-files', 'anon/logo-nosession.png')`)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const withFile = (await db.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [form.id, JSON.stringify({
+    [qName]: 'With File',
+    [qEmail]: 'withfile@test.local',
+    [qFile]: [{ name: 'logo-nosession.png', size: 2048, mime_type: 'image/png', storage_path: 'anon/logo-nosession.png' }],
+  })])).rows[0]
+  await superUser(db)
+  const attached = (await db.query(`select * from public.form_submission_attachments where submission_id = $1`, [withFile.id])).rows[0]
+  ok(`${label}: sessionless submit attaches files from the shared anon/ folder`,
+    attached?.storage_path === 'anon/logo-nosession.png')
+
+  // Storage insert no longer requires owner_id to match at WITH CHECK time.
+  await asUser(db, anonVisitor, 'anon')
+  const noOwnerInsert = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', $1)`,
+    [`${anonVisitor}/no-owner.png`],
+  ))
+  ok(`${label}: form-files insert is allowed without owner_id when the folder matches the caller`, !noOwnerInsert)
+
+  const otherFolder = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', 'someone-else/x.png')`,
+  ))
+  ok(`${label}: form-files insert rejects a folder that is not the caller or anon`, otherFolder)
+
+  await superUser(db)
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const anonFolderInsert = await expectError(db, () => db.query(
+    `insert into storage.objects (bucket_id, name) values ('form-files', 'anon/direct.png')`,
+  ))
+  ok(`${label}: no-session caller can insert into the shared anon/ folder`, !anonFolderInsert)
+
+  await superUser(db)
+  await asUser(db, alice)
+  await db.query(`update public.form_templates set status = 'archived' where id = $1`, [form.id])
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
@@ -2949,6 +3017,7 @@ async function main() {
   await runCapabilityEnforcementSuite(dbA, idsA, 'upgrade')
   await runNotificationSuite(dbA, idsA, 'upgrade')
   await runStorageSecuritySuite(dbA, idsA, 'upgrade')
+  await runPublicFormReliabilitySuite(dbA, idsA, 'upgrade')
   await runSubmissionReviewWorkflowSuite(dbA, idsA, 'upgrade')
   await runSubmissionConversionSuite(dbA, idsA, 'upgrade')
   await runTaskManagementSuite(dbA, idsA, 'upgrade')
@@ -2999,6 +3068,12 @@ async function main() {
   ok('fresh: published dynamic form is publicly readable', (await scalar(dbB, 'select count(*)::int n from public.form_templates')).n === 1)
   const freshSubmission = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'visitor@fresh.test' })])).rows[0]
   ok('fresh: anonymous submission works end to end', freshSubmission?.status === 'new' && freshSubmission?.respondent_email === 'visitor@fresh.test')
+  await superUser(dbB)
+  await dbB.query(`set role anon`)
+  await dbB.query(`select set_config('app.request.uid', '', false)`)
+  const sessionlessFresh = (await dbB.query(`select * from public.submit_dynamic_form($1, $2::jsonb)`, [freshForm.id, JSON.stringify({ [freshQuestionId]: 'sessionless@fresh.test' })])).rows[0]
+  ok('fresh: sessionless submit persists without auth.uid()', sessionlessFresh?.status === 'new' && sessionlessFresh?.respondent_email === 'sessionless@fresh.test')
+  await asUser(dbB, anonVisitorB, 'anon')
   ok('fresh: anonymous submission generates reference number and tracking token',
     typeof freshSubmission?.reference_number === 'string' && freshSubmission.reference_number.startsWith('REQ-') && typeof freshSubmission?.tracking_token === 'string')
   const freshTracking = (await scalar(dbB, `select public.get_public_submission_tracking($1) as t`, [freshSubmission.reference_number])).t
@@ -3006,7 +3081,7 @@ async function main() {
     freshTracking?.reference_number === freshSubmission.reference_number && freshTracking?.stage_index === 1)
 
   await asUser(dbB, aliceB)
-  ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 1)
+  ok('fresh: staff read the stored answers', (await scalar(dbB, 'select count(*)::int n from public.form_submission_answers')).n === 2)
   const freshAdminNotifs = (await dbB.query(`select * from public.notifications where recipient_id = $1`, [aliceB])).rows
   ok('fresh: admin receives notification on submission', freshAdminNotifs.length >= 1 && freshAdminNotifs[0].type === 'form_submission')
 
@@ -3028,9 +3103,10 @@ async function main() {
     `select * from public.get_submission_inbox_page(null, null, null, null, null, 'newest', 1, 25)`
   )).rows[0]
   ok('fresh: inbox page RPC returns the page plus exact total',
-    Array.isArray(inboxPage?.data) && inboxPage.data.length === 1 && inboxPage.total === 1)
+    Array.isArray(inboxPage?.data) && inboxPage.data.length === 2 && inboxPage.total === 2)
+  const visitorInboxRow = (inboxPage?.data || []).find((row) => row.respondent_email === 'visitor@fresh.test')
   ok('fresh: inbox page RPC joins form title and reviewer',
-    inboxPage?.data?.[0]?.form_templates?.title === 'Fresh Form' && inboxPage.data[0]?.reviewer?.email === 'employee@fresh.test')
+    visitorInboxRow?.form_templates?.title === 'Fresh Form' && visitorInboxRow?.reviewer?.email === 'employee@fresh.test')
   const inboxSearchHit = (await dbB.query(
     `select * from public.get_submission_inbox_page('visitor@fresh.test', null, null, null, null, 'newest', 1, 25)`
   )).rows[0]
@@ -3061,11 +3137,11 @@ async function main() {
   await asUser(dbB, aliceB)
   const pipelineBefore = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
   ok('fresh: pipeline counts aggregate in the database',
-    pipelineBefore?.total === 1 && pipelineBefore?.by_status?.qualified === 1 && pipelineBefore?.assigned_to_me === 0)
+    pipelineBefore?.total === 2 && pipelineBefore?.by_status?.qualified === 1 && pipelineBefore?.assigned_to_me === 0)
   await dbB.query(`select public.assign_form_submission_reviewer($1, $2, 'Pagination suite')`, [freshSubmission.id, aliceB])
   const pipelineAssigned = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
   ok('fresh: pipeline counts track the assigned-to-me bucket',
-    pipelineAssigned?.assigned_to_me === 1 && pipelineAssigned?.total === 1)
+    pipelineAssigned?.assigned_to_me === 1 && pipelineAssigned?.total === 2)
 
   const freshProject = (await dbB.query(
     `select * from public.convert_submission_to_project(
@@ -3117,7 +3193,7 @@ async function main() {
   await superUser(dbB)
   ok('fresh: submission insert enqueues transactional emails',
     (await scalar(dbB, 'select count(*)::int n from public.email_outbox')).n >= 2)
-  const receiptRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'submission-received'`)
+  const receiptRow = await scalar(dbB, `select * from public.email_outbox where template_key = 'submission-received' and recipient_email = 'visitor@fresh.test'`)
   ok('fresh: respondent receipt carries the reference + public tracking link',
     receiptRow?.recipient_email === 'visitor@fresh.test'
       && receiptRow?.payload?.reference_number === freshSubmission.reference_number

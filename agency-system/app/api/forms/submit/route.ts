@@ -20,7 +20,9 @@ import { flushEmailQueue } from '@/lib/email/flush'
 //                                the RPC itself runs under the caller's token.
 
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || ''
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
 
 // ── In-memory IP rate limiter ────────────────────────────────────────────────
 // Sliding window: max 10 submissions per IP per minute, 30 per hour.
@@ -162,8 +164,9 @@ export async function POST(request: NextRequest) {
     // uploads are disabled on the client in that case.
     const callerToken = (typeof accessToken === 'string' && accessToken) || ''
 
-    // 5. Turnstile verification (when configured)
-    if (TURNSTILE_SECRET) {
+    // 5. Turnstile verification — only when BOTH keys are configured.
+    // A secret without a site key would reject every real submission.
+    if (TURNSTILE_SECRET && TURNSTILE_SITE_KEY) {
       const turnstileOk = await verifyTurnstile(String(turnstileToken || ''), ip)
       if (!turnstileOk) {
         return NextResponse.json(
@@ -197,17 +200,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    // The Supabase client's second argument MUST be an API key (the anon key),
-    // never a user access token. The caller's JWT belongs in the Authorization
-    // header so auth.uid() resolves to the anonymous session inside the RPC.
-    // Passing the JWT as the key produces an invalid `apikey` header, which the
-    // Supabase gateway rejects with "No API key found in request".
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-    if (!anonKey) {
+    // The Supabase client's second argument MUST be an API key, never a user
+    // JWT. Prefer the service role so a missing/mis-copied anon key cannot
+    // block public submits — the RPC is SECURITY DEFINER and still validates
+    // every answer. The caller's JWT (when present) goes in Authorization so
+    // auth.uid() resolves inside the function.
+    const apiKey = SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    if (!apiKey) {
       return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
     }
 
-    const supabase = createClient(SUPABASE_URL, anonKey, {
+    const supabase = createClient(SUPABASE_URL, apiKey, {
       global: callerToken ? { headers: { Authorization: `Bearer ${callerToken}` } } : undefined,
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     })
@@ -218,6 +221,7 @@ export async function POST(request: NextRequest) {
     })
 
     if (error) {
+      console.error('[forms/submit] RPC failed:', error.message, error.code, error.details, error.hint)
       // Sanitize error messages for public consumption.
       // Map known Postgres exceptions to friendly messages; hide everything else.
       const msg = error.message || ''
@@ -235,6 +239,8 @@ export async function POST(request: NextRequest) {
         /Invalid rating/i.test(msg) ? 'Please provide a valid rating.' :
         /Invalid file/i.test(msg) ? 'There was a problem with your file upload.' :
         /Too many files/i.test(msg) ? 'You have uploaded too many files. Maximum is 10 per question.' :
+        /null value|not-null|foreign key|violates/i.test(msg) ? 'Your answers could not be saved. Please try again in a moment.' :
+        /No API key/i.test(msg) ? 'Submissions are temporarily unavailable. Please refresh and try again.' :
         'Something went wrong. Please try again.'
 
       return NextResponse.json({ error: friendly }, { status: 400 })
