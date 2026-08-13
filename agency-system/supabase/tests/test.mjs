@@ -3228,6 +3228,36 @@ async function main() {
   ok('fresh: every outbox row is unique per (template_key, dedupe_key)',
     (await scalar(dbB, `select count(*)::int n from (select 1 from public.email_outbox group by template_key, dedupe_key having count(*) > 1) d`)).n === 0)
 
+  // ── Operational analytics (Session 24) ─────────────────────────────────
+  // The report is one database aggregate over real workflow rows. It must
+  // return management data to report viewers, explicitly narrow the payload
+  // for project-scoped employees, reject clients, and never expose finance.
+  await asUser(dbB, aliceB)
+  const operationalReport = (await scalar(dbB, `select public.get_operational_analytics(30) report`)).report
+  ok('fresh: operational report aggregates submissions, projects, tasks, workload, and delivery',
+    operationalReport?.window?.days === 30
+      && Number(operationalReport?.submissions?.volume) >= 1
+      && Number(operationalReport?.submissions?.converted) >= 1
+      && Array.isArray(operationalReport?.submissions?.by_form)
+      && Array.isArray(operationalReport?.projects?.by_status)
+      && Number(operationalReport?.tasks?.open) >= 1
+      && Array.isArray(operationalReport?.team_workload)
+      && Number(operationalReport?.delivery?.delivered) >= 2)
+  ok('fresh: operational report contains no financial reporting fields',
+    !/(budget|revenue|invoice|profit|cost|client_value)/i.test(JSON.stringify(operationalReport)))
+
+  await asUser(dbB, employeeB)
+  const scopedOperationalReport = (await scalar(dbB, `select public.get_operational_analytics(30) report`)).report
+  ok('fresh: employee report is project-scoped and excludes submissions without submission.view',
+    scopedOperationalReport?.scope?.all_projects === false
+      && scopedOperationalReport?.scope?.submissions_included === false
+      && Number(scopedOperationalReport?.submissions?.volume) === 0)
+
+  await asUser(dbB, carolUser)
+  ok('fresh: client cannot execute the staff operational report',
+    await expectError(dbB, () => dbB.query(`select public.get_operational_analytics(30)`)))
+  await superUser(dbB)
+
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

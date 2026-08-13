@@ -24,6 +24,7 @@ import type {
   ClientFormSubmission,
   FileWithProject,
   Notification,
+  OperationalAnalytics,
   Permission,
   PortfolioCategory,
   PortfolioCategoryInsert,
@@ -137,6 +138,16 @@ export async function executePage<T>(
 export function getDatabaseStatus() {
   return { connected: isDatabaseConnected }
 }
+
+/** One database-aggregated operational report. The RPC applies report.view,
+ * account-state, submission, and project-access checks before returning data. */
+export async function getOperationalAnalytics(days = 30): Promise<Result<OperationalAnalytics | null>> {
+  if (!supabase) return fail(null)
+  const safeDays = Math.min(365, Math.max(7, Math.floor(days) || 30))
+  const { data, error } = await supabase.rpc('get_operational_analytics', { p_days: safeDays })
+  return error ? fail(null, error.message) : ok(data as unknown as OperationalAnalytics)
+}
+
 export async function getProfiles(): Promise<Result<Profile[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('profiles').select('*').order('full_name')
