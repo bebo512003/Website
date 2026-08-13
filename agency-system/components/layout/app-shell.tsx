@@ -152,9 +152,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     ['--accent-glow' as string]: accent.glow,
   }
 
-  // Public pages render without the workspace shell.
-  if (isAuthPage) return <div style={style}>{children}</div>
-  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}>{children}</div>
+  // Public pages render without the workspace shell but still expose a main
+  // landmark so a screen reader (or the skip link) can jump straight to the
+  // primary content.
+  if (isAuthPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
+  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
 
   if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
 
@@ -174,7 +176,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
 
   if (isPortalPage) {
-    if (isClient) return <div style={style}>{children}</div>
+    if (isClient) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
     return <LoadingScreen style={style} />
   }
 
@@ -191,11 +193,27 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex h-screen overflow-hidden bg-bg text-fg" style={style}>
+      <SkipToMain />
       <Sidebar />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">
         <TopBar />
-        <main className="flex-1 overflow-y-auto">{children}</main>
+        <main id="main-content" className="flex-1 overflow-y-auto" tabIndex={-1}>{children}</main>
       </div>
     </div>
+  )
+}
+
+/**
+ * Skip link: the first Tab press on any page reveals a jump-to-content
+ * shortcut. Keyboard-only users don't have to Tab through the sidebar and top
+ * bar every time they land on a new page. The link is styled entirely in
+ * globals.css (`.skip-link`) so the animation and the visible-on-focus rules
+ * stay in one place.
+ */
+function SkipToMain() {
+  return (
+    <a href="#main-content" className="skip-link">
+      Skip to main content
+    </a>
   )
 }

@@ -73,6 +73,8 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
   const [unreadCount, setUnreadCount] = useState(0)
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const panelId = 'notification-dropdown-panel'
 
   const load = useCallback(async () => {
     const result = await getNotifications(20)
@@ -93,7 +95,9 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
     }
   }, [load])
 
-  // Close on outside click
+  // Close on outside click or Escape, and restore focus to the trigger button
+  // when the panel closes so keyboard users don't lose their place in the top
+  // bar's tab order.
   useEffect(() => {
     if (!open) return
     const handleClickOutside = (event: MouseEvent) => {
@@ -102,7 +106,12 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
       }
     }
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setOpen(false)
+      if (event.key === 'Escape') {
+        setOpen(false)
+        // Explicit restoration: without this the browser drops focus to the
+        // <body>, which is a jarring keyboard experience.
+        triggerRef.current?.focus()
+      }
     }
     document.addEventListener('mousedown', handleClickOutside)
     document.addEventListener('keydown', handleKeyDown)
@@ -162,10 +171,13 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
     <div className="relative" ref={containerRef}>
       {/* Bell Button */}
       <button
+        ref={triggerRef}
         type="button"
         onClick={toggleDropdown}
         aria-expanded={open}
-        aria-label={`Open notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+        aria-haspopup="dialog"
+        aria-controls={open ? panelId : undefined}
+        aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
         className={`relative rounded-md border p-2 transition ${
           open
             ? 'border-accent bg-surface-raised text-fg shadow-sm'
@@ -182,7 +194,12 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
 
       {/* Floating Dropdown Panel */}
       {open && (
-        <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-lg border border-border bg-surface shadow-2xl z-50 overflow-hidden backdrop-blur-lg">
+        <div
+          id={panelId}
+          role="dialog"
+          aria-label="Notifications"
+          className="absolute right-0 top-full mt-2 w-80 sm:w-96 rounded-lg border border-border bg-surface shadow-2xl z-50 overflow-hidden backdrop-blur-lg"
+        >
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border bg-surface-raised/80 px-4 py-3">
             <div className="flex items-center gap-2">

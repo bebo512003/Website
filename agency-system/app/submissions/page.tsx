@@ -78,6 +78,7 @@ import {
   primaryButtonClassName,
   secondaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type SortMode = 'newest' | 'oldest' | 'status'
 type DetailTab = 'answers' | 'notes' | 'activity'
@@ -109,6 +110,7 @@ function formatRelativeTime(dateString: string): string {
 
 export default function SubmissionsPage() {
   const { user, can } = useAuth()
+  const confirm = useConfirm()
   const allowed = can('submission.view')
   const canEdit = can('submission.edit')
   const canAssign = can('submission.assign')
@@ -377,7 +379,13 @@ export default function SubmissionsPage() {
   }
 
   const handleDeleteNote = async (submissionId: string, noteId: string) => {
-    if (!window.confirm('Delete this internal review note?')) return
+    const ok = await confirm({
+      title: 'Delete this internal review note?',
+      description: 'The note is removed from the submission timeline. This cannot be undone.',
+      confirmLabel: 'Delete note',
+      tone: 'destructive',
+    })
+    if (!ok) return
     const result = await deleteFormSubmissionNote(noteId)
     if (result.error) {
       setError(result.error)

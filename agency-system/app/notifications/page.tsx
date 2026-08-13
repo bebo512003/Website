@@ -49,6 +49,7 @@ import {
   primaryButtonClassName,
   secondaryButtonClassName,
 } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 function getNotificationTypeBadge(notification: Notification) {
   const event = notificationEvent(notification)
@@ -98,6 +99,7 @@ const PAGE_SIZE = 25
 
 export default function NotificationsPage() {
   const router = useRouter()
+  const confirm = useConfirm()
   const [notifications, setNotifications] = useState<Notification[]>([])
   const [total, setTotal] = useState(0)
   const [tabCounts, setTabCounts] = useState<{ all: number; unread: number; submissions: number; projects: number; tasks: number; client: number }>({ all: 0, unread: 0, submissions: 0, projects: 0, tasks: 0, client: 0 })
@@ -192,7 +194,13 @@ export default function NotificationsPage() {
   }
 
   const clearAllRead = async () => {
-    if (!window.confirm('Delete all read notifications from your inbox?')) return
+    const ok = await confirm({
+      title: 'Clear all read notifications?',
+      description: 'This removes every read notification from your inbox. Unread notifications are kept.',
+      confirmLabel: 'Clear read',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setClearingRead(true)
     const result = await deleteAllReadNotifications()
     setClearingRead(false)

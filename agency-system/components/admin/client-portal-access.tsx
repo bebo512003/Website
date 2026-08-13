@@ -11,6 +11,7 @@ import {
 } from '@/lib/supabase/database'
 import type { Profile } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 type Credentials = { email: string; password: string }
 
@@ -21,6 +22,7 @@ type Credentials = { email: string; password: string }
  */
 export function ClientPortalAccess({ clientId }: { clientId: string }) {
   const { can } = useAuth()
+  const confirm = useConfirm()
   const canManage = can('admin.manage')
 
   const [accounts, setAccounts] = useState<Profile[]>([])
@@ -80,7 +82,13 @@ export function ClientPortalAccess({ clientId }: { clientId: string }) {
   }
 
   const revoke = async (account: Profile) => {
-    if (!window.confirm(`Revoke portal access for “${account.email}”? The login is removed permanently.`)) return
+    const ok = await confirm({
+      title: `Revoke portal access for “${account.email}”?`,
+      description: 'The login is removed permanently. You can re-issue an invitation later.',
+      confirmLabel: 'Revoke access',
+      tone: 'destructive',
+    })
+    if (!ok) return
     setError(''); setMessage('')
     const result = await deleteClientAccount(account.id)
     if (result.error) setError(result.error)

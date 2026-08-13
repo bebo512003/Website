@@ -29,6 +29,7 @@ import type { FormStatus, FormTemplateWithCounts } from '@/lib/supabase/types'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { useConfirm } from '@/components/ui/confirm-dialog'
 
 // ── Admin · Forms ────────────────────────────────────────────────────────────
 // Template inventory: create, edit (builder), duplicate, enable/disable,
@@ -53,6 +54,7 @@ function countOf(rows: { count: number }[] | undefined): number {
 }
 
 export function FormsAdmin() {
+  const confirmDialog = useConfirm()
   const router = useRouter()
   const { can } = useAuth()
   const canManage = can('form.manage')
@@ -143,7 +145,13 @@ export function FormsAdmin() {
       setError(`“${template.title}” has ${submissions} response(s) and cannot be deleted. Archive it instead.`)
       return
     }
-    if (!window.confirm(`Delete “${template.title}” and its questions permanently?`)) return
+    const ok = await confirmDialog({
+      title: `Delete “${template.title}”?`,
+      description: 'This deletes the form and all of its questions permanently.',
+      confirmLabel: 'Delete form',
+      tone: 'destructive',
+    })
+    if (!ok) return
     await run(template.id, async () => deleteFormTemplate(template.id).then((r) => ({ error: r.error })), `Deleted “${template.title}”.`)
   }
 
