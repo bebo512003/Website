@@ -94,6 +94,7 @@ export function PublicFormClient({
   const [values, setValues] = useState<AnswerMap>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
+  const [errorDebug, setErrorDebug] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [submittedData, setSubmittedData] = useState<FormSubmissionRow | null>(null)
@@ -145,6 +146,7 @@ export function PublicFormClient({
 
   const pickFile = async (question: FormQuestion, file: File) => {
     setError('')
+    setErrorDebug('')
     const validation = validateFile(file, 'form-files', lang)
     if (!validation.valid) {
       setError(lang === 'ar' ? (validation.errorAr || validation.error || '') : (validation.error || ''))
@@ -200,6 +202,7 @@ export function PublicFormClient({
 
   const submit = async () => {
     setError('')
+    setErrorDebug('')
 
     // ── Session 05: Honeypot check ───────────────────────────────────────
     if (honeypot.trim() !== '') {
@@ -271,9 +274,9 @@ export function PublicFormClient({
         }),
       })
 
-      let result: { data?: FormSubmissionRow; error?: string }
+      let result: { data?: FormSubmissionRow; error?: string; debug?: string | null }
       try {
-        result = (await response.json()) as { data?: FormSubmissionRow; error?: string }
+        result = (await response.json()) as { data?: FormSubmissionRow; error?: string; debug?: string | null }
       } catch {
         setError(lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Your response could not be saved. Please try again.')
         setSubmitting(false)
@@ -282,6 +285,7 @@ export function PublicFormClient({
 
       if (!response.ok || result.error) {
         setError(localizeSubmitError(result.error || '', lang) || (lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Submission failed.'))
+        setErrorDebug(result.debug || '')
         setSubmitting(false)
         return
       }
@@ -307,6 +311,7 @@ export function PublicFormClient({
     setSubmittedData(null)
     setDone(false)
     setTurnstileToken(null)
+    setErrorDebug('')
   }
 
   // ── Success / Confirmation View (Session 16) ────────────────────────────
@@ -378,7 +383,16 @@ export function PublicFormClient({
           </p>
         </div>
 
-        {error && <div className="mb-6"><InlineAlert>{error}</InlineAlert></div>}
+        {(error || errorDebug) && (
+          <div className="mb-6 space-y-2">
+            {error ? <InlineAlert>{error}</InlineAlert> : null}
+            {errorDebug ? (
+              <p className="break-all rounded-md border border-border bg-surface px-3 py-2 font-mono text-[11px] leading-5 text-text-tertiary">
+                {errorDebug}
+              </p>
+            ) : null}
+          </div>
+        )}
 
         <form className="rounded-md border border-border bg-surface" onSubmit={(event) => { event.preventDefault(); void submit() }}>
           <div className="border-b border-border p-4 sm:p-5">

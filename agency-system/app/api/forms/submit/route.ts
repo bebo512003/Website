@@ -22,10 +22,11 @@ import type { Database } from '@/lib/supabase/database.types'
 //   NEXT_PUBLIC_SUPABASE_URL — Supabase project URL
 //   SUPABASE_SERVICE_ROLE_KEY — required to save public submissions
 
-const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || ''
-const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL || ''
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || ''
+const TURNSTILE_SECRET = (process.env.TURNSTILE_SECRET_KEY || '').trim()
+const TURNSTILE_SITE_KEY = (process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '').trim()
+const SUPABASE_URL = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim()
+const SERVICE_ROLE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY || '').trim()
+const ANON_KEY = (process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '').trim()
 
 function decodeJwtRole(token: string): string | null {
   try {
@@ -211,88 +212,64 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
-    if (SERVICE_ROLE_KEY) {
-      let callerId: string | null = null
-      if (callerToken && anonKey) {
-        const authClient = createClient(SUPABASE_URL, anonKey, {
-          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-        })
-        const { data: caller } = await authClient.auth.getUser(callerToken)
-        callerId = caller.user?.id || null
-      }
+    const writeKey = SERVICE_ROLE_KEY || ANON_KEY
+    if (!writeKey) {
+      return NextResponse.json({
+        error: 'Submissions are temporarily unavailable.',
+        debug: 'Missing SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_ANON_KEY',
+      }, { status: 503 })
+    }
 
-      const service = createClient<Database>(SUPABASE_URL, SERVICE_ROLE_KEY, {
+    const keyRole = decodeJwtRole(writeKey)
+    if (
+      SERVICE_ROLE_KEY
+      && (SERVICE_ROLE_KEY.startsWith('sb_publishable_') || (keyRole && keyRole !== 'service_role'))
+    ) {
+      console.error('[forms/submit] SUPABASE_SERVICE_ROLE_KEY is not a service_role secret', keyRole)
+      return NextResponse.json({
+        error: 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.',
+        debug: `key role=${keyRole || 'publishable'}`,
+      }, { status: 503 })
+    }
+
+    let callerId: string | null = null
+    if (callerToken && ANON_KEY) {
+      const authClient = createClient(SUPABASE_URL, ANON_KEY, {
         auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
       })
-
-      const keyRole = decodeJwtRole(SERVICE_ROLE_KEY)
-      if (keyRole && keyRole !== 'service_role') {
-        console.error('[forms/submit] SUPABASE_SERVICE_ROLE_KEY has role', keyRole)
-        return NextResponse.json({
-          error: 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.',
-          debug: `key role=${keyRole}`,
-        }, { status: 503 })
-      }
-
-      try {
-        const data = await persistPublicFormSubmission({
-          supabase: service,
-          formId,
-          answers: answers as Record<string, unknown>,
-          callerId,
-        })
-
-        void flushEmailQueue().catch((error) => {
-          console.error('[email] immediate flush failed:', error)
-        })
-
-        return NextResponse.json({ data, error: null })
-      } catch (error) {
-        if (error instanceof PublicFormSubmitError) {
-          console.error('[forms/submit] persist rejected:', error.message, error.debug)
-          return NextResponse.json(
-            { error: error.debug ? `${error.message} (${error.debug})` : error.message, debug: error.debug },
-            { status: error.status },
-          )
-        }
-        const message = error instanceof Error ? error.message : String(error)
-        console.error('[forms/submit] persist failed:', message)
-        return NextResponse.json({ error: `${mapPublicFormSubmitError(message)} (${message})`, debug: message }, { status: 400 })
-      }
+      const { data: caller } = await authClient.auth.getUser(callerToken)
+      callerId = caller.user?.id || null
     }
 
-    // No service role — last-resort RPC. Never attach a user JWT as
-    // Authorization here: an expired anonymous session turns into the
-    // generic "Something went wrong" page.
-    const apiKey = anonKey
-    if (!apiKey) {
-      return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
-    }
-
-    const supabase = createClient(SUPABASE_URL, apiKey, {
+    const writer = createClient<Database>(SUPABASE_URL, writeKey, {
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     })
 
-    const { data, error } = await supabase.rpc('submit_dynamic_form', {
-      p_form_id: formId,
-      p_answers: answers as Record<string, unknown>,
-    })
+    try {
+      const data = await persistPublicFormSubmission({
+        supabase: writer,
+        formId,
+        answers: answers as Record<string, unknown>,
+        callerId,
+      })
 
-    if (error) {
-      console.error('[forms/submit] RPC failed:', error.message, error.code, error.details, error.hint)
-      return NextResponse.json({ error: mapPublicFormSubmitError(error.message || '') }, { status: 400 })
+      void flushEmailQueue().catch((error) => {
+        console.error('[email] immediate flush failed:', error)
+      })
+
+      return NextResponse.json({ data, error: null, debug: null })
+    } catch (error) {
+      if (error instanceof PublicFormSubmitError) {
+        console.error('[forms/submit] persist rejected:', error.message, error.debug)
+        return NextResponse.json(
+          { error: error.message, debug: error.debug || null },
+          { status: error.status },
+        )
+      }
+      const message = error instanceof Error ? error.message : String(error)
+      console.error('[forms/submit] persist failed:', message)
+      return NextResponse.json({ error: mapPublicFormSubmitError(message), debug: message }, { status: 400 })
     }
-
-    // Transactional emails (submission receipt to the respondent + new
-    // submission to staff) were enqueued by the database trigger inside the
-    // same transaction. Flush them right away as a best effort — the
-    // scheduled /api/cron/emails job is the guarantee.
-    void flushEmailQueue().catch((error) => {
-      console.error('[email] immediate flush failed:', error)
-    })
-
-    return NextResponse.json({ data, error: null })
   } catch {
     return NextResponse.json(
       { error: 'An unexpected error occurred. Please try again.' },

@@ -572,19 +572,19 @@ export type Database = {
       form_rate_limits: {
         Row: {
         id: string
-        session_id: string
+        session_id: string | null
         form_id: string
         submitted_at: string
         }
         Insert: {
         id?: string
-        session_id?: string
+        session_id?: string | null
         form_id: string
         submitted_at?: string
         }
         Update: {
         id?: string
-        session_id?: string
+        session_id?: string | null
         form_id?: string
         submitted_at?: string
         }
@@ -2868,6 +2868,16 @@ export type Database = {
           p_today?: string | null
         }
         Returns: Json
+      }
+      save_public_form_submission: {
+        Args: {
+          p_form_id: string | null
+          p_answers: Json | null
+          p_reference_number?: string | null
+          p_tracking_token?: string | null
+          p_fingerprint?: string | null
+        }
+        Returns: Database['public']['Tables']['form_submissions']['Row']
       }
       set_role_permissions: {
         Args: {

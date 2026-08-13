@@ -40,9 +40,14 @@ export class PublicFormSubmitError extends Error {
   }
 }
 
+export function formatPostgrestError(error: { message?: string; code?: string; details?: string; hint?: string } | null | undefined): string {
+  if (!error) return 'Insert failed'
+  return [error.message, error.code, error.details, error.hint].filter(Boolean).join(' | ')
+}
+
 export function describePersistFailure(message: string): string {
   const msg = message || ''
-  if (/row-level security/i.test(msg)) {
+  if (/row-level security|42501/i.test(msg)) {
     return 'The server key cannot write submissions. On Vercel set SUPABASE_SERVICE_ROLE_KEY to the service_role secret, not the anon key.'
   }
   if (/form_submissions_status_check|invalid input value for enum/i.test(msg)) {
@@ -307,6 +312,7 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
 
   const referenceNumber = generateSubmissionReference()
   const trackingToken = generateTrackingToken()
+  const fingerprint = validated.respondentEmail ? fingerprintEmail(validated.respondentEmail, formId) : null
   const contact = {
     form_id: formId,
     respondent_name: validated.respondentName,
@@ -315,97 +321,127 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
     company_name: validated.companyName,
   }
 
+  // Prefer the dedicated SECURITY DEFINER RPC: it inserts with
+  // session_replication_role = replica so leftover AFTER INSERT triggers
+  // cannot roll the save back. Works with either the service role or the
+  // anon key once the migration is applied.
+  const viaRpc = await insertViaSaveRpc(supabase, {
+    formId,
+    answers,
+    referenceNumber,
+    trackingToken,
+    fingerprint,
+  })
+  let submission: { ok: true; row: FormSubmissionRow } | { ok: false; error: string } = viaRpc
+  if (submission.ok) {
+    console.info('[forms/persist] saved via save_public_form_submission')
+  } else if (!/could not find the function|PGRST202|does not exist/i.test(submission.error)) {
+    console.error('[forms/persist] save_public_form_submission failed:', submission.error)
+  }
+
   // Never stamp created_by: an anonymous JWT is not a profiles row, and some
   // live databases still FK that column to profiles. Public saves must not
   // depend on it. Try modern columns first, then older shapes.
-  const attempts: Database['public']['Tables']['form_submissions']['Insert'][] = [
-    { ...contact, form_version: form.version, status: 'new', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
-    { ...contact, form_version: form.version, status: 'submitted', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
-    { ...contact, form_version: form.version, status: 'new', reference_number: referenceNumber, tracking_token: trackingToken },
-    { ...contact, form_version: form.version, status: 'submitted', reference_number: referenceNumber, tracking_token: trackingToken },
-    { ...contact, form_version: form.version, status: 'new', client_id: clientId },
-    { ...contact, form_version: form.version, status: 'submitted', client_id: clientId },
-    { ...contact, status: 'new' },
-    { ...contact, status: 'submitted' },
-    { form_id: formId, respondent_email: validated.respondentEmail, respondent_name: validated.respondentName },
-  ]
-
-  let submission: { ok: true; row: FormSubmissionRow } | { ok: false; error: string } = { ok: false, error: 'Insert failed' }
-  for (const payload of attempts) {
-    submission = await insertSubmission(supabase, payload)
-    if (submission.ok) break
-    console.error('[forms/persist] insert attempt failed:', payload.status || 'default', submission.error)
-  }
   if (!submission.ok) {
-    throw new PublicFormSubmitError(describePersistFailure(submission.error), 400, submission.error)
-  }
+    const attempts: Database['public']['Tables']['form_submissions']['Insert'][] = [
+      { ...contact, form_version: form.version, status: 'new', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
+      { ...contact, form_version: form.version, status: 'new', reference_number: referenceNumber, tracking_token: trackingToken },
+      { ...contact, form_version: form.version, status: 'submitted', client_id: clientId, reference_number: referenceNumber, tracking_token: trackingToken },
+      { ...contact, form_version: form.version, status: 'submitted', reference_number: referenceNumber, tracking_token: trackingToken },
+      { ...contact, form_version: form.version, status: 'new', client_id: clientId },
+      { ...contact, form_version: form.version, status: 'submitted', client_id: clientId },
+      { ...contact, status: 'new' },
+      { ...contact, status: 'submitted' },
+      { form_id: formId, respondent_email: validated.respondentEmail, respondent_name: validated.respondentName },
+    ]
 
-  const answerRows = validated.visibleQuestions.map((question) => ({
-    submission_id: submission.row.id,
-    question_id: question.id,
-    question_snapshot: {
-      id: question.id,
-      label: question.label,
-      question_type: question.question_type,
-      required: question.required,
-      options: question.options,
-      map_to: question.map_to,
-    } as unknown as Json,
-    value: (answers[question.id] ?? null) as Json,
-  }))
-
-  if (answerRows.length) {
-    const { error: answerError } = await supabase.from('form_submission_answers').insert(answerRows)
-    if (answerError) {
-      console.error('[forms/persist] answers insert failed:', answerError.message)
-      const { error: simpleError } = await supabase.from('form_submission_answers').insert(
-        validated.visibleQuestions.map((question) => ({
-          submission_id: submission.row.id,
-          question_id: question.id,
-          question_snapshot: { label: question.label, question_type: question.question_type } as unknown as Json,
-          value: (answers[question.id] ?? null) as Json,
-        })),
-      )
-      if (simpleError) {
-        console.error('[forms/persist] simplified answers insert failed:', simpleError.message)
+    let firstError = submission.error
+    for (const payload of attempts) {
+      const attempt = await insertSubmission(supabase, payload)
+      if (attempt.ok) {
+        submission = attempt
+        break
       }
+      if (!firstError) firstError = attempt.error
+      console.error('[forms/persist] insert attempt failed:', payload.status || 'default', attempt.error)
+    }
+    if (!submission.ok) {
+      const combined = firstError && firstError !== submission.error
+        ? `${firstError} :: later: ${submission.error}`
+        : (firstError || submission.error)
+      throw new PublicFormSubmitError(describePersistFailure(combined), 400, combined)
     }
   }
 
-  if (validated.respondentEmail) {
-    await supabase.from('form_submission_fingerprints').insert({
-      form_id: formId,
-      fingerprint: fingerprintEmail(validated.respondentEmail, formId),
-    })
-  }
+  // The dedicated RPC already wrote answers, fingerprint, events, and files.
+  if (!viaRpc.ok) {
+    const answerRows = validated.visibleQuestions.map((question) => ({
+      submission_id: submission.row.id,
+      question_id: question.id,
+      question_snapshot: {
+        id: question.id,
+        label: question.label,
+        question_type: question.question_type,
+        required: question.required,
+        options: question.options,
+        map_to: question.map_to,
+      } as unknown as Json,
+      value: (answers[question.id] ?? null) as Json,
+    }))
 
-  await supabase.from('form_submission_events').insert({
-    submission_id: submission.row.id,
-    actor_id: null,
-    event_type: 'created',
-    new_value: submission.row.status,
-    note: 'Submission received',
-    metadata: {
-      form_version: form.version,
-      form_title: form.title,
-      respondent_email: validated.respondentEmail,
-      reference_number: submission.row.reference_number,
-    } as Json,
-  })
+    if (answerRows.length) {
+      const { error: answerError } = await supabase.from('form_submission_answers').insert(answerRows)
+      if (answerError) {
+        console.error('[forms/persist] answers insert failed:', answerError.message)
+        const { error: simpleError } = await supabase.from('form_submission_answers').insert(
+          validated.visibleQuestions.map((question) => ({
+            submission_id: submission.row.id,
+            question_id: question.id,
+            question_snapshot: { label: question.label, question_type: question.question_type } as unknown as Json,
+            value: (answers[question.id] ?? null) as Json,
+          })),
+        )
+        if (simpleError) {
+          console.error('[forms/persist] simplified answers insert failed:', simpleError.message)
+        }
+      }
+    }
 
-  for (const question of validated.visibleQuestions) {
-    if (question.question_type !== 'file_upload') continue
-    for (const file of asFileList(answers[question.id] as AnswerValue)) {
-      if (!allowedStoragePath(file.storage_path, callerId)) continue
-      await supabase.from('form_submission_attachments').insert({
-        submission_id: submission.row.id,
-        question_id: question.id,
-        name: file.name || 'file',
-        size: file.size || 0,
-        mime_type: file.mime_type,
-        storage_path: file.storage_path,
-        uploaded_by: callerId,
+    if (validated.respondentEmail) {
+      await supabase.from('form_submission_fingerprints').insert({
+        form_id: formId,
+        fingerprint: fingerprintEmail(validated.respondentEmail, formId),
       })
+    }
+
+    await supabase.from('form_submission_events').insert({
+      submission_id: submission.row.id,
+      actor_id: null,
+      event_type: 'created',
+      new_value: submission.row.status,
+      note: 'Submission received',
+      metadata: {
+        form_version: form.version,
+        form_title: form.title,
+        respondent_email: validated.respondentEmail,
+        reference_number: submission.row.reference_number,
+      } as Json,
+    })
+
+    for (const question of validated.visibleQuestions) {
+      if (question.question_type !== 'file_upload') continue
+      for (const file of asFileList(answers[question.id] as AnswerValue)) {
+        if (!allowedStoragePath(file.storage_path, callerId)) continue
+        await supabase.from('form_submission_attachments').insert({
+          submission_id: submission.row.id,
+          question_id: question.id,
+          name: file.name || 'file',
+          size: file.size || 0,
+          mime_type: file.mime_type,
+          storage_path: file.storage_path,
+          uploaded_by: callerId,
+        })
+      }
     }
   }
 
@@ -414,6 +450,27 @@ export async function persistPublicFormSubmission(input: PersistInput): Promise<
     reference_number: submission.row.reference_number || referenceNumber,
     tracking_token: submission.row.tracking_token || trackingToken,
   }
+}
+
+async function insertViaSaveRpc(
+  supabase: SupabaseClient<Database>,
+  input: {
+    formId: string
+    answers: Record<string, unknown>
+    referenceNumber: string
+    trackingToken: string
+    fingerprint: string | null
+  },
+): Promise<{ ok: true; row: FormSubmissionRow } | { ok: false; error: string }> {
+  const { data, error } = await supabase.rpc('save_public_form_submission', {
+    p_form_id: input.formId,
+    p_answers: input.answers as unknown as Json,
+    p_reference_number: input.referenceNumber,
+    p_tracking_token: input.trackingToken,
+    p_fingerprint: input.fingerprint,
+  })
+  if (error || !data) return { ok: false, error: formatPostgrestError(error) || 'RPC insert failed' }
+  return { ok: true, row: data as unknown as FormSubmissionRow }
 }
 
 async function insertSubmission(
@@ -425,6 +482,6 @@ async function insertSubmission(
     .insert(payload)
     .select('*')
     .maybeSingle()
-  if (error || !data) return { ok: false, error: error?.message || 'Insert failed' }
+  if (error || !data) return { ok: false, error: formatPostgrestError(error) || 'Insert failed' }
   return { ok: true, row: data as unknown as FormSubmissionRow }
 }

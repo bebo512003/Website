@@ -3007,14 +3007,56 @@ async function runPublicFormReliabilitySuite(db, ids, label) {
   `)).cfg || ''
   ok(`${label}: submit_dynamic_form search_path includes extensions (pgcrypto)`,
     /extensions/.test(submitConfig), submitConfig)
-  const refConfig = (await scalar(db, `
-    select array_to_string(proconfig, ',') as cfg
-    from pg_proc
-    where proname = 'generate_submission_reference'
-    limit 1
-  `)).cfg || ''
-  ok(`${label}: generate_submission_reference search_path includes extensions`,
-    /extensions/.test(refConfig), refConfig)
+  const refWithoutCrypto = (await scalar(db, `select public.generate_submission_reference() as ref`)).ref
+  ok(`${label}: generate_submission_reference works without pgcrypto`,
+    typeof refWithoutCrypto === 'string' && /^REQ-\d{4}-[A-Z0-9]{6,}$/.test(refWithoutCrypto), refWithoutCrypto)
+
+  // A throwing AFTER INSERT trigger must not block the dedicated save RPC.
+  await db.query(`
+    create or replace function public.notify_form_submission()
+    returns trigger language plpgsql as $fn$
+    begin
+      raise exception 'forced notify failure';
+    end;
+    $fn$;
+  `)
+  const directInsertFails = await expectError(db, () => db.query(
+    `insert into public.form_submissions (form_id, form_version, status, respondent_email, reference_number, tracking_token)
+     values ($1, 1, 'new', 'trigger-fail@test.local', 'REQ-2608-FAIL01', 'tokentriggerfail00000000000000000000000000000000')`,
+    [form.id],
+  ))
+  ok(`${label}: throwing notify trigger rolls back a raw insert`, directInsertFails)
+
+  await db.query(`set role anon`)
+  await db.query(`select set_config('app.request.uid', '', false)`)
+  const savedViaRpc = (await db.query(
+    `select * from public.save_public_form_submission($1, $2::jsonb, 'REQ-2608-SAFE01', 'tokensafe0000000000000000000000000000000000000000')`,
+    [form.id, JSON.stringify({ [qName]: 'Trigger Safe', [qEmail]: 'triggersafe@test.local' })],
+  )).rows[0]
+  ok(`${label}: save_public_form_submission persists even when notify trigger throws`,
+    savedViaRpc?.reference_number === 'REQ-2608-SAFE01' && savedViaRpc?.respondent_email === 'triggersafe@test.local')
+  await superUser(db)
+  const answersKept = (await scalar(db, `select count(*)::int n from public.form_submission_answers where submission_id = $1`, [savedViaRpc.id])).n
+  ok(`${label}: save_public_form_submission stores answers next to the row`, answersKept >= 2)
+
+  await db.query(`
+    create or replace function public.notify_form_submission()
+    returns trigger
+    language plpgsql
+    security definer
+    set search_path = public, extensions
+    as $fn$
+    begin
+      begin
+        null;
+      exception
+        when others then
+          raise warning 'notify_form_submission failed: %', sqlerrm;
+      end;
+      return new;
+    end;
+    $fn$;
+  `)
 
   await asUser(db, alice)
   await db.query(`update public.form_templates set status = 'archived' where id = $1`, [form.id])
@@ -3196,6 +3238,9 @@ async function main() {
   const collabFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'get_client_portal_collaboration'`)).n
   const approvalsTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'client_approvals'`)).n
   ok('fresh: client collaboration RPCs and tables are installed', collabFn === 1 && approvalsTable === 1)
+
+  ok('fresh: save_public_form_submission RPC is installed',
+    (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'save_public_form_submission'`)).n >= 1)
 
   const reminderFn = (await scalar(dbB, `select count(*)::int n from pg_proc where proname = 'run_deadline_reminders'`)).n
   const reminderTable = (await scalar(dbB, `select count(*)::int n from information_schema.tables where table_schema = 'public' and table_name = 'reminder_events'`)).n
