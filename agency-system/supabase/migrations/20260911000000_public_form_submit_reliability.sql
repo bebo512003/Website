@@ -15,6 +15,9 @@
 -- upload into their own folder without an owner_id match, and attaches
 -- anon/ files when there is no session. IP rate limiting in the API
 -- route remains the abuse control for session-less callers.
+--
+-- search_path includes extensions so digest() / gen_random_bytes() resolve
+-- on hosted Supabase (pgcrypto lives in that schema).
 
 begin;
 
@@ -45,7 +48,7 @@ create or replace function public.submit_dynamic_form(
 returns public.form_submissions
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   form_rec public.form_templates;

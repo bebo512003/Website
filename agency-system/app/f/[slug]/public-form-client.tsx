@@ -43,6 +43,22 @@ const SUBMIT_COOLDOWN_MS = 30_000
 // Maximum characters per text answer (client-side pre-check).
 const MAX_TEXT_LENGTH = 10_000
 
+function localizeSubmitError(message: string, lang: Lang): string {
+  if (!message) return ''
+  if (lang !== 'ar') return message
+  if (/Something went wrong/i.test(message)) return 'حصل خطأ أثناء الحفظ. حاول مرة أخرى.'
+  if (/could not be saved/i.test(message)) return 'تعذر حفظ الرد. حاول مرة أخرى بعد لحظات.'
+  if (/too frequently|wait a few/i.test(message)) return 'بعت الطلبات بسرعة. استنى شوية وحاول تاني.'
+  if (/already submitted/i.test(message)) return 'بعته بالفعل من شوية. استنى دقايق وحاول تاني.'
+  if (/not accepting/i.test(message)) return 'النموذج ده مش بيقبل طلبات دلوقتي.'
+  if (/file upload/i.test(message)) return 'في مشكلة في رفع الملف.'
+  if (/too large/i.test(message)) return 'الرد كبير أوي. اختصر الإجابات.'
+  if (/temporarily unavailable/i.test(message)) return 'الحفظ متوقف مؤقتاً. حدّث الصفحة وحاول تاني.'
+  if (/Bot verification/i.test(message)) return 'فشل التحقق. حدّث الصفحة وحاول تاني.'
+  if (/session expired/i.test(message)) return 'الجلسة انتهت. حدّث الصفحة وحاول تاني.'
+  return message
+}
+
 const t = (lang: Lang) => ({
   requiredHint: lang === 'ar' ? 'الحقول بعلامة * إلزامية.' : 'Fields marked * are required.',
   submit: lang === 'ar' ? 'إرسال' : 'Submit',
@@ -265,7 +281,7 @@ export function PublicFormClient({
       }
 
       if (!response.ok || result.error) {
-        setError(result.error || (lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Submission failed.'))
+        setError(localizeSubmitError(result.error || '', lang) || (lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Submission failed.'))
         setSubmitting(false)
         return
       }

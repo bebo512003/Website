@@ -1,23 +1,26 @@
 import { createClient } from '@supabase/supabase-js'
 import { type NextRequest, NextResponse } from 'next/server'
 import { flushEmailQueue } from '@/lib/email/flush'
+import {
+  mapPublicFormSubmitError,
+  persistPublicFormSubmission,
+  PublicFormSubmitError,
+} from '@/lib/forms/persist-submission'
+import type { Database } from '@/lib/supabase/database.types'
 
 // ── POST /api/forms/submit ───────────────────────────────────────────────────
 // Server-side gateway for public form submissions. Performs:
 //   1. IP-based rate limiting (in-memory, per-IP sliding window)
 //   2. Cloudflare Turnstile token verification (when configured)
 //   3. Payload size pre-check
-//   4. Proxies to the hardened submit_dynamic_form RPC with the caller's
-//      auth token so auth.uid() resolves to the anonymous session.
-//
-// The database RPC adds its own layer of rate limiting (per-session),
-// duplicate detection (per-email), and payload validation.
+//   4. Persists the submission with the service role (does not call the
+//      submit_dynamic_form RPC, which crashes on hosted Supabase when
+//      digest()/gen_random_bytes() are not on search_path = public).
 //
 // Env vars (server-only):
 //   TURNSTILE_SECRET_KEY   — Cloudflare Turnstile secret
 //   NEXT_PUBLIC_SUPABASE_URL — Supabase project URL
-//   SUPABASE_SERVICE_ROLE_KEY — used only for Turnstile verification;
-//                                the RPC itself runs under the caller's token.
+//   SUPABASE_SERVICE_ROLE_KEY — required to save public submissions
 
 const TURNSTILE_SECRET = process.env.TURNSTILE_SECRET_KEY || ''
 const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || ''
@@ -185,33 +188,66 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 7. Call the hardened Supabase RPC.
+    // 7. Persist the submission.
     //
-    //    Prefer the caller's anonymous access token when available so that
-    //    auth.uid() resolves to the anonymous session (rate-limit tracking,
-    //    created_by attribution, and uploader-folder isolation). If no
-    //    anonymous session is available — for example when the project's
-    //    GoTrue build does not support Anonymous Sign-ins — fall back to the
-    //    server's anon key. submit_dynamic_form still validates every answer,
-    //    applies per-IP rate limiting above, and rejects abuse. File
-    //    attachments in this fallback are already uploaded under the shared
-    //    `anon/` folder via RLS.
+    //    Prefer a service-role insert that never calls submit_dynamic_form.
+    //    That RPC is SECURITY DEFINER with search_path = public, so on hosted
+    //    Supabase digest() / gen_random_bytes() (extensions schema) throw and
+    //    the UI only sees "Something went wrong." Writing the rows here also
+    //    survives a live database that has not applied the latest migration
+    //    (NULL session_id on form_rate_limits, JWT-as-Authorization crashes).
     if (!SUPABASE_URL) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    // The Supabase client's second argument MUST be an API key, never a user
-    // JWT. Prefer the service role so a missing/mis-copied anon key cannot
-    // block public submits — the RPC is SECURITY DEFINER and still validates
-    // every answer. The caller's JWT (when present) goes in Authorization so
-    // auth.uid() resolves inside the function.
-    const apiKey = SERVICE_ROLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || ''
+    if (SERVICE_ROLE_KEY) {
+      let callerId: string | null = null
+      if (callerToken && anonKey) {
+        const authClient = createClient(SUPABASE_URL, anonKey, {
+          auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+        })
+        const { data: caller } = await authClient.auth.getUser(callerToken)
+        callerId = caller.user?.id || null
+      }
+
+      const service = createClient<Database>(SUPABASE_URL, SERVICE_ROLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+      })
+
+      try {
+        const data = await persistPublicFormSubmission({
+          supabase: service,
+          formId,
+          answers: answers as Record<string, unknown>,
+          callerId,
+        })
+
+        void flushEmailQueue().catch((error) => {
+          console.error('[email] immediate flush failed:', error)
+        })
+
+        return NextResponse.json({ data, error: null })
+      } catch (error) {
+        if (error instanceof PublicFormSubmitError) {
+          console.error('[forms/submit] persist rejected:', error.message)
+          return NextResponse.json({ error: error.message }, { status: error.status })
+        }
+        const message = error instanceof Error ? error.message : String(error)
+        console.error('[forms/submit] persist failed:', message)
+        return NextResponse.json({ error: mapPublicFormSubmitError(message) }, { status: 400 })
+      }
+    }
+
+    // No service role — last-resort RPC. Never attach a user JWT as
+    // Authorization here: an expired anonymous session turns into the
+    // generic "Something went wrong" page.
+    const apiKey = anonKey
     if (!apiKey) {
       return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
     }
 
     const supabase = createClient(SUPABASE_URL, apiKey, {
-      global: callerToken ? { headers: { Authorization: `Bearer ${callerToken}` } } : undefined,
       auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
     })
 
@@ -222,28 +258,7 @@ export async function POST(request: NextRequest) {
 
     if (error) {
       console.error('[forms/submit] RPC failed:', error.message, error.code, error.details, error.hint)
-      // Sanitize error messages for public consumption.
-      // Map known Postgres exceptions to friendly messages; hide everything else.
-      const msg = error.message || ''
-      const friendly =
-        /too frequently/i.test(msg) ? 'You are submitting too frequently. Please wait a moment and try again.' :
-        /already submitted/i.test(msg) ? 'You have already submitted a response recently. Please wait a few minutes.' :
-        /wait a few seconds/i.test(msg) ? 'Please wait a few seconds before submitting again.' :
-        /not accepting submissions/i.test(msg) ? 'This form is no longer accepting submissions.' :
-        /not found/i.test(msg) ? 'This form could not be found.' :
-        /too large/i.test(msg) ? 'Your submission is too large. Please shorten your answers.' :
-        /exceeds the maximum/i.test(msg) ? 'One of your answers is too long.' :
-        /Required questions/i.test(msg) ? msg : // safe to show
-        /Invalid option/i.test(msg) ? 'One of your answers contains an invalid option.' :
-        /Invalid number/i.test(msg) ? 'Please enter a valid number.' :
-        /Invalid rating/i.test(msg) ? 'Please provide a valid rating.' :
-        /Invalid file/i.test(msg) ? 'There was a problem with your file upload.' :
-        /Too many files/i.test(msg) ? 'You have uploaded too many files. Maximum is 10 per question.' :
-        /null value|not-null|foreign key|violates/i.test(msg) ? 'Your answers could not be saved. Please try again in a moment.' :
-        /No API key/i.test(msg) ? 'Submissions are temporarily unavailable. Please refresh and try again.' :
-        'Something went wrong. Please try again.'
-
-      return NextResponse.json({ error: friendly }, { status: 400 })
+      return NextResponse.json({ error: mapPublicFormSubmitError(error.message || '') }, { status: 400 })
     }
 
     // Transactional emails (submission receipt to the respondent + new

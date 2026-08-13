@@ -2999,6 +2999,23 @@ async function runPublicFormReliabilitySuite(db, ids, label) {
   ok(`${label}: no-session caller can insert into the shared anon/ folder`, !anonFolderInsert)
 
   await superUser(db)
+  const submitConfig = (await scalar(db, `
+    select array_to_string(proconfig, ',') as cfg
+    from pg_proc
+    where proname = 'submit_dynamic_form'
+    limit 1
+  `)).cfg || ''
+  ok(`${label}: submit_dynamic_form search_path includes extensions (pgcrypto)`,
+    /extensions/.test(submitConfig), submitConfig)
+  const refConfig = (await scalar(db, `
+    select array_to_string(proconfig, ',') as cfg
+    from pg_proc
+    where proname = 'generate_submission_reference'
+    limit 1
+  `)).cfg || ''
+  ok(`${label}: generate_submission_reference search_path includes extensions`,
+    /extensions/.test(refConfig), refConfig)
+
   await asUser(db, alice)
   await db.query(`update public.form_templates set status = 'archived' where id = $1`, [form.id])
   await superUser(db)

@@ -7,7 +7,7 @@
 -- This snapshot intentionally contains the complete migration chain so running it
 -- on an empty Supabase project produces the same functional schema as applying the
 -- migrations in order. It contains no application/business seed records.
--- Included migrations (37):
+-- Included migrations (38):
 --   20260808000000_secure_roles_and_projects.sql
 --   20260808010000_intake_forms.sql
 --   20260808020000_multi_service_public_intake.sql
@@ -45,6 +45,7 @@
 --   20260909000000_operational_analytics.sql
 --   20260910000000_anonymous_signin_fallback.sql
 --   20260911000000_public_form_submit_reliability.sql
+--   20260912000000_public_form_crypto_search_path.sql
 
 -- ── BEGIN MIGRATION: 20260808000000_secure_roles_and_projects.sql ─────────────────────────────────────────────
 -- Agency OS production schema
@@ -15530,6 +15531,9 @@ commit;
 -- upload into their own folder without an owner_id match, and attaches
 -- anon/ files when there is no session. IP rate limiting in the API
 -- route remains the abuse control for session-less callers.
+--
+-- search_path includes extensions so digest() / gen_random_bytes() resolve
+-- on hosted Supabase (pgcrypto lives in that schema).
 
 begin;
 
@@ -15560,7 +15564,7 @@ create or replace function public.submit_dynamic_form(
 returns public.form_submissions
 language plpgsql
 security definer
-set search_path = public
+set search_path = public, extensions
 as $$
 declare
   form_rec public.form_templates;
@@ -15840,3 +15844,29 @@ grant execute on function public.submit_dynamic_form(uuid, jsonb) to authenticat
 
 commit;
 -- ── END MIGRATION: 20260911000000_public_form_submit_reliability.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260912000000_public_form_crypto_search_path.sql ─────────────────────────────────────────────
+-- Public form submit: let SECURITY DEFINER functions see pgcrypto.
+--
+-- submit_dynamic_form and generate_submission_reference run with
+-- search_path = public. On hosted Supabase, digest() and
+-- gen_random_bytes() live in the extensions schema, so every submit that
+-- includes an email (the branding form always does) raised
+-- "function digest(text, unknown) does not exist". The API mapped that
+-- to the generic "Something went wrong. Please try again."
+--
+-- Adding extensions to the function search_path keeps the existing RPC
+-- working. The Next.js submit route no longer depends on this migration
+-- — it persists with the service role — but applying it still repairs
+-- any leftover RPC callers.
+
+begin;
+
+alter function public.generate_submission_reference()
+  set search_path = public, extensions;
+
+alter function public.submit_dynamic_form(uuid, jsonb)
+  set search_path = public, extensions;
+
+commit;
+-- ── END MIGRATION: 20260912000000_public_form_crypto_search_path.sql ───────────────────────────────────────────────
