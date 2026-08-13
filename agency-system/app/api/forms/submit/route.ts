@@ -156,9 +156,11 @@ export async function POST(request: NextRequest) {
     if (!answers || typeof answers !== 'object') {
       return NextResponse.json({ error: 'Missing answers.' }, { status: 400 })
     }
-    if (!accessToken || typeof accessToken !== 'string') {
-      return NextResponse.json({ error: 'Your session has expired. Please refresh the page.' }, { status: 401 })
-    }
+    // Access token is optional: when anonymous sign-in works it carries the
+    // caller's identity; when it does not (older GoTrue), the server falls
+    // back to the public anon key. Text-only submissions still work; file
+    // uploads are disabled on the client in that case.
+    const callerToken = (typeof accessToken === 'string' && accessToken) || ''
 
     // 5. Turnstile verification (when configured)
     if (TURNSTILE_SECRET) {
@@ -180,17 +182,35 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    // 7. Call the hardened Supabase RPC under the caller's auth context.
-    //    Using the caller's access token ensures auth.uid() inside the RPC
-    //    resolves to the anonymous session, preserving rate-limit tracking
-    //    and created_by attribution.
+    // 7. Call the hardened Supabase RPC.
+    //
+    //    Prefer the caller's anonymous access token when available so that
+    //    auth.uid() resolves to the anonymous session (rate-limit tracking,
+    //    created_by attribution, and uploader-folder isolation). If no
+    //    anonymous session is available — for example when the project's
+    //    GoTrue build does not support Anonymous Sign-ins — fall back to the
+    //    server's anon key. submit_dynamic_form still validates every answer,
+    //    applies per-IP rate limiting above, and rejects abuse. File
+    //    attachments in this fallback are already uploaded under the shared
+    //    `anon/` folder via RLS.
     if (!SUPABASE_URL) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    const supabase = createClient(SUPABASE_URL, accessToken, {
-      auth: { persistSession: false, autoRefreshToken: false },
-    })
+    let supabase
+    if (callerToken) {
+      supabase = createClient(SUPABASE_URL, callerToken, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    } else {
+      const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+      if (!anonKey) {
+        return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
+      }
+      supabase = createClient(SUPABASE_URL, anonKey, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      })
+    }
 
     const { data, error } = await supabase.rpc('submit_dynamic_form', {
       p_form_id: formId,

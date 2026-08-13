@@ -96,15 +96,22 @@ export function PublicFormClient({
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const submitTimeRef = useRef<number>(0)
 
-  // Anonymous authentication is created silently: the client never registers,
-  // chooses credentials, or receives a portal account. It gives the submission
-  // a rate-limit identity and makes private file uploads possible.
+  // Anonymous authentication is created silently when the Supabase project
+  // supports it. This gives the submission a rate-limit identity and makes
+  // private file uploads possible. If anonymous sign-in is unavailable (for
+  // example on older self-hosted GoTrue builds), we do NOT block the form:
+  // submissions still go through the API route with the server anon key, and
+  // file uploads are disabled with a clear notice.
+  const [anonymousUnavailable, setAnonymousUnavailable] = useState(false)
   useEffect(() => {
     if (!configured || authLoading || user) return
     let active = true
     void signInAnonymously().then((result) => {
       if (!active) return
-      setSessionError(result.error ? result.error.message : '')
+      if (result.error) {
+        setAnonymousUnavailable(true)
+        setSessionError(result.error.message)
+      }
     })
     return () => { active = false }
   }, [configured, authLoading, user, signInAnonymously])
@@ -231,9 +238,15 @@ export function PublicFormClient({
     }
 
     // ── Submission identity ──────────────────────────────────────────────
-    // The API and database use a silent anonymous session for abuse controls.
-    // This is not a client account and requires no sign-up or credentials.
-    if (authLoading || !user) {
+    // A silent anonymous session is preferred (abuse controls, uploader
+    // isolation). If it is unavailable on this Supabase build, we still allow
+    // the text submission through — the API route falls back to the anon key.
+    // File questions are handled separately (disabled when no session).
+    if (authLoading) {
+      setError(i18n.sessionPreparing)
+      return
+    }
+    if (!user && !anonymousUnavailable) {
       setError(sessionError ? i18n.sessionUnavailable : i18n.sessionPreparing)
       return
     }
@@ -375,6 +388,14 @@ export function PublicFormClient({
 
         {(error || sessionError) && <div className="mb-6"><InlineAlert>{error || i18n.sessionUnavailable}</InlineAlert></div>}
 
+        {anonymousUnavailable && (
+          <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs leading-5 text-amber-200/90">
+            {lang === 'ar'
+              ? 'ملاحظة: رفع الملفات غير متاح حالياً (مشروع Supabase لا يدعم تسجيل الدخول المجهول). يمكنك إرسال النموذج بدون ملفات وسنتواصل معك لاستلامها لاحقاً.'
+              : 'Note: File upload is unavailable (this Supabase project does not support anonymous sign-in). You can still submit the form without files — we will contact you to collect them.'}
+          </div>
+        )}
+
         <form className="rounded-md border border-border bg-surface" onSubmit={(event) => { event.preventDefault(); void submit() }}>
           <div className="border-b border-border p-4 sm:p-5">
             <p className="text-xs text-text-tertiary">{i18n.requiredHint}</p>
@@ -421,6 +442,7 @@ export function PublicFormClient({
               uploadingQuestionId={uploadingQuestionId}
               lang={lang}
               errors={errors}
+              disabled={!user}
             />
           </div>
           <div className="flex flex-col items-stretch gap-3 border-t border-border p-4 sm:items-end sm:p-5">
@@ -436,11 +458,11 @@ export function PublicFormClient({
               )}
               <button
                 type="submit"
-                disabled={submitting || cooldownRemaining > 0 || authLoading || !user}
+                disabled={submitting || cooldownRemaining > 0 || authLoading}
                 className={`${primaryButtonClassName} min-h-11 w-full justify-center sm:w-auto`}
               >
-                {submitting || (!user && !sessionError) ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {submitting ? i18n.submitting : !user ? (sessionError ? i18n.sessionUnavailableShort : i18n.sessionPreparing) : i18n.submit}
+                {submitting || (authLoading && !user) ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {submitting ? i18n.submitting : authLoading ? i18n.sessionPreparing : i18n.submit}
               </button>
             </div>
           </div>
