@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { TeamManagement } from '@/components/admin/team-management'
 import { EmptyState, Page, PageHeader, Panel } from '@/components/ui/page'
+import { AdminSectionNav } from '@/components/admin/admin-section-nav'
 
 export default function TeamPage() {
   const { can } = useAuth()
@@ -31,6 +32,7 @@ export default function TeamPage() {
         title="Team Management"
         description="View all team members, add new members, edit, activate/deactivate, and assign roles. This area follows employee.manage — not admin.manage."
       />
+      <AdminSectionNav />
       <TeamManagement />
     </Page>
   )

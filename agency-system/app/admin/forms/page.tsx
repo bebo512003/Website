@@ -4,6 +4,7 @@ import { ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { FormsAdmin } from '@/components/admin/forms-admin'
 import { EmptyState, Page, PageHeader, Panel } from '@/components/ui/page'
+import { AdminSectionNav } from '@/components/admin/admin-section-nav'
 
 export default function AdminFormsPage() {
   const { can } = useAuth()
@@ -31,6 +32,7 @@ export default function AdminFormsPage() {
         title="Forms"
         description="This area opens for anyone with View forms or Manage forms — it is not locked behind Manage system."
       />
+      <AdminSectionNav />
       <FormsAdmin />
     </Page>
   )
