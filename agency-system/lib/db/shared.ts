@@ -3,7 +3,7 @@
  * Part of the domain-based data layer under lib/db (see lib/db/index.ts).
  */
 
-import { supabase, isDatabaseConnected } from '../supabase/client'
+import { supabase } from '../supabase/client'
 export interface Result<T> {
   data: T
   error: string | null

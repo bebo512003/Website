@@ -6,7 +6,7 @@
 import { supabase } from '../supabase/client'
 import { Result, fail, ok, PageQuery, PageResult, pagedFail, escapeFilterValue, executePage } from './shared'
 import { validateFile, sanitizeFileName, STORAGE_RULES } from '../storage-config'
-import type { Client, FormQuestion, FormSubmission, FormTemplate, Project, ProjectPriority, ProjectStatus, PublicFormTemplate, SubmissionStatus } from '../supabase/types'
+import type { Client, FormQuestion, FormSubmission, FormTemplate, Project, ProjectPriority, ProjectStatus, SubmissionStatus } from '../supabase/types'
 // Dynamic form builder
 
 const slugifyForm = (title: string) => {
