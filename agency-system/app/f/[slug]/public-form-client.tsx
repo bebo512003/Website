@@ -440,9 +440,9 @@ export function PublicFormClient({
               onFileSelect={(question, file) => void pickFile(question, file)}
               onFileRemove={removeFile}
               uploadingQuestionId={uploadingQuestionId}
+              fileUploadDisabled={!user}
               lang={lang}
               errors={errors}
-              disabled={!user}
             />
           </div>
           <div className="flex flex-col items-stretch gap-3 border-t border-border p-4 sm:items-end sm:p-5">

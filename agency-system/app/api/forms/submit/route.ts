@@ -197,20 +197,20 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Server configuration error.' }, { status: 500 })
     }
 
-    let supabase
-    if (callerToken) {
-      supabase = createClient(SUPABASE_URL, callerToken, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
-    } else {
-      const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
-      if (!anonKey) {
-        return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
-      }
-      supabase = createClient(SUPABASE_URL, anonKey, {
-        auth: { persistSession: false, autoRefreshToken: false },
-      })
+    // The Supabase client's second argument MUST be an API key (the anon key),
+    // never a user access token. The caller's JWT belongs in the Authorization
+    // header so auth.uid() resolves to the anonymous session inside the RPC.
+    // Passing the JWT as the key produces an invalid `apikey` header, which the
+    // Supabase gateway rejects with "No API key found in request".
+    const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+    if (!anonKey) {
+      return NextResponse.json({ error: 'Submissions are temporarily unavailable.' }, { status: 503 })
     }
+
+    const supabase = createClient(SUPABASE_URL, anonKey, {
+      global: callerToken ? { headers: { Authorization: `Bearer ${callerToken}` } } : undefined,
+      auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    })
 
     const { data, error } = await supabase.rpc('submit_dynamic_form', {
       p_form_id: formId,
