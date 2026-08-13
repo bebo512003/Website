@@ -16,13 +16,3 @@ export const supabase = supabaseUrl && supabaseAnonKey
   : null
 
 export const isDatabaseConnected = !!(supabaseUrl && supabaseAnonKey)
-
- {
-  if (!supabaseUrl || !supabaseAnonKey) {
-    return {
-      ready: false,
-      message: 'Supabase credentials not set. Copy .env.local.example to .env.local and fill in your credentials.',
-    }
-  }
-  return { ready: true, message: 'Database connected' }
-}
