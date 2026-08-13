@@ -344,8 +344,8 @@ export function TeamManagement() {
         {members.length === 0 ? (
           <EmptyState icon={Users} title="No team members" description={search || roleFilter !== 'all' || statusFilter !== 'all' ? 'No members match your search or filters' : 'Add your first team member to get started'} />
         ) : (
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-border">
+          <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable team member list">
+            <table className="min-w-[760px] divide-y divide-border">
               <thead className="bg-surface-raised">
                 <tr className="text-left text-[11px] uppercase tracking-wide text-text-tertiary">
                   <th className="px-5 py-3 font-medium">Member</th>

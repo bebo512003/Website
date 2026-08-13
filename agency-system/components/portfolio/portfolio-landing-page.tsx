@@ -48,7 +48,7 @@ export function PortfolioLandingPage() {
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-6 sm:px-8 lg:px-10">
           <Link href="/" className="group flex items-center gap-3" onClick={() => setMenuOpen(false)} aria-label="Agency OS home">
             <span className="flex h-9 w-9 items-center justify-center border border-white/20 bg-white/[0.05] text-accent transition group-hover:border-accent"><Layers3 className="h-4 w-4" /></span>
-            <span><span className="block text-sm font-bold tracking-[0.22em]">AGENCY OS</span><span className="font-mono-tech text-[8px] text-white/40">CREATIVE STUDIO</span></span>
+            <span><span className="block text-sm font-bold tracking-[0.22em]">AGENCY OS</span><span className="font-mono-tech text-[10px] text-white/40">CREATIVE STUDIO</span></span>
           </Link>
           <nav className="hidden items-center gap-7 md:flex" aria-label="Portfolio navigation">
             <Link href="/" className="text-xs text-white/60 transition hover:text-white">Home</Link>

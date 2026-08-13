@@ -294,8 +294,8 @@ export function RolesPermissionsAdmin() {
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
       <Panel title="Capability matrix" description="What the four system roles receive by default. Custom roles start empty — they get only the boxes you check. Role names never imply extra access.">
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-border text-left">
+        <div className="overflow-x-auto" tabIndex={0} aria-label="Scrollable capability matrix">
+          <table className="min-w-[640px] divide-y divide-border text-left">
             <thead className="bg-surface-raised">
               <tr className="text-[11px] uppercase tracking-wide text-text-tertiary">
                 <th className="px-5 py-3 font-medium">Role</th>

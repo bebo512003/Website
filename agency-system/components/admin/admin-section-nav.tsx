@@ -22,7 +22,7 @@ export function AdminSectionNav() {
   const { can } = useAuth()
   const pathname = usePathname()
   const visible = sections.filter((section) => section.allowed(can))
-  return <nav aria-label="Administration sections" className="flex flex-wrap gap-2">
-    {visible.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={cn('inline-flex items-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition-colors', pathname === href || (href === '/admin/forms' && pathname.startsWith('/admin/forms/')) ? 'border-accent/40 bg-accent/10 text-fg' : 'border-border text-text-secondary hover:bg-surface-raised hover:text-fg')}><Icon className="h-4 w-4" />{label}</Link>)}
+  return <nav aria-label="Administration sections" className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+    {visible.map(({ href, label, icon: Icon }) => <Link key={href} href={href} className={cn('inline-flex min-h-11 min-w-0 items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors sm:text-xs', pathname === href || (href === '/admin/forms' && pathname.startsWith('/admin/forms/')) ? 'border-accent/40 bg-accent/10 text-fg' : 'border-border text-text-secondary hover:bg-surface-raised hover:text-fg')}><Icon className="h-4 w-4 shrink-0" /><span className="truncate">{label}</span></Link>)}
   </nav>
 }
