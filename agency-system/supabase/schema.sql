@@ -7,7 +7,7 @@
 -- This snapshot intentionally contains the complete migration chain so running it
 -- on an empty Supabase project produces the same functional schema as applying the
 -- migrations in order. It contains no application/business seed records.
--- Included migrations (36):
+-- Included migrations (40):
 --   20260808000000_secure_roles_and_projects.sql
 --   20260808010000_intake_forms.sql
 --   20260808020000_multi_service_public_intake.sql
@@ -44,6 +44,10 @@
 --   20260908000000_list_pagination_rpc.sql
 --   20260909000000_operational_analytics.sql
 --   20260910000000_anonymous_signin_fallback.sql
+--   20260911000000_public_form_submit_reliability.sql
+--   20260912000000_public_form_crypto_search_path.sql
+--   20260913000000_public_form_trigger_safety.sql
+--   20260914000000_save_public_form_submission.sql
 
 -- ── BEGIN MIGRATION: 20260808000000_secure_roles_and_projects.sql ─────────────────────────────────────────────
 -- Agency OS production schema
@@ -15510,3 +15514,1083 @@ create policy form_files_insert on storage.objects for insert to authenticated, 
 
 commit;
 -- ── END MIGRATION: 20260910000000_anonymous_signin_fallback.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260911000000_public_form_submit_reliability.sql ─────────────────────────────────────────────
+-- Public form submit reliability.
+--
+-- Previous attempts let the public form degrade when Anonymous Sign-ins are
+-- unavailable, but three remaining bugs still rolled the save back:
+--
+--   1. form_rate_limits.session_id is NOT NULL. A no-session (anon-key)
+--      submit inserts auth.uid() = NULL and the whole RPC fails.
+--   2. form-files INSERT required owner_id = auth.uid()::text. Supabase
+--      Storage often leaves owner_id unset at WITH CHECK time, so picking
+--      an image never actually uploads.
+--   3. submit_dynamic_form only attached files whose folder matched
+--      auth.uid(). Files landed in the shared anon/ folder were dropped.
+--
+-- This migration makes a no-session text submit persist, lets a caller
+-- upload into their own folder without an owner_id match, and attaches
+-- anon/ files when there is no session. IP rate limiting in the API
+-- route remains the abuse control for session-less callers.
+--
+-- search_path includes extensions so digest() / gen_random_bytes() resolve
+-- on hosted Supabase (pgcrypto lives in that schema).
+
+begin;
+
+-- ── 1. Rate-limit table: session is optional ────────────────────────────────
+alter table public.form_rate_limits
+  alter column session_id drop not null;
+
+comment on column public.form_rate_limits.session_id is
+  'Caller auth.uid() when a session exists. NULL for session-less (anon-key) submits; those are rate-limited by IP in the API route.';
+
+-- ── 2. form-files insert: folder isolation only (no owner_id race) ──────────
+drop policy if exists form_files_insert on storage.objects;
+create policy form_files_insert on storage.objects for insert to authenticated, anon
+  with check (
+    bucket_id = 'form-files'
+    and position('..' in name) = 0
+    and (
+      (auth.uid() is not null and (storage.foldername(name))[1] = auth.uid()::text)
+      or (auth.uid() is null and (storage.foldername(name))[1] = 'anon')
+    )
+  );
+
+-- ── 3. submit_dynamic_form: null-uid + anon/ attachments ────────────────────
+create or replace function public.submit_dynamic_form(
+  p_form_id uuid,
+  p_answers jsonb
+)
+returns public.form_submissions
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  q public.form_questions;
+  val jsonb;
+  txt text;
+  is_empty boolean;
+  missing text[];
+  submission_rec public.form_submissions;
+  linked_client_id uuid;
+  linked_project_id uuid;
+  file_item jsonb;
+  file_path text;
+  file_name text;
+  file_size bigint;
+  file_ext text;
+  rating_max_val integer;
+  recent_count integer;
+  respondent_email_val text;
+  fp text;
+  dup_count integer;
+  answer_key text;
+  answer_val text;
+  caller uuid := auth.uid();
+begin
+  select * into form_rec from public.form_templates where id = p_form_id;
+  if not found then
+    raise exception 'Form not found';
+  end if;
+  if form_rec.status <> 'published' then
+    raise exception 'This form is not accepting submissions';
+  end if;
+
+  if length(p_answers::text) > 102400 then
+    raise exception 'Your submission is too large. Please shorten your answers.';
+  end if;
+
+  for answer_key, answer_val in select * from jsonb_each_text(p_answers)
+  loop
+    if length(answer_val) > 10000 then
+      raise exception 'One of your answers exceeds the maximum allowed length.';
+    end if;
+  end loop;
+
+  -- Session-scoped rate limits only apply when we actually have a session.
+  -- Session-less callers are limited by IP in POST /api/forms/submit.
+  if caller is not null then
+    select count(*) into recent_count
+    from public.form_rate_limits
+    where session_id = caller
+      and form_id = p_form_id
+      and submitted_at > now() - interval '1 minute';
+
+    if recent_count >= 5 then
+      raise exception 'You are submitting too frequently. Please wait a moment and try again.';
+    end if;
+
+    if exists (
+      select 1 from public.form_rate_limits
+      where session_id = caller
+        and form_id = p_form_id
+        and submitted_at > now() - interval '3 seconds'
+    ) then
+      raise exception 'Please wait a few seconds before submitting again.';
+    end if;
+  end if;
+
+  for q in
+    select * from public.form_questions where form_id = p_form_id order by position, created_at
+  loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    is_empty := val is null
+      or val = 'null'::jsonb
+      or (jsonb_typeof(val) = 'string' and btrim(val #>> '{}') = '')
+      or (jsonb_typeof(val) = 'array' and jsonb_array_length(val) = 0);
+
+    if q.required and is_empty then
+      missing := coalesce(missing, '{}') || q.label;
+      continue;
+    end if;
+
+    if not is_empty then
+      if q.question_type in ('single_choice', 'dropdown') then
+        if jsonb_typeof(val) <> 'string'
+           or not exists (select 1 from jsonb_array_elements_text(q.options) o where o = val #>> '{}') then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'multiple_choice' then
+        if jsonb_typeof(val) <> 'array'
+           or exists (select 1 from jsonb_array_elements_text(val) v where not exists (
+                select 1 from jsonb_array_elements_text(q.options) o where o = v)) then
+          raise exception 'Invalid option for "%"', q.label;
+        end if;
+      elsif q.question_type = 'yes_no' then
+        if jsonb_typeof(val) <> 'string' or (val #>> '{}') not in ('yes', 'no') then
+          raise exception 'Invalid answer for "%"', q.label;
+        end if;
+      elsif q.question_type = 'number' then
+        if jsonb_typeof(val) <> 'number' and (jsonb_typeof(val) <> 'string' or (val #>> '{}') !~ '^-?\d+(\.\d+)?$') then
+          raise exception 'Invalid number for "%"', q.label;
+        end if;
+      elsif q.question_type = 'rating' then
+        rating_max_val := greatest(1, least(10, coalesce(nullif(q.config ->> 'rating_max', '')::integer, 5)));
+        if (val #>> '{}') !~ '^\d+$'
+           or (val #>> '{}')::integer < 1
+           or (val #>> '{}')::integer > rating_max_val then
+          raise exception 'Invalid rating for "%"', q.label;
+        end if;
+      elsif q.question_type = 'file_upload' then
+        if jsonb_typeof(val) <> 'array' then
+          raise exception 'Invalid file answer for "%"', q.label;
+        end if;
+        if jsonb_array_length(val) > 10 then
+          raise exception 'Too many files uploaded for "%". Maximum is 10.', q.label;
+        end if;
+
+        for file_item in select * from jsonb_array_elements(val) loop
+          file_name := coalesce(file_item ->> 'name', '');
+          file_size := coalesce(nullif(file_item ->> 'size', '')::bigint, 0);
+
+          if file_size > 20971520 then
+            raise exception 'Uploaded file "%" exceeds maximum allowed size of 20 MB.', file_name;
+          end if;
+
+          file_ext := lower(substring(file_name from '\.([a-zA-Z0-9]+)$'));
+          if file_ext in ('exe', 'bat', 'cmd', 'sh', 'php', 'phtml', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'py', 'js', 'vbs', 'msi', 'jar', 'scr', 'hta', 'ps1') then
+            raise exception 'Uploaded file "%" has an unsafe file extension and is rejected.', file_name;
+          end if;
+        end loop;
+      end if;
+
+      txt := case when jsonb_typeof(val) = 'string' then btrim(val #>> '{}') else null end;
+      if nullif(txt, '') is not null then
+        if q.map_to = 'name' then submission_rec.respondent_name := txt; end if;
+        if q.map_to = 'email' then respondent_email_val := lower(txt); end if;
+        if q.map_to = 'phone' then submission_rec.respondent_phone := txt; end if;
+        if q.map_to = 'company' then submission_rec.company_name := txt; end if;
+      end if;
+    end if;
+  end loop;
+
+  submission_rec.respondent_email := respondent_email_val;
+
+  if missing is not null then
+    raise exception 'Required questions are missing: %', array_to_string(missing, ', ');
+  end if;
+
+  if respondent_email_val is not null then
+    fp := encode(digest(respondent_email_val || p_form_id::text, 'sha256'), 'hex');
+    select count(*) into dup_count
+    from public.form_submission_fingerprints
+    where form_id = p_form_id
+      and fingerprint = fp
+      and submitted_at > now() - interval '5 minutes';
+
+    if dup_count > 0 then
+      raise exception 'You have already submitted a response recently. Please wait a few minutes before submitting again.';
+    end if;
+
+    insert into public.form_submission_fingerprints (form_id, fingerprint)
+    values (p_form_id, fp);
+  end if;
+
+  if caller is not null then
+    insert into public.form_rate_limits (session_id, form_id)
+    values (caller, p_form_id);
+  end if;
+
+  if respondent_email_val is not null then
+    select id into linked_client_id
+    from public.clients
+    where lower(coalesce(email, '')) = respondent_email_val
+    order by created_at asc
+    limit 1;
+
+    if linked_client_id is null then
+      insert into public.clients (name, type, status, contact_person, email, phone, notes, created_by)
+      values (
+        coalesce(nullif(submission_rec.company_name, ''), nullif(submission_rec.respondent_name, ''), respondent_email_val),
+        'potential',
+        'potential',
+        nullif(submission_rec.respondent_name, ''),
+        respondent_email_val,
+        nullif(submission_rec.respondent_phone, ''),
+        'Created automatically from form "' || form_rec.title || '"',
+        caller
+      )
+      returning id into linked_client_id;
+    end if;
+  end if;
+
+  if coalesce(form_rec.settings ->> 'create_project_on_submit', 'false') = 'true' and linked_client_id is not null then
+    insert into public.projects (name, description, client_id, type, status, phase, phase_name, progress, created_by)
+    values (
+      coalesce(nullif(submission_rec.company_name, '') || ' — ', '') || form_rec.title,
+      'Created automatically from a submission to form "' || form_rec.title || '"',
+      linked_client_id,
+      form_rec.title,
+      'active', 1, 'Discovery', 0, caller
+    )
+    returning id into linked_project_id;
+  end if;
+
+  insert into public.form_submissions
+    (form_id, form_version, status, respondent_name, respondent_email, respondent_phone, company_name, client_id, project_id, created_by)
+  values (
+    p_form_id, form_rec.version, 'new',
+    submission_rec.respondent_name, submission_rec.respondent_email,
+    submission_rec.respondent_phone, submission_rec.company_name,
+    linked_client_id, linked_project_id, caller
+  )
+  returning * into submission_rec;
+
+  insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
+  select submission_rec.id, fq.id, to_jsonb(fq), p_answers -> fq.id::text
+  from public.form_questions fq
+  where fq.form_id = p_form_id
+    and public.is_form_question_visible(fq, p_answers)
+  order by fq.position, fq.created_at;
+
+  insert into public.form_submission_events (
+    submission_id, actor_id, event_type, new_value, note, metadata
+  ) values (
+    submission_rec.id,
+    (select id from public.profiles where id = caller),
+    'created',
+    'new',
+    'Submission received',
+    jsonb_build_object(
+      'form_version', form_rec.version,
+      'form_title', form_rec.title,
+      'respondent_email', submission_rec.respondent_email,
+      'reference_number', submission_rec.reference_number
+    )
+  );
+
+  for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if not public.is_form_question_visible(q, p_answers) then
+      continue;
+    end if;
+    val := p_answers -> q.id::text;
+    if jsonb_typeof(val) = 'array' then
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_path := file_item ->> 'storage_path';
+        if file_path is not null
+           and position('..' in file_path) = 0
+           and (
+             (caller is not null and split_part(file_path, '/', 1) = caller::text)
+             or (caller is null and split_part(file_path, '/', 1) = 'anon')
+             or public.has_permission('submission.edit')
+           ) then
+          insert into public.form_submission_attachments
+            (submission_id, question_id, name, size, mime_type, storage_path, uploaded_by)
+          values (
+            submission_rec.id, q.id,
+            coalesce(nullif(file_item ->> 'name', ''), 'file'),
+            coalesce(nullif(file_item ->> 'size', '')::bigint, 0),
+            nullif(file_item ->> 'mime_type', ''),
+            file_path,
+            caller
+          )
+          on conflict (storage_path) do nothing;
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  return submission_rec;
+end;
+$$;
+
+revoke all on function public.submit_dynamic_form(uuid, jsonb) from public, anon;
+grant execute on function public.submit_dynamic_form(uuid, jsonb) to authenticated, anon;
+
+commit;
+-- ── END MIGRATION: 20260911000000_public_form_submit_reliability.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260912000000_public_form_crypto_search_path.sql ─────────────────────────────────────────────
+-- Public form submit: let SECURITY DEFINER functions see pgcrypto.
+--
+-- submit_dynamic_form and generate_submission_reference run with
+-- search_path = public. On hosted Supabase, digest() and
+-- gen_random_bytes() live in the extensions schema, so every submit that
+-- includes an email (the branding form always does) raised
+-- "function digest(text, unknown) does not exist". The API mapped that
+-- to the generic "Something went wrong. Please try again."
+--
+-- Adding extensions to the function search_path keeps the existing RPC
+-- working. The Next.js submit route no longer depends on this migration
+-- — it persists with the service role — but applying it still repairs
+-- any leftover RPC callers.
+
+begin;
+
+alter function public.generate_submission_reference()
+  set search_path = public, extensions;
+
+alter function public.submit_dynamic_form(uuid, jsonb)
+  set search_path = public, extensions;
+
+commit;
+-- ── END MIGRATION: 20260912000000_public_form_crypto_search_path.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260913000000_public_form_trigger_safety.sql ─────────────────────────────────────────────
+-- Public form submit: never let notification/email side-effects roll back
+-- the respondent's save.
+--
+-- AFTER INSERT triggers on form_submissions (inbox notification + email
+-- outbox) used to abort the whole insert when a helper was missing, a
+-- check constraint was stale, or pgcrypto was off search_path. The
+-- public form then showed "Your answers could not be saved."
+--
+-- The Next.js persist path writes the row directly; these triggers still
+-- fire. Swallowing their errors keeps the submission.
+
+begin;
+
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+  action text;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display_name := coalesce(
+      nullif(trim(new.respondent_name), ''),
+      nullif(trim(new.company_name), ''),
+      nullif(trim(new.respondent_email), ''),
+      'Anonymous client'
+    );
+
+    notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+    notif_message := 'New submission #' || substring(new.id::text, 1, 8)
+      || ' received from ' || client_display_name
+      || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+    action := '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text;
+
+    perform public.notify_staff_with_permission(
+      'submission.view',
+      'submission.created',
+      'form_submission',
+      notif_title,
+      notif_message,
+      action,
+      'submission.created:' || new.id::text,
+      (select id from public.profiles where id = auth.uid()),
+      new.project_id,
+      new.id,
+      null,
+      jsonb_build_object(
+        'submission_id', new.id,
+        'form_id', new.form_id,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', client_display_name,
+        'respondent_name', new.respondent_name,
+        'respondent_email', new.respondent_email,
+        'respondent_phone', new.respondent_phone,
+        'company_name', new.company_name,
+        'project_id', new.project_id,
+        'submitted_at', new.submitted_at,
+        'reference_number', new.reference_number
+      )
+    );
+  exception
+    when undefined_column then
+      begin
+        insert into public.notifications (
+          recipient_id, actor_id, project_id, submission_id, type, title, message, action_url, metadata
+        )
+        select
+          p.id,
+          null,
+          new.project_id,
+          new.id,
+          'form_submission',
+          'New ' || coalesce(form_rec.title, 'Form') || ' submission',
+          'New submission received from ' || coalesce(nullif(trim(new.respondent_name), ''), 'a client') || '.',
+          '/admin/forms/' || new.form_id::text,
+          '{}'::jsonb
+        from public.profiles p
+        where p.status = 'active' and p.role = 'admin'::public.app_role;
+      exception
+        when others then
+          raise warning 'notify_form_submission fallback failed: %', sqlerrm;
+      end;
+    when others then
+      raise warning 'notify_form_submission failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+create or replace function public.enqueue_submission_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  staff_display text;
+  rec record;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      nullif(btrim(new.respondent_email), ''),
+      'A client'
+    );
+    staff_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      'A client'
+    );
+
+    if nullif(btrim(coalesce(new.respondent_email, '')), '') is not null then
+      perform public.enqueue_email(
+        'submission-received',
+        new.respondent_email,
+        null,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'respondent_name', coalesce(nullif(btrim(new.respondent_name), ''), client_display),
+          'submitted_at', new.submitted_at,
+          'tracking_path', '/track/' || new.reference_number
+        ),
+        'submission.received:' || new.id::text
+      );
+    end if;
+
+    for rec in
+      select p.id, p.email
+      from public.profiles p
+      where public.email_staff_recipient_ok(p.id)
+        and public.user_has_permission(p.id, 'submission.view')
+    loop
+      perform public.enqueue_email(
+        'new-submission',
+        rec.email,
+        rec.id,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'client_name', staff_display,
+          'company_name', new.company_name,
+          'submission_id', new.id,
+          'submitted_at', new.submitted_at,
+          'inbox_path', '/submissions?submission=' || new.id::text
+        ),
+        'submission.created:' || new.id::text || ':' || rec.id::text
+      );
+    end loop;
+  exception
+    when others then
+      raise warning 'enqueue_submission_emails failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+commit;
+-- ── END MIGRATION: 20260913000000_public_form_trigger_safety.sql ───────────────────────────────────────────────
+
+-- ── BEGIN MIGRATION: 20260914000000_save_public_form_submission.sql ─────────────────────────────────────────────
+-- Public form save that cannot be rolled back by notification/email triggers.
+--
+-- Live submits were dying on AFTER INSERT side-effects (notify_form_submission,
+-- enqueue_submission_emails) or on pgcrypto defaults (gen_random_bytes /
+-- digest in the extensions schema). The Next.js persist path writes the row
+-- directly, but those triggers still fire and abort the transaction.
+--
+-- This migration:
+--   1. Makes the reference/token defaults pgcrypto-free
+--   2. Makes the two AFTER INSERT triggers swallow their own errors
+--   3. Adds save_public_form_submission — SECURITY DEFINER, granted to
+--      anon + authenticated — which inserts the row with
+--      session_replication_role = replica so leftover throwing triggers
+--      cannot undo the respondent's save.
+
+begin;
+
+-- ── 1. Reference / token defaults that do not need pgcrypto ─────────────────
+create or replace function public.generate_submission_reference()
+returns text
+language plpgsql
+set search_path = public
+as $$
+declare
+  prefix text;
+  rand_part text;
+  candidate text;
+  loop_count integer := 0;
+begin
+  prefix := 'REQ-' || to_char(now() at time zone 'utc', 'YYMM') || '-';
+  loop
+    loop_count := loop_count + 1;
+    rand_part := upper(substr(md5(gen_random_uuid()::text || clock_timestamp()::text || loop_count::text), 1, 6));
+    candidate := prefix || rand_part;
+    if not exists (select 1 from public.form_submissions where reference_number = candidate) then
+      return candidate;
+    end if;
+    if loop_count > 20 then
+      return prefix || upper(substr(md5(gen_random_uuid()::text), 1, 8));
+    end if;
+  end loop;
+end;
+$$;
+
+do $$
+begin
+  if exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'form_submissions'
+      and column_name = 'tracking_token'
+  ) then
+    execute $sql$
+      alter table public.form_submissions
+        alter column tracking_token set default
+          replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '')
+    $sql$;
+  end if;
+end
+$$;
+
+-- ── 2. Side-effect triggers must never abort the save ───────────────────────
+create or replace function public.notify_form_submission()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display_name text;
+  notif_title text;
+  notif_message text;
+  action text;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display_name := coalesce(
+      nullif(trim(new.respondent_name), ''),
+      nullif(trim(new.company_name), ''),
+      nullif(trim(new.respondent_email), ''),
+      'Anonymous client'
+    );
+
+    notif_title := 'New ' || coalesce(form_rec.title, 'Form') || ' submission';
+    notif_message := 'New submission #' || substring(new.id::text, 1, 8)
+      || ' received from ' || client_display_name
+      || ' for ' || coalesce(form_rec.title, 'Form') || '.';
+    action := '/admin/forms/' || new.form_id::text || '?tab=submissions&submission=' || new.id::text;
+
+    perform public.notify_staff_with_permission(
+      'submission.view',
+      'submission.created',
+      'form_submission',
+      notif_title,
+      notif_message,
+      action,
+      'submission.created:' || new.id::text,
+      (select id from public.profiles where id = auth.uid()),
+      new.project_id,
+      new.id,
+      null,
+      jsonb_build_object(
+        'submission_id', new.id,
+        'form_id', new.form_id,
+        'form_name', coalesce(form_rec.title, 'Form'),
+        'client_name', client_display_name,
+        'respondent_name', new.respondent_name,
+        'respondent_email', new.respondent_email,
+        'respondent_phone', new.respondent_phone,
+        'company_name', new.company_name,
+        'project_id', new.project_id,
+        'submitted_at', new.submitted_at,
+        'reference_number', new.reference_number
+      )
+    );
+  exception
+    when others then
+      raise warning 'notify_form_submission failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+create or replace function public.enqueue_submission_emails()
+returns trigger
+language plpgsql
+security definer
+set search_path = public, extensions
+as $$
+declare
+  form_rec public.form_templates;
+  client_display text;
+  staff_display text;
+  rec record;
+begin
+  begin
+    select * into form_rec from public.form_templates where id = new.form_id;
+
+    client_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      nullif(btrim(new.respondent_email), ''),
+      'A client'
+    );
+    staff_display := coalesce(
+      nullif(btrim(new.respondent_name), ''),
+      nullif(btrim(new.company_name), ''),
+      'A client'
+    );
+
+    if nullif(btrim(coalesce(new.respondent_email, '')), '') is not null then
+      perform public.enqueue_email(
+        'submission-received',
+        new.respondent_email,
+        null,
+        jsonb_build_object(
+          'reference_number', new.reference_number,
+          'form_name', coalesce(form_rec.title, 'Form'),
+          'respondent_name', coalesce(nullif(btrim(new.respondent_name), ''), client_display),
+          'submitted_at', new.submitted_at,
+          'tracking_path', '/track/' || new.reference_number
+        ),
+        'submission.received:' || new.id::text
+      );
+    end if;
+
+    for rec in
+      select p.id, p.email
+      from public.profiles p
+      where public.email_staff_recipient_ok(p.id)
+        and public.user_has_permission(p.id, 'submission.view')
+    loop
+        perform public.enqueue_email(
+          'new-submission',
+          rec.email,
+          rec.id,
+          jsonb_build_object(
+            'reference_number', new.reference_number,
+            'form_name', coalesce(form_rec.title, 'Form'),
+            'client_name', staff_display,
+            'company_name', new.company_name,
+            'submission_id', new.id,
+            'submitted_at', new.submitted_at,
+            'inbox_path', '/submissions?submission=' || new.id::text
+          ),
+          'submission.created:' || new.id::text || ':' || rec.id::text
+        );
+    end loop;
+  exception
+    when others then
+      raise warning 'enqueue_submission_emails failed: %', sqlerrm;
+  end;
+  return new;
+end;
+$$;
+
+-- ── 3. Dedicated public save RPC ────────────────────────────────────────────
+create or replace function public.save_public_form_submission(
+  p_form_id uuid,
+  p_answers jsonb,
+  p_reference_number text default null,
+  p_tracking_token text default null,
+  p_fingerprint text default null
+)
+returns public.form_submissions
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  form_rec public.form_templates;
+  q public.form_questions;
+  val jsonb;
+  txt text;
+  is_empty boolean;
+  missing text[];
+  submission_rec public.form_submissions;
+  linked_client_id uuid;
+  file_item jsonb;
+  file_path text;
+  file_name text;
+  file_size bigint;
+  file_ext text;
+  rating_max_val integer;
+  respondent_email_val text;
+  respondent_name_val text;
+  respondent_phone_val text;
+  company_name_val text;
+  caller uuid := auth.uid();
+  use_status text := 'new';
+  use_ref text;
+  use_token text;
+  has_ref boolean;
+  has_track boolean;
+begin
+  select * into form_rec from public.form_templates where id = p_form_id;
+  if not found then
+    raise exception 'Form not found';
+  end if;
+  if form_rec.status <> 'published' then
+    raise exception 'This form is not accepting submissions';
+  end if;
+
+  if length(coalesce(p_answers, '{}'::jsonb)::text) > 102400 then
+    raise exception 'Your submission is too large. Please shorten your answers.';
+  end if;
+
+  for q in
+    select * from public.form_questions where form_id = p_form_id order by position, created_at
+  loop
+    if not public.is_form_question_visible(q, coalesce(p_answers, '{}'::jsonb)) then
+      continue;
+    end if;
+    val := coalesce(p_answers, '{}'::jsonb) -> q.id::text;
+    is_empty := val is null
+      or val = 'null'::jsonb
+      or (jsonb_typeof(val) = 'string' and btrim(val #>> '{}') = '')
+      or (jsonb_typeof(val) = 'array' and jsonb_array_length(val) = 0);
+
+    if q.required and is_empty then
+      missing := coalesce(missing, '{}') || q.label;
+      continue;
+    end if;
+    if is_empty then
+      continue;
+    end if;
+
+    if q.question_type in ('single_choice', 'dropdown') then
+      if jsonb_typeof(val) <> 'string'
+         or not exists (select 1 from jsonb_array_elements_text(q.options) o where o = val #>> '{}') then
+        raise exception 'Invalid option for "%"', q.label;
+      end if;
+    elsif q.question_type = 'multiple_choice' then
+      if jsonb_typeof(val) <> 'array'
+         or exists (
+           select 1 from jsonb_array_elements_text(val) v
+           where not exists (select 1 from jsonb_array_elements_text(q.options) o where o = v)
+         ) then
+        raise exception 'Invalid option for "%"', q.label;
+      end if;
+    elsif q.question_type = 'yes_no' then
+      if jsonb_typeof(val) <> 'string' or (val #>> '{}') not in ('yes', 'no') then
+        raise exception 'Invalid answer for "%"', q.label;
+      end if;
+    elsif q.question_type = 'number' then
+      if jsonb_typeof(val) <> 'number' and (jsonb_typeof(val) <> 'string' or (val #>> '{}') !~ '^-?\d+(\.\d+)?$') then
+        raise exception 'Invalid number for "%"', q.label;
+      end if;
+    elsif q.question_type = 'rating' then
+      rating_max_val := greatest(1, least(10, coalesce(nullif(q.config ->> 'rating_max', '')::integer, 5)));
+      if (val #>> '{}') !~ '^\d+$'
+         or (val #>> '{}')::integer < 1
+         or (val #>> '{}')::integer > rating_max_val then
+        raise exception 'Invalid rating for "%"', q.label;
+      end if;
+    elsif q.question_type = 'file_upload' then
+      if jsonb_typeof(val) <> 'array' then
+        raise exception 'Invalid file answer for "%"', q.label;
+      end if;
+      if jsonb_array_length(val) > 10 then
+        raise exception 'Too many files uploaded for "%". Maximum is 10.', q.label;
+      end if;
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_name := coalesce(file_item ->> 'name', '');
+        file_size := coalesce(nullif(file_item ->> 'size', '')::bigint, 0);
+        if file_size > 20971520 then
+          raise exception 'Uploaded file "%" exceeds maximum allowed size of 20 MB.', file_name;
+        end if;
+        file_ext := lower(substring(file_name from '\.([a-zA-Z0-9]+)$'));
+        if file_ext in ('exe', 'bat', 'cmd', 'sh', 'php', 'phtml', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'py', 'js', 'vbs', 'msi', 'jar', 'scr', 'hta', 'ps1') then
+          raise exception 'Uploaded file "%" has an unsafe file extension and is rejected.', file_name;
+        end if;
+      end loop;
+    end if;
+
+    txt := case when jsonb_typeof(val) = 'string' then btrim(val #>> '{}') else null end;
+    if nullif(txt, '') is not null then
+      if q.map_to = 'name' then respondent_name_val := txt; end if;
+      if q.map_to = 'email' then respondent_email_val := lower(txt); end if;
+      if q.map_to = 'phone' then respondent_phone_val := txt; end if;
+      if q.map_to = 'company' then company_name_val := txt; end if;
+    end if;
+  end loop;
+
+  if missing is not null then
+    raise exception 'Required questions are missing: %', array_to_string(missing, ', ');
+  end if;
+
+  if respondent_email_val is not null then
+    select id into linked_client_id
+    from public.clients
+    where lower(coalesce(email, '')) = respondent_email_val
+    order by created_at asc
+    limit 1;
+
+    if linked_client_id is null then
+      begin
+        insert into public.clients (name, type, status, contact_person, email, phone, notes)
+        values (
+          coalesce(nullif(company_name_val, ''), nullif(respondent_name_val, ''), respondent_email_val),
+          'potential',
+          'potential',
+          nullif(respondent_name_val, ''),
+          respondent_email_val,
+          nullif(respondent_phone_val, ''),
+          'Created automatically from form "' || form_rec.title || '"'
+        )
+        returning id into linked_client_id;
+      exception
+        when others then
+          linked_client_id := null;
+      end;
+    end if;
+  end if;
+
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'form_submissions' and column_name = 'reference_number'
+  ) into has_ref;
+  select exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'form_submissions' and column_name = 'tracking_token'
+  ) into has_track;
+
+  use_ref := nullif(btrim(coalesce(p_reference_number, '')), '');
+  if use_ref is null and has_ref then
+    use_ref := public.generate_submission_reference();
+  end if;
+  use_token := nullif(btrim(coalesce(p_tracking_token, '')), '');
+  if use_token is null and has_track then
+    use_token := replace(gen_random_uuid()::text || gen_random_uuid()::text, '-', '');
+  end if;
+
+  if exists (
+    select 1 from information_schema.check_constraints
+    where constraint_schema = 'public'
+      and constraint_name = 'form_submissions_status_check'
+      and check_clause ilike '%submitted%'
+      and check_clause not ilike '%''new''%'
+  ) then
+    use_status := 'submitted';
+  end if;
+
+  begin
+    perform set_config('session_replication_role', 'replica', true);
+  exception
+    when others then
+      null;
+  end;
+
+  begin
+    if has_ref and has_track then
+      insert into public.form_submissions (
+        form_id, form_version, status,
+        respondent_name, respondent_email, respondent_phone, company_name,
+        client_id, reference_number, tracking_token
+      ) values (
+        p_form_id, form_rec.version, use_status,
+        respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+        linked_client_id, use_ref, use_token
+      )
+      returning * into submission_rec;
+    else
+      insert into public.form_submissions (
+        form_id, form_version, status,
+        respondent_name, respondent_email, respondent_phone, company_name,
+        client_id
+      ) values (
+        p_form_id, form_rec.version, use_status,
+        respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+        linked_client_id
+      )
+      returning * into submission_rec;
+    end if;
+  exception
+    when check_violation then
+      if use_status = 'new' then
+        use_status := 'submitted';
+      else
+        use_status := 'new';
+      end if;
+      if has_ref and has_track then
+        insert into public.form_submissions (
+          form_id, form_version, status,
+          respondent_name, respondent_email, respondent_phone, company_name,
+          client_id, reference_number, tracking_token
+        ) values (
+          p_form_id, form_rec.version, use_status,
+          respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+          linked_client_id, use_ref, use_token
+        )
+        returning * into submission_rec;
+      else
+        insert into public.form_submissions (
+          form_id, form_version, status,
+          respondent_name, respondent_email, respondent_phone, company_name,
+          client_id
+        ) values (
+          p_form_id, form_rec.version, use_status,
+          respondent_name_val, respondent_email_val, respondent_phone_val, company_name_val,
+          linked_client_id
+        )
+        returning * into submission_rec;
+      end if;
+  end;
+
+  begin
+    perform set_config('session_replication_role', 'origin', true);
+  exception
+    when others then
+      null;
+  end;
+
+  begin
+    insert into public.form_submission_answers (submission_id, question_id, question_snapshot, value)
+    select submission_rec.id, fq.id, to_jsonb(fq), coalesce(p_answers, '{}'::jsonb) -> fq.id::text
+    from public.form_questions fq
+    where fq.form_id = p_form_id
+      and public.is_form_question_visible(fq, coalesce(p_answers, '{}'::jsonb))
+    order by fq.position, fq.created_at;
+  exception
+    when others then
+      raise warning 'save_public_form_submission answers failed: %', sqlerrm;
+  end;
+
+  begin
+    insert into public.form_submission_events (
+      submission_id, actor_id, event_type, new_value, note, metadata
+    ) values (
+      submission_rec.id,
+      null,
+      'created',
+      submission_rec.status,
+      'Submission received',
+      jsonb_build_object(
+        'form_version', form_rec.version,
+        'form_title', form_rec.title,
+        'respondent_email', submission_rec.respondent_email,
+        'reference_number', submission_rec.reference_number
+      )
+    );
+  exception
+    when others then
+      raise warning 'save_public_form_submission event failed: %', sqlerrm;
+  end;
+
+  if p_fingerprint is not null then
+    begin
+      insert into public.form_submission_fingerprints (form_id, fingerprint)
+      values (p_form_id, p_fingerprint);
+    exception
+      when others then
+        null;
+    end;
+  end if;
+
+  for q in select * from public.form_questions where form_id = p_form_id and question_type = 'file_upload' loop
+    if to_regprocedure('public.is_form_question_visible(public.form_questions, jsonb)') is not null
+       and not public.is_form_question_visible(q, coalesce(p_answers, '{}'::jsonb)) then
+      continue;
+    end if;
+    val := coalesce(p_answers, '{}'::jsonb) -> q.id::text;
+    if jsonb_typeof(val) = 'array' then
+      for file_item in select * from jsonb_array_elements(val) loop
+        file_path := file_item ->> 'storage_path';
+        if file_path is not null
+           and position('..' in file_path) = 0
+           and (
+             (caller is not null and split_part(file_path, '/', 1) = caller::text)
+             or split_part(file_path, '/', 1) = 'anon'
+           ) then
+          begin
+            insert into public.form_submission_attachments
+              (submission_id, question_id, name, size, mime_type, storage_path, uploaded_by)
+            values (
+              submission_rec.id, q.id,
+              coalesce(nullif(file_item ->> 'name', ''), 'file'),
+              coalesce(nullif(file_item ->> 'size', '')::bigint, 0),
+              nullif(file_item ->> 'mime_type', ''),
+              file_path,
+              caller
+            )
+            on conflict (storage_path) do nothing;
+          exception
+            when others then
+              null;
+          end;
+        end if;
+      end loop;
+    end if;
+  end loop;
+
+  return submission_rec;
+end;
+$$;
+
+comment on function public.save_public_form_submission(uuid, jsonb, text, text, text) is
+  'Public form persist that cannot be rolled back by notification/email AFTER INSERT triggers.';
+
+revoke all on function public.save_public_form_submission(uuid, jsonb, text, text, text) from public;
+grant execute on function public.save_public_form_submission(uuid, jsonb, text, text, text) to anon, authenticated;
+
+commit;
+-- ── END MIGRATION: 20260914000000_save_public_form_submission.sql ───────────────────────────────────────────────

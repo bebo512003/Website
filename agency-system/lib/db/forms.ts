@@ -401,18 +401,72 @@ export async function assignFormSubmissionReviewer(
 
 
 export async function uploadFormFile(userId: string | null | undefined, file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
-  if (!supabase) return fail(null)
   const validation = validateFile(file, 'form-files')
   if (!validation.valid) return fail(null, validation.error || 'Invalid form attachment.')
 
-  const safeName = validation.sanitizedName || sanitizeFileName(file.name)
-  // When no anonymous session is available (older GoTrue without Anonymous
-  // Sign-ins) files land in the shared `anon/` folder permitted by RLS.
-  const folder = userId || 'anon'
-  const storagePath = `${folder}/${crypto.randomUUID()}-${safeName}`
-  const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
-  if (upload.error) return fail(null, upload.error.message)
-  return ok({ storage_path: storagePath, name: file.name, size: file.size, mime_type: file.type || null })
+  // Prefer a direct Storage upload when a session exists. Fall back to a
+  // server-issued signed URL so required images still save without Anonymous
+  // Sign-ins (and without sending the file bytes through the Next.js host).
+  if (supabase && userId) {
+    const safeName = validation.sanitizedName || sanitizeFileName(file.name)
+    const storagePath = `${userId}/${crypto.randomUUID()}-${safeName}`
+    const upload = await supabase.storage.from('form-files').upload(storagePath, file, { contentType: file.type || undefined, upsert: false })
+    if (!upload.error) {
+      return ok({ storage_path: storagePath, name: file.name, size: file.size, mime_type: file.type || null })
+    }
+  }
+
+  return uploadFormFileViaSignedUrl(file)
+}
+
+/** Ask the server for a signed upload URL, then PUT the file straight to Storage. */
+export async function uploadFormFileViaSignedUrl(file: File): Promise<Result<import('@/lib/forms/question-types').UploadedFileMeta | null>> {
+  const validation = validateFile(file, 'form-files')
+  if (!validation.valid) return fail(null, validation.error || 'Invalid form attachment.')
+
+  let accessToken = ''
+  if (supabase) {
+    const { data } = await supabase.auth.getSession()
+    accessToken = data.session?.access_token || ''
+  }
+
+  let prepared: { path?: string; token?: string; signedUrl?: string; error?: string }
+  try {
+    const response = await fetch('/api/forms/upload-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+        accessToken,
+      }),
+    })
+    prepared = (await response.json()) as { path?: string; token?: string; signedUrl?: string; error?: string }
+    if (!response.ok || prepared.error || !prepared.path) {
+      return fail(null, prepared.error || 'Could not prepare the file upload.')
+    }
+  } catch {
+    return fail(null, 'Could not prepare the file upload.')
+  }
+
+  if (supabase && prepared.token) {
+    const signed = await supabase.storage.from('form-files').uploadToSignedUrl(prepared.path, prepared.token, file)
+    if (signed.error) return fail(null, signed.error.message)
+    return ok({ storage_path: prepared.path, name: file.name, size: file.size, mime_type: file.type || null })
+  }
+
+  if (prepared.signedUrl) {
+    const put = await fetch(prepared.signedUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      body: file,
+    })
+    if (!put.ok) return fail(null, 'The file upload failed. Please try again.')
+    return ok({ storage_path: prepared.path, name: file.name, size: file.size, mime_type: file.type || null })
+  }
+
+  return fail(null, 'Could not prepare the file upload.')
 }
 
 

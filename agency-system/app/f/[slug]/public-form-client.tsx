@@ -43,6 +43,22 @@ const SUBMIT_COOLDOWN_MS = 30_000
 // Maximum characters per text answer (client-side pre-check).
 const MAX_TEXT_LENGTH = 10_000
 
+function localizeSubmitError(message: string, lang: Lang): string {
+  if (!message) return ''
+  if (lang !== 'ar') return message
+  if (/Something went wrong/i.test(message)) return 'حصل خطأ أثناء الحفظ. حاول مرة أخرى.'
+  if (/could not be saved/i.test(message)) return 'تعذر حفظ الرد. حاول مرة أخرى بعد لحظات.'
+  if (/too frequently|wait a few/i.test(message)) return 'بعت الطلبات بسرعة. استنى شوية وحاول تاني.'
+  if (/already submitted/i.test(message)) return 'بعته بالفعل من شوية. استنى دقايق وحاول تاني.'
+  if (/not accepting/i.test(message)) return 'النموذج ده مش بيقبل طلبات دلوقتي.'
+  if (/file upload/i.test(message)) return 'في مشكلة في رفع الملف.'
+  if (/too large/i.test(message)) return 'الرد كبير أوي. اختصر الإجابات.'
+  if (/temporarily unavailable/i.test(message)) return 'الحفظ متوقف مؤقتاً. حدّث الصفحة وحاول تاني.'
+  if (/Bot verification/i.test(message)) return 'فشل التحقق. حدّث الصفحة وحاول تاني.'
+  if (/session expired/i.test(message)) return 'الجلسة انتهت. حدّث الصفحة وحاول تاني.'
+  return message
+}
+
 const t = (lang: Lang) => ({
   requiredHint: lang === 'ar' ? 'الحقول بعلامة * إلزامية.' : 'Fields marked * are required.',
   submit: lang === 'ar' ? 'إرسال' : 'Submit',
@@ -52,12 +68,7 @@ const t = (lang: Lang) => ({
   submittedTitle: lang === 'ar' ? 'تم إرسال ردّك بنجاح!' : 'Your response was submitted!',
   submittedDesc: lang === 'ar' ? 'شكراً لك. تم استلام إجاباتك وسيتواصل معك الفريق قريباً.' : 'Thank you. Your answers have been received and our team will contact you soon.',
   another: lang === 'ar' ? 'إرسال رد آخر' : 'Submit another response',
-  fileNeedsSession: lang === 'ar' ? 'رفع الملفات غير متاح حالياً. فعّل Anonymous sign-ins في Supabase أو أجب بدون ملفات.' : 'File upload is unavailable right now. Enable Anonymous sign-ins in Supabase or answer without files.',
-  sessionPreparing: lang === 'ar' ? 'جارٍ تجهيز جلسة إرسال آمنة…' : 'Preparing a secure submission session…',
-  sessionUnavailable: lang === 'ar'
-    ? 'لا تحتاج إلى حساب، لكن جلسة الإرسال العامة غير متاحة حالياً. يرجى تحديث الصفحة. على مالك الموقع تفعيل Anonymous Sign-ins في Supabase.'
-    : 'You do not need an account, but the public submission session is unavailable. Refresh the page and try again. Site owner: enable Anonymous Sign-ins in Supabase.',
-  sessionUnavailableShort: lang === 'ar' ? 'الإرسال غير متاح حالياً' : 'Submission unavailable',
+  fileNeedsSession: lang === 'ar' ? 'تعذر رفع الملف. حاول مرة أخرى أو أرسل النموذج بدون مرفق.' : 'The file could not be uploaded. Try again or submit without an attachment.',
   backToForms: lang === 'ar' ? 'العودة إلى النماذج المتاحة' : 'Back to available forms',
   noAccount: lang === 'ar' ? 'لا تحتاج إلى حساب. اختر إجاباتك ثم أرسل الطلب.' : 'No account required. Complete the questions, then submit your request.',
   badNumber: lang === 'ar' ? 'أدخل رقماً صحيحاً' : 'Enter a valid number',
@@ -83,11 +94,11 @@ export function PublicFormClient({
   const [values, setValues] = useState<AnswerMap>({})
   const [errors, setErrors] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
+  const [errorDebug, setErrorDebug] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [done, setDone] = useState(false)
   const [submittedData, setSubmittedData] = useState<FormSubmissionRow | null>(null)
   const [uploadingQuestionId, setUploadingQuestionId] = useState<string | null>(null)
-  const [sessionError, setSessionError] = useState('')
 
   // Session 05 — security state
   const [honeypot, setHoneypot] = useState('') // must stay empty
@@ -96,24 +107,11 @@ export function PublicFormClient({
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const submitTimeRef = useRef<number>(0)
 
-  // Anonymous authentication is created silently when the Supabase project
-  // supports it. This gives the submission a rate-limit identity and makes
-  // private file uploads possible. If anonymous sign-in is unavailable (for
-  // example on older self-hosted GoTrue builds), we do NOT block the form:
-  // submissions still go through the API route with the server anon key, and
-  // file uploads are disabled with a clear notice.
-  const [anonymousUnavailable, setAnonymousUnavailable] = useState(false)
+  // Best-effort anonymous session for rate-limit identity. Submit never waits
+  // on this — a hang or 422 must not freeze the form.
   useEffect(() => {
     if (!configured || authLoading || user) return
-    let active = true
-    void signInAnonymously().then((result) => {
-      if (!active) return
-      if (result.error) {
-        setAnonymousUnavailable(true)
-        setSessionError(result.error.message)
-      }
-    })
-    return () => { active = false }
+    void signInAnonymously()
   }, [configured, authLoading, user, signInAnonymously])
 
   // Cooldown timer — counts down from SUBMIT_COOLDOWN_MS to 0.
@@ -147,18 +145,15 @@ export function PublicFormClient({
   }
 
   const pickFile = async (question: FormQuestion, file: File) => {
-    if (!user) {
-      setError(i18n.fileNeedsSession)
-      return
-    }
     setError('')
+    setErrorDebug('')
     const validation = validateFile(file, 'form-files', lang)
     if (!validation.valid) {
       setError(lang === 'ar' ? (validation.errorAr || validation.error || '') : (validation.error || ''))
       return
     }
     setUploadingQuestionId(question.id)
-    const result = await uploadFormFile(user.id, file)
+    const result = await uploadFormFile(user?.id, file)
     setUploadingQuestionId(null)
     if (result.error || !result.data) {
       setError(result.error || i18n.fileNeedsSession)
@@ -207,6 +202,7 @@ export function PublicFormClient({
 
   const submit = async () => {
     setError('')
+    setErrorDebug('')
 
     // ── Session 05: Honeypot check ───────────────────────────────────────
     if (honeypot.trim() !== '') {
@@ -239,17 +235,9 @@ export function PublicFormClient({
 
     // ── Submission identity ──────────────────────────────────────────────
     // A silent anonymous session is preferred (abuse controls, uploader
-    // isolation). If it is unavailable on this Supabase build, we still allow
-    // the text submission through — the API route falls back to the anon key.
-    // File questions are handled separately (disabled when no session).
-    if (authLoading) {
-      setError(i18n.sessionPreparing)
-      return
-    }
-    if (!user && !anonymousUnavailable) {
-      setError(sessionError ? i18n.sessionUnavailable : i18n.sessionPreparing)
-      return
-    }
+    // isolation) but MUST never block the save. If it is still spinning or
+    // unavailable we submit without a token — the API route + RPC accept
+    // session-less answers, and file uploads use a signed URL.
 
     // ── Session 05: Cooldown check ───────────────────────────────────────
     if (cooldownRemaining > 0) {
@@ -286,10 +274,18 @@ export function PublicFormClient({
         }),
       })
 
-      const result = (await response.json()) as { data?: FormSubmissionRow; error?: string }
+      let result: { data?: FormSubmissionRow; error?: string; debug?: string | null }
+      try {
+        result = (await response.json()) as { data?: FormSubmissionRow; error?: string; debug?: string | null }
+      } catch {
+        setError(lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Your response could not be saved. Please try again.')
+        setSubmitting(false)
+        return
+      }
 
       if (!response.ok || result.error) {
-        setError(result.error || 'Submission failed.')
+        setError(localizeSubmitError(result.error || '', lang) || (lang === 'ar' ? 'تعذر حفظ الرد. حاول مرة أخرى.' : 'Submission failed.'))
+        setErrorDebug(result.debug || '')
         setSubmitting(false)
         return
       }
@@ -302,7 +298,7 @@ export function PublicFormClient({
       setCooldownRemaining(Math.ceil(SUBMIT_COOLDOWN_MS / 1000))
       setDone(true)
     } catch {
-      setError('An unexpected error occurred. Please try again.')
+      setError(lang === 'ar' ? 'حصل خطأ غير متوقع. حاول مرة أخرى.' : 'An unexpected error occurred. Please try again.')
     } finally {
       setSubmitting(false)
     }
@@ -315,6 +311,7 @@ export function PublicFormClient({
     setSubmittedData(null)
     setDone(false)
     setTurnstileToken(null)
+    setErrorDebug('')
   }
 
   // ── Success / Confirmation View (Session 16) ────────────────────────────
@@ -386,13 +383,14 @@ export function PublicFormClient({
           </p>
         </div>
 
-        {(error || sessionError) && <div className="mb-6"><InlineAlert>{error || i18n.sessionUnavailable}</InlineAlert></div>}
-
-        {anonymousUnavailable && (
-          <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/5 px-4 py-3 text-xs leading-5 text-amber-200/90">
-            {lang === 'ar'
-              ? 'ملاحظة: رفع الملفات غير متاح حالياً (مشروع Supabase لا يدعم تسجيل الدخول المجهول). يمكنك إرسال النموذج بدون ملفات وسنتواصل معك لاستلامها لاحقاً.'
-              : 'Note: File upload is unavailable (this Supabase project does not support anonymous sign-in). You can still submit the form without files — we will contact you to collect them.'}
+        {(error || errorDebug) && (
+          <div className="mb-6 space-y-2">
+            {error ? <InlineAlert>{error}</InlineAlert> : null}
+            {errorDebug ? (
+              <p className="break-all rounded-md border border-border bg-surface px-3 py-2 font-mono text-[11px] leading-5 text-text-tertiary">
+                {errorDebug}
+              </p>
+            ) : null}
           </div>
         )}
 
@@ -440,7 +438,6 @@ export function PublicFormClient({
               onFileSelect={(question, file) => void pickFile(question, file)}
               onFileRemove={removeFile}
               uploadingQuestionId={uploadingQuestionId}
-              fileUploadDisabled={!user}
               lang={lang}
               errors={errors}
             />
@@ -458,11 +455,11 @@ export function PublicFormClient({
               )}
               <button
                 type="submit"
-                disabled={submitting || cooldownRemaining > 0 || authLoading}
+                disabled={submitting || cooldownRemaining > 0}
                 className={`${primaryButtonClassName} min-h-11 w-full justify-center sm:w-auto`}
               >
-                {submitting || (authLoading && !user) ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-                {submitting ? i18n.submitting : authLoading ? i18n.sessionPreparing : i18n.submit}
+                {submitting ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {submitting ? i18n.submitting : i18n.submit}
               </button>
             </div>
           </div>
