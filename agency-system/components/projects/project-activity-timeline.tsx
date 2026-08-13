@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { History, LoaderCircle, ShieldCheck } from 'lucide-react'
-import { getProjectActivity, getProjectTaskActivity } from '@/lib/supabase/database'
+import { getProjectActivity, getProjectTaskActivity } from '@/lib/db'
 import type { ProjectActivity, TaskActivity } from '@/lib/supabase/types'
 import {
   PROJECT_ACTIVITY_LABELS,

@@ -56,7 +56,7 @@ export async function getProfile(userId: string): Promise<Profile | null> {
     console.error('Unable to load the signed-in profile:', error.message)
     return null
   }
-  return data
+  return data as Profile
 }
 
 export async function updateProfile(_userId: string, updates: Partial<Profile>) {

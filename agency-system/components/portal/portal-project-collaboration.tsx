@@ -9,7 +9,7 @@ import {
   approveClientPortalDelivery,
   getFileDownloadUrl,
   requestClientPortalRevision,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { ClientPortalCollaboration, ClientPortalFile } from '@/lib/supabase/types'
 import { formatBytes } from '@/lib/storage-config'
 import { EmptyState, InlineAlert, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'

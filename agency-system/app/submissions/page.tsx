@@ -43,7 +43,7 @@ import {
   getTeamMembers,
   updateFormSubmissionStatus,
   type AdminSubmissionRow,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type {
   FormSubmissionAnswer,
   FormSubmissionAttachment,

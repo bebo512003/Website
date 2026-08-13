@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { CheckSquare, ChevronRight, Plus, Search, Trash2, X } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { deleteTask, getProjects, getTasksPage, updateTask } from '@/lib/supabase/database'
+import { deleteTask, getProjects, getTasksPage, updateTask } from '@/lib/db'
 import type { ProjectWithClient, TaskPriority, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   TASK_PRIORITY_LABELS,

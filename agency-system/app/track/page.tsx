@@ -11,7 +11,7 @@ import {
   Sparkles,
   HelpCircle,
 } from 'lucide-react'
-import { getPublicSubmissionTracking } from '@/lib/supabase/database'
+import { getPublicSubmissionTracking } from '@/lib/db'
 import type { PublicSubmissionTracking } from '@/lib/supabase/types'
 import { SubmissionTrackingView } from '@/components/forms/submission-tracking-view'
 import { primaryButtonClassName, InlineAlert } from '@/components/ui/page'

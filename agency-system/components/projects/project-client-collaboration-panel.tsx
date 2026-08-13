@@ -9,7 +9,7 @@ import {
   addProjectComment,
   shareProjectFileWithClient,
   unshareProjectFileWithClient,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type {
   ClientApproval,
   ClientMessageWithAuthor,

@@ -8,7 +8,7 @@ import {
   deleteClientAccount,
   getClientAccountsByClientId,
   setClientAccountStatus,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { Profile } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 import { useConfirm } from '@/components/ui/confirm-dialog'

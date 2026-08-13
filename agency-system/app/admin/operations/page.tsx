@@ -24,7 +24,7 @@ import {
   setProfileClientLink,
   setProfileStatus,
   updateEmployeeRole,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { Client, EmployeeRole, Profile, ProfileStatus, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient } from '@/lib/supabase/types'
 import {
   PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS, PROJECT_STATUS_ORDER, projectStatusBadgeClass,

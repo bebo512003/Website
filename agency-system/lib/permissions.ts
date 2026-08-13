@@ -153,7 +153,6 @@ export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
   { prefix: '/admin/submissions', anyOf: ['submission.view'] },
   { prefix: '/admin/portfolio', anyOf: ['portfolio.manage'] },
   { prefix: '/admin/access', anyOf: ['role.view', 'role.assign_permissions', 'permission.view', 'permission.manage'] },
-  { prefix: '/admin/roles', anyOf: ['role.view', 'role.assign_permissions', 'permission.view', 'permission.manage'] },
   { prefix: '/admin/team', anyOf: ['employee.manage', 'employee.edit'] },
   { prefix: '/admin/clients', anyOf: ['client.view'] },
   { prefix: '/admin/projects', anyOf: ['project.view'] },
@@ -169,8 +168,6 @@ export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
   { prefix: '/reports', anyOf: ['report.view'] },
   { prefix: '/notifications', anyOf: ['notification.view'] },
   { prefix: '/settings', anyOf: ['settings.view'] },
-  { prefix: '/ai-assistant', anyOf: ['workspace.access'] },
-  { prefix: '/templates', anyOf: ['workspace.access'] },
   { prefix: '/dashboard', anyOf: ['dashboard.view'], exact: true },
 ]
 

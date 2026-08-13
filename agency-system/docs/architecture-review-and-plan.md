@@ -94,18 +94,24 @@ Tailwind 4 and Supabase (Auth + Postgres + Storage). Normal data access uses the
 client. Admin account provisioning additionally uses one server-only Route Handler and a
 `SUPABASE_SERVICE_ROLE_KEY` that is never exposed to browser code.
 
-**Layers:**
+**Layers (updated Session 28):**
 
 - `lib/supabase/client.ts` — singleton browser client from `NEXT_PUBLIC_` env vars.
-- `lib/supabase/types.ts` — hand-written `Database` types (mirrors SQL schema).
+- `lib/supabase/database.types.ts` — **generated** `Database` contract (see
+  `scripts/generate-types.mjs`; `npm run db:types:generate`). Built from the real
+  migrations on an in-memory PGlite instance; `npm run db:types:check` is a CI drift gate.
+- `lib/supabase/types/` — app-level domain types (view models, literal unions) on top of
+  the generated contract; `index.ts` barrel keeps the historical import path.
+- `lib/db/` — domain-based repositories, one module per domain (access, analytics,
+  clients, files, forms, notifications, portfolio, portal, profile, projects, tasks,
+  team) plus `shared.ts` (Result/PageQuery/executePage) and a barrel at `@/lib/db`.
+  This is the data-access layer; extend it, don't bypass it.
 - `lib/supabase/auth.ts` — sign-in/anonymous/reset/profile helpers (no public sign-up helper).
 - `app/api/admin/team-members/route.ts` — Admin-only server provisioning of Auth users.
-- `lib/supabase/database.ts` — one async function per table operation, all wrapped in
-  `Result<{ data, error }>`. This is the single data-access layer; extend it, don't bypass it.
 - `contexts/auth-context.tsx` — session + `profile` (from `public.profiles`), exposes
   `isAdmin` / `isManager` / `isAnonymous` booleans.
-- `components/layout/app-shell.tsx` — route gate: everything except `/auth` and `/intake`
-  requires a signed-in, non-anonymous user; otherwise redirect to `/auth`.
+- `components/layout/app-shell.tsx` — route gate: everything except `/auth` and the
+  public pages requires a signed-in, non-anonymous user; otherwise redirect to `/auth`.
 - Pages under `app/` read their data at mount and rely on RLS for authorization; UI role
   checks (`isManager`, `isAdmin`) only hide/show controls, the DB enforces the rules.
 

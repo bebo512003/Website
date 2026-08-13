@@ -30,7 +30,7 @@ export function Sidebar() {
   ].filter((item) => item.show)
   const isActive = (href: string) => {
     if (href === '/dashboard') return pathname === '/dashboard'
-    if (href === '/admin') return pathname === '/admin' || (pathname.startsWith('/admin/') && !['/admin/forms', '/admin/portfolio', '/admin/roles', '/admin/team'].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)))
+    if (href === '/admin') return pathname === '/admin' || (pathname.startsWith('/admin/') && !['/admin/forms', '/admin/portfolio', '/admin/team'].some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)))
     return pathname === href || pathname.startsWith(`${href}/`)
   }
   // A fixed bottom bar has room for five reliable touch targets, not every

@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { LoaderCircle } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { createTask, getTaskAssignees } from '@/lib/supabase/database'
+import { createTask, getTaskAssignees } from '@/lib/db'
 import type { ProjectWithClient, TaskAssignee, TaskPriority } from '@/lib/supabase/types'
 import { TASK_PRIORITY_LABELS } from '@/lib/tasks'
 import {

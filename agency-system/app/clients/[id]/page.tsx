@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Building2, ExternalLink, FolderKanban, Globe, Mail, MapPin, Phone, User } from 'lucide-react'
-import { getClientById, getProjectsByClientId } from '@/lib/supabase/database'
+import { getClientById, getProjectsByClientId } from '@/lib/db'
 import type { Client, Project } from '@/lib/supabase/types'
 import { PROJECT_STATUS_LABELS } from '@/lib/project-lifecycle'
 import { ClientPortalAccess } from '@/components/admin/client-portal-access'

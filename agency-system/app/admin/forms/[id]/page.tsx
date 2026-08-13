@@ -41,7 +41,7 @@ import {
   updateFormQuestion,
   updateFormSubmissionStatus,
   updateFormTemplate,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type {
   FormQuestion,
   FormQuestionType,

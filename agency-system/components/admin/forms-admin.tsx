@@ -24,7 +24,7 @@ import {
   duplicateFormTemplate,
   getFormTemplatesPage,
   updateFormTemplate,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { FormStatus, FormTemplateWithCounts } from '@/lib/supabase/types'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'

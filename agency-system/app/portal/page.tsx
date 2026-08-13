@@ -9,7 +9,7 @@ import {
   getClientFormSubmissions,
   getClientPortalClient,
   getClientPortalProjects,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { ClientFormSubmission, ClientPortalClient, ClientPortalProject } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 import { Progress } from '@/components/ui/progress'

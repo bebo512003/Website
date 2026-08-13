@@ -26,7 +26,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { Notification } from '@/lib/supabase/types'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'

@@ -13,7 +13,7 @@ import {
   getTeamMembersPage,
   updateTeamMember,
   uploadTeamAvatar,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
 import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'

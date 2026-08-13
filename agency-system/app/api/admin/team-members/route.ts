@@ -355,7 +355,7 @@ export async function PATCH(request: Request) {
   }
 
   // Keep the sign-in ban aligned with whatever status the full update produced.
-  await syncAuthAccessBan(serviceClient, userId, finalProfile.status)
+  await syncAuthAccessBan(serviceClient, userId, finalProfile.status as ProfileStatus)
 
   return Response.json({ data: finalProfile as Profile }, { status: 200, headers: NO_STORE_HEADERS })
 }
