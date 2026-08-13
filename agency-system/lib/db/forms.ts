@@ -63,15 +63,6 @@ export async function getFormTemplatesPage(
  * must never make drafts, disabled forms, or archived forms appear there.
  */
 
-export async function getPublishedFormTemplates(): Promise<Result<import('../supabase/types').PublicFormTemplateSummary[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('form_templates')
-    .select('id, slug, title, description, status, form_questions(count)')
-    .eq('status', 'published')
-    .order('updated_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as import('../supabase/types').PublicFormTemplateSummary[])
-}
 
 
 export async function getFormTemplateById(id: string): Promise<Result<import('../supabase/types').FormTemplate | null>> {
@@ -85,16 +76,6 @@ export async function getFormTemplateById(id: string): Promise<Result<import('..
  * The explicit status predicate is intentional defence-in-depth for staff
  * sessions, which can otherwise read every lifecycle state through RLS. */
 
-export async function getPublishedFormTemplateBySlug(slug: string): Promise<Result<import('../supabase/types').PublicFormTemplate | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase
-    .from('form_templates')
-    .select('id, slug, title, description, status')
-    .eq('slug', slug)
-    .eq('status', 'published')
-    .maybeSingle()
-  return error ? fail(null, error.message) : ok(data as unknown as PublicFormTemplate | null)
-}
 
 
 export async function createFormTemplate(input: { title: string; description?: string | null }): Promise<Result<import('../supabase/types').FormTemplate | null>> {
@@ -165,11 +146,6 @@ export async function reorderFormQuestions(formId: string, orderedQuestionIds: s
 }
 
 
-export async function submitDynamicForm(formId: string, answers: import('@/lib/forms/question-types').AnswerMap): Promise<Result<import('../supabase/types').FormSubmission | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('submit_dynamic_form', { p_form_id: formId, p_answers: answers as unknown as import('../supabase/types').Json })
-  return error ? fail(null, error.message) : ok(data as unknown as FormSubmission | null)
-}
 
 
 export async function getPublicSubmissionTracking(trackingKey: string): Promise<Result<import('../supabase/types').PublicSubmissionTracking | null>> {
@@ -190,14 +166,6 @@ export async function getFormSubmissions(formId: string): Promise<Result<import(
 }
 
 
-export async function getAllFormSubmissions(): Promise<Result<(import('../supabase/types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('form_submissions')
-    .select('*, form_templates(title, slug)')
-    .order('submitted_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as (import('../supabase/types').FormSubmission & { form_templates?: { title: string; slug: string } | null })[])
-}
 
 
 /** Submission inbox row: the submission joined to its form title and its
@@ -209,14 +177,6 @@ export type AdminSubmissionRow = import('../supabase/types').FormSubmission & {
 }
 
 
-export async function getAdminInboxSubmissions(): Promise<Result<AdminSubmissionRow[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('form_submissions')
-    .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email, avatar_url, job_title)')
-    .order('submitted_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as AdminSubmissionRow[])
-}
 
 
 export type SubmissionInboxFilter = {
@@ -333,15 +293,6 @@ export async function getFormSubmissionDetails(submissionId: string): Promise<Re
 }
 
 
-export async function getFormSubmissionNotes(submissionId: string): Promise<Result<import('../supabase/types').FormSubmissionNote[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('form_submission_notes')
-    .select('*, author:profiles!form_submission_notes_author_id_fkey(id, full_name, email, avatar_url, job_title)')
-    .eq('submission_id', submissionId)
-    .order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as import('../supabase/types').FormSubmissionNote[])
-}
 
 
 export async function addFormSubmissionNote(submissionId: string, note: string): Promise<Result<import('../supabase/types').FormSubmissionNote | null>> {
@@ -363,15 +314,6 @@ export async function deleteFormSubmissionNote(noteId: string): Promise<Result<b
 }
 
 
-export async function getFormSubmissionEvents(submissionId: string): Promise<Result<import('../supabase/types').FormSubmissionEvent[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('form_submission_events')
-    .select('*, actor:profiles!form_submission_events_actor_id_fkey(id, full_name, email, avatar_url, job_title)')
-    .eq('submission_id', submissionId)
-    .order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as import('../supabase/types').FormSubmissionEvent[])
-}
 
 
 export type SubmissionProjectConversionInput = {

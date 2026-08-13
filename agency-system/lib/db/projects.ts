@@ -7,16 +7,6 @@ import { supabase } from '../supabase/client'
 import { Result, fail, ok, PageQuery, PageResult, pagedFail, escapeFilterValue, executePage } from './shared'
 import { taskActivitySelect } from './tasks'
 import type { Comment, CommentWithAuthor, Profile, Project, ProjectActivity, ProjectDelivery, ProjectDeliveryApprovalState, ProjectDeliveryFile, ProjectDeliveryWithFiles, ProjectInsert, ProjectMember, ProjectStatus, ProjectUpdate, ProjectWithClient, TaskActivity } from '../supabase/types'
-export async function getProjectComments(projectId: string): Promise<Result<CommentWithAuthor[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('comments')
-    .select('*, author:profiles!comments_author_id_fkey(id, full_name, email, avatar_url)')
-    .eq('entity_type', 'project')
-    .eq('entity_id', projectId)
-    .order('created_at', { ascending: true })
-  return error ? fail([], error.message) : ok((data || []) as unknown as CommentWithAuthor[])
-}
 
 
 export async function addProjectComment(projectId: string, content: string): Promise<Result<Comment | null>> {
@@ -332,11 +322,6 @@ export async function unarchiveProject(projectId: string): Promise<Result<Projec
 }
 
 
-export async function getProjectCompletionBlockers(projectId: string): Promise<Result<string[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase.rpc('project_completion_blockers', { p_project_id: projectId })
-  return error ? fail([], error.message) : ok((data as string[]) || [])
-}
 
 
 /** Every task-level event recorded across the tasks of one project. */

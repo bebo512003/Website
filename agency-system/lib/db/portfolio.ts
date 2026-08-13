@@ -76,16 +76,6 @@ async function hydratePortfolioProjects(rows: unknown[]): Promise<PortfolioProje
 }
 
 
-export async function getPortfolioProjects(): Promise<Result<PortfolioProjectWithRelations[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('portfolio_projects')
-    .select(PORTFOLIO_ADMIN_SELECT)
-    .order('display_order', { ascending: true })
-    .order('created_at', { ascending: false })
-  if (error) return fail([], error.message)
-  return ok(await hydratePortfolioProjects((data || []) as unknown[]))
-}
 
 
 export type PortfolioProjectListFilter = {
@@ -125,24 +115,8 @@ export async function getPortfolioProjectsPage(
 }
 
 
-export async function getPublicPortfolioProjects(): Promise<Result<PortfolioProjectWithRelations[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase.rpc('get_public_portfolio_projects')
-  if (error) return fail([], error.message)
-  const projects = (data || []).map((row) => publicRpcRowToProject(row as PortfolioPublicRpcRow))
-  return ok(await hydratePortfolioProjects(projects))
-}
 
 
-export async function getPublicPortfolioProjectBySlug(slug: string): Promise<Result<PortfolioProjectWithRelations | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('get_public_portfolio_project', { p_slug: slug })
-  if (error) return fail(null, error.message)
-  const row = data?.[0]
-  if (!row) return ok(null)
-  const projects = await hydratePortfolioProjects([publicRpcRowToProject(row as PortfolioPublicRpcRow)])
-  return ok(projects[0] || null)
-}
 
 
 export async function createPortfolioProject(input: Omit<PortfolioProjectInsert, 'slug'> & { slug?: string }): Promise<Result<PortfolioProject | null>> {

@@ -13,11 +13,6 @@ export async function getProfiles(): Promise<Result<Profile[]>> {
   return error ? fail([], error.message) : ok((data || []) as unknown as Profile[])
 }
 
-export async function setProfileRole(userId: string, role: AppRole): Promise<Result<Profile | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('set_user_role', { target_user_id: userId, new_role: role })
-  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
-}
 
 export async function setProfileStatus(userId: string, status: ProfileStatus): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
@@ -25,11 +20,6 @@ export async function setProfileStatus(userId: string, status: ProfileStatus): P
   return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
 }
 
-export async function setProfileEmployeeRole(userId: string, employeeRoleId: string | null): Promise<Result<Profile | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('set_user_employee_role', { target_user_id: userId, new_employee_role_id: employeeRoleId })
-  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
-}
 
 export async function setProfileClientLink(userId: string, clientId: string | null): Promise<Result<Profile | null>> {
   if (!supabase) return fail(null)
@@ -340,10 +330,4 @@ export async function deleteTeamAvatar(storagePath: string): Promise<Result<bool
 }
 
 
-export async function getAvatarPublicUrl(storagePath: string): Promise<Result<string | null>> {
-  if (!supabase) return fail(null)
-  if (storagePath.startsWith('http')) return ok(storagePath)
-  const { data } = supabase.storage.from('avatars').getPublicUrl(storagePath)
-  return ok(data.publicUrl)
-}
 

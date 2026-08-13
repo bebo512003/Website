@@ -102,22 +102,6 @@ export async function deleteFile(file: Pick<FileItem, 'id' | 'storage_path'>): P
 }
 
 
-export type StorageAuditSummary = {
-  project_files_count: number
-  form_attachments_count: number
-  intake_attachments_count: number
-  portfolio_images_count: number
-  profiles_with_avatar_count: number
-  storage_objects_total: number
-  unreferenced_storage_objects_count: number
-  audited_at: string
-}
 
 
-export async function getStorageAuditSummary(): Promise<Result<StorageAuditSummary | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('get_storage_audit_summary')
-  if (error) return fail(null, error.message)
-  return ok(data as unknown as StorageAuditSummary)
-}
 

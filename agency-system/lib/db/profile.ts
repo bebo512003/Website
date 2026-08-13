@@ -8,11 +8,6 @@ import { Result, fail, ok } from './shared'
 import type { Profile } from '../supabase/types'
 // Enhanced profile functions
 
-export async function getProfileById(id: string): Promise<Result<Profile | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.from('profiles').select('*').eq('id', id).maybeSingle()
-  return error ? fail(null, error.message) : ok(data as unknown as Profile | null)
-}
 
 
 export async function updateOwnEnhancedProfile(userId: string, updates: {
@@ -65,11 +60,6 @@ export async function updateOwnEnhancedProfile(userId: string, updates: {
 }
 
 
-export async function markPasswordChanged(userId: string): Promise<Result<boolean>> {
-  if (!supabase) return fail(false)
-  const { error } = await supabase.rpc('mark_password_changed', { p_user_id: userId })
-  return error ? fail(false, error.message) : ok(true)
-}
 
 
 /**

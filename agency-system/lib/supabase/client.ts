@@ -17,8 +17,7 @@ export const supabase = supabaseUrl && supabaseAnonKey
 
 export const isDatabaseConnected = !!(supabaseUrl && supabaseAnonKey)
 
-// Helper: Check if DB is ready
-export function checkDatabase(): { ready: boolean; message: string } {
+ {
   if (!supabaseUrl || !supabaseAnonKey) {
     return {
       ready: false,

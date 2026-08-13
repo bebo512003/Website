@@ -56,9 +56,4 @@ export async function assignUserRole(userId: string, roleId: string): Promise<Re
   return error ? fail(null, error.message) : ok(data as unknown as Profile)
 }
 
-export async function addPermission(key: string, name: string, category: string, description: string): Promise<Result<Permission | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('add_permission', { p_key: key, p_name: name, p_category: category, p_description: description })
-  return error ? fail(null, error.message) : ok(data as unknown as Permission)
-}
 

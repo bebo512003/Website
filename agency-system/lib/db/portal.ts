@@ -49,12 +49,6 @@ export async function getClientPortalClient(): Promise<Result<ClientPortalClient
 }
 
 
-export async function getClientPortalCollaboration(projectId: string): Promise<Result<ClientPortalCollaboration | null>> {
-  if (!supabase) return fail(null)
-  const { data, error } = await supabase.rpc('get_client_portal_collaboration', { p_project_id: projectId })
-  if (error) return fail(null, error.message)
-  return ok((data || null) as unknown as ClientPortalCollaboration | null)
-}
 
 
 export async function addClientPortalFeedback(projectId: string, body: string): Promise<Result<ClientMessage | null>> {
@@ -99,35 +93,8 @@ export async function addClientVisibleMessage(projectId: string, body: string): 
 }
 
 
-export async function getClientSharedFiles(projectId: string): Promise<Result<ClientSharedFileWithFile[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('client_shared_files')
-    .select('*, file:files(*)')
-    .eq('project_id', projectId)
-    .order('shared_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as unknown as ClientSharedFileWithFile[])
-}
 
 
-export async function getClientMessages(projectId: string): Promise<Result<ClientMessageWithAuthor[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('client_messages')
-    .select('*, author:profiles!client_messages_author_id_fkey(id, full_name, email, role)')
-    .eq('project_id', projectId)
-    .order('created_at', { ascending: true })
-  return error ? fail([], error.message) : ok((data || []) as unknown as ClientMessageWithAuthor[])
-}
 
 
-export async function getClientApprovals(projectId: string): Promise<Result<ClientApproval[]>> {
-  if (!supabase) return fail([])
-  const { data, error } = await supabase
-    .from('client_approvals')
-    .select('*')
-    .eq('project_id', projectId)
-    .order('created_at', { ascending: false })
-  return error ? fail([], error.message) : ok((data || []) as ClientApproval[])
-}
 

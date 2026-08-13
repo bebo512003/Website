@@ -96,7 +96,4 @@ export async function executePage<T>(
 }
 
 
-export function getDatabaseStatus() {
-  return { connected: isDatabaseConnected }
-}
 

@@ -160,12 +160,4 @@ export async function deleteAllReadNotifications(): Promise<Result<boolean>> {
 }
 
 
-export async function getUnreadNotificationCount(): Promise<Result<number>> {
-  if (!supabase) return fail(0)
-  const { count, error } = await supabase
-    .from('notifications')
-    .select('*', { count: 'exact', head: true })
-    .is('read_at', null)
-  return error ? fail(0, error.message) : ok(count || 0)
-}
 
