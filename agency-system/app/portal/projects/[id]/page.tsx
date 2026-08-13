@@ -3,7 +3,7 @@
 import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, CalendarDays, FolderKanban, Hash, Layers, Type } from 'lucide-react'
-import { getClientPortalCollaboration, getClientPortalProject } from '@/lib/supabase/database'
+import { getClientPortalCollaboration, getClientPortalProject } from '@/lib/db'
 import type { ClientPortalCollaboration, ClientPortalProject } from '@/lib/supabase/types'
 import { PortalProjectCollaboration } from '@/components/portal/portal-project-collaboration'
 import { EmptyState, InlineAlert, LoadingState, Panel, secondaryButtonClassName } from '@/components/ui/page'

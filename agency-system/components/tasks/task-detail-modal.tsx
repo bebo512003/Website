@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { History, LoaderCircle, Send, Trash2 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addTaskNote, deleteTask, getTaskActivity, getTaskAssignees, updateTask } from '@/lib/supabase/database'
+import { addTaskNote, deleteTask, getTaskActivity, getTaskAssignees, updateTask } from '@/lib/db'
 import type {
   ProjectWithClient,
   TaskActivity,

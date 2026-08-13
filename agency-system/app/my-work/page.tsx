@@ -14,7 +14,7 @@ import {
   Plus,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { getMyTasks, getProjects, getTaskById, updateTask } from '@/lib/supabase/database'
+import { getMyTasks, getProjects, getTaskById, updateTask } from '@/lib/db'
 import type { ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   OPEN_TASK_STATUSES,

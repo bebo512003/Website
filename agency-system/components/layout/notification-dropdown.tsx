@@ -23,7 +23,7 @@ import {
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { Notification } from '@/lib/supabase/types'
 import { getNotificationMetadata, notificationEvent, resolveNotificationHref } from '@/lib/notifications'
 import { useAuth } from '@/contexts/auth-context'

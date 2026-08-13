@@ -16,7 +16,7 @@ import {
   requestProjectRevision,
   unarchiveProject,
   uploadProjectFile,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { FileItem, ProjectDeliveryWithFiles, ProjectWithClient } from '@/lib/supabase/types'
 import {
   PROJECT_APPROVAL_STATE_LABELS,

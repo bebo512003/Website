@@ -12,7 +12,7 @@ import {
   getProfiles,
   setRolePermissions,
   updateAppRole,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { AppRoleWithPermissions, Permission, Profile } from '@/lib/supabase/types'
 import { ROLE_CAPABILITY_MATRIX, ROLE_MATRIX_LABELS, categoryLabel, categorySlug, compareCategories, permissionName } from '@/lib/permissions'
 import { EmptyState, InlineAlert, LoadingState, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'

@@ -14,7 +14,7 @@ import {
   type AuthResult,
 } from '@/lib/supabase/auth'
 import type { Profile } from '@/lib/supabase/types'
-import { getCurrentUserPermissions } from '@/lib/supabase/database'
+import { getCurrentUserPermissions } from '@/lib/db'
 
 interface AuthContextType {
   user: User | null

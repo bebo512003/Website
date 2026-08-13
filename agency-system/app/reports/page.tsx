@@ -17,7 +17,7 @@ import {
   UsersRound,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { getOperationalAnalytics } from '@/lib/supabase/database'
+import { getOperationalAnalytics } from '@/lib/db'
 import type { OperationalAnalytics } from '@/lib/supabase/types'
 import { PROJECT_STATUS_LABELS, projectStatusBadgeClass } from '@/lib/project-lifecycle'
 import { TASK_PRIORITY_LABELS, taskPriorityBadgeClass } from '@/lib/tasks'

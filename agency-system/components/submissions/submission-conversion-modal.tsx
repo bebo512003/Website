@@ -6,7 +6,7 @@ import {
   convertSubmissionToProject,
   type AdminSubmissionRow,
   type SubmissionProjectConversionInput,
-} from '@/lib/supabase/database'
+} from '@/lib/db'
 import type { Client, Profile, Project, ProjectPriority, ProjectStatus } from '@/lib/supabase/types'
 import { PROJECT_CREATE_STATUSES } from '@/lib/project-delivery'
 import {

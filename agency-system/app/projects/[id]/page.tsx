@@ -4,7 +4,7 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addProjectMember, completeProject, deleteTask, getClientApprovals, getClientMessages, getClientSharedFiles, getFilesByProjectId, getProfiles, getProjectById, getProjectComments, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/supabase/database'
+import { addProjectMember, completeProject, deleteTask, getClientApprovals, getClientMessages, getClientSharedFiles, getFilesByProjectId, getProfiles, getProjectById, getProjectComments, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/db'
 import type { ClientApproval, ClientMessageWithAuthor, ClientSharedFileWithFile, CommentWithAuthor, FileItem, Profile, ProjectDeliveryWithFiles, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
