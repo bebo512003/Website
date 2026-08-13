@@ -48,10 +48,13 @@ import type {
   ProjectStatus,
   ProjectUpdate,
   ProjectWithClient,
+  SubmissionStatus,
   Task,
   TaskActivity,
   TaskAssignee,
   TaskInsert,
+  TaskPriority,
+  TaskStatus,
   TaskUpdate,
   TaskWithRelations,
 } from './types'
@@ -63,6 +66,73 @@ export interface Result<T> {
 const notConfigured = 'Supabase is not configured.'
 const fail = <T>(data: T, message = notConfigured): Result<T> => ({ data, error: message })
 const ok = <T>(data: T): Result<T> => ({ data, error: null })
+
+// ── Server-side pagination (Session 23) ─────────────────────────────────────
+// Large collections are filtered, sorted, and paged in the database — the
+// browser only ever receives one page of rows plus the exact total count.
+
+export type PageQuery = {
+  /** 1-based page number. */
+  page?: number
+  /** Rows per page (clamped to 1..100 server-side). */
+  pageSize?: number
+}
+
+export type PageResult<T> = {
+  data: T[]
+  total: number
+  page: number
+  pageSize: number
+  error: string | null
+}
+
+export const pagedFail = <T>(page: number, pageSize: number, message = notConfigured): PageResult<T> => ({
+  data: [],
+  total: 0,
+  page,
+  pageSize,
+  error: message,
+})
+
+/** Sanitizes a user search term for PostgREST `.or()` filter syntax: the
+ * wildcard and list-delimiter characters are stripped so the term is treated
+ * as a literal substring everywhere it is interpolated. */
+export function escapeFilterValue(value: string): string {
+  return value.replace(/[*%,()]/g, '').trim()
+}
+
+/** A Supabase query builder that has been started with
+ * `.select(cols, { count: 'exact' })` — structurally typed so we do not depend
+ * on the versioned PostgREST builder generics. */
+type CountableRangeQuery = {
+  range: (from: number, to: number) => PromiseLike<{
+    data: unknown
+    count: number | null
+    error: { message: string } | null
+  }>
+}
+
+/** Applies count + range to an already-built Supabase query and normalizes the
+ * result into a PageResult. */
+export async function executePage<T>(
+  query: CountableRangeQuery,
+  page: number,
+  pageSize: number
+): Promise<PageResult<T>> {
+  if (!supabase) return pagedFail(page, pageSize)
+  const safePage = Math.max(1, Math.floor(page) || 1)
+  const safeSize = Math.min(Math.max(1, Math.floor(pageSize) || 25), 100)
+  const from = (safePage - 1) * safeSize
+  const { data, count, error } = await query.range(from, from + safeSize - 1)
+  if (error) return { data: [], total: 0, page: safePage, pageSize: safeSize, error: error.message }
+  return {
+    data: (data || []) as unknown as T[],
+    total: count ?? 0,
+    page: safePage,
+    pageSize: safeSize,
+    error: null,
+  }
+}
 
 export function getDatabaseStatus() {
   return { connected: isDatabaseConnected }
@@ -436,6 +506,38 @@ export async function getClients(): Promise<Result<Client[]>> {
   const { data, error } = await supabase.from('clients').select('*').order('name')
   return error ? fail([], error.message) : ok(data || [])
 }
+
+export type ClientListFilter = {
+  search?: string
+  status?: 'all' | Client['status']
+  type?: 'all' | Client['type']
+  sort?: 'name' | 'newest' | 'oldest'
+}
+
+/** Server-side search, filters, sort, and pagination for the clients
+ * directory. Only one page of rows is transferred to the browser. */
+export async function getClientsPage(
+  filter: ClientListFilter & PageQuery = {}
+): Promise<PageResult<Client>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 24)
+  const { page = 1, pageSize = 24, sort = 'name' } = filter
+  let query = supabase.from('clients').select('*', { count: 'exact' })
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) {
+    query = query.or(
+      `name.ilike.*${q}*,industry.ilike.*${q}*,contact_person.ilike.*${q}*,contact_position.ilike.*${q}*,email.ilike.*${q}*,phone.ilike.*${q}*,location.ilike.*${q}*,website.ilike.*${q}*`
+    )
+  }
+  if (filter.status && filter.status !== 'all') query = query.eq('status', filter.status)
+  if (filter.type && filter.type !== 'all') query = query.eq('type', filter.type)
+
+  if (sort === 'name') query = query.order('name')
+  else if (sort === 'oldest') query = query.order('created_at', { ascending: true })
+  else query = query.order('created_at', { ascending: false })
+
+  return executePage<Client>(query, page, pageSize)
+}
 export async function getClientById(id: string): Promise<Result<Client | null>> {
   if (!supabase) return fail(null)
   const { data, error } = await supabase.from('clients').select('*').eq('id', id).maybeSingle()
@@ -462,6 +564,94 @@ export async function getProjects(): Promise<Result<ProjectWithClient[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('projects').select(projectWithClientSelect).order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as ProjectWithClient[])
+}
+
+export type ProjectListFilter = {
+  search?: string
+  status?: 'all' | 'delivery' | ProjectStatus
+  showArchived?: boolean
+  sort?: 'newest' | 'oldest' | 'name' | 'deadline'
+}
+
+/** Server-side search (project name/type/description + linked client name),
+ * status/archive filters, sort, and pagination for the project portfolio. */
+export async function getProjectsPage(
+  filter: ProjectListFilter & PageQuery = {}
+): Promise<PageResult<ProjectWithClient>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 12)
+  const { page = 1, pageSize = 12, sort = 'newest' } = filter
+  let query = supabase.from('projects').select(projectWithClientSelect, { count: 'exact' })
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) {
+    // Clients are matched by id (resolved in a tiny name-only query) so search
+    // can OR across project fields and the linked client name in one query.
+    const clientIds = await supabase
+      .from('clients')
+      .select('id')
+      .ilike('name', `*${q}*`)
+      .limit(200)
+    const ids = (clientIds.data || []).map((row) => (row as { id: string }).id)
+    const parts = [
+      `name.ilike.*${q}*`,
+      `type.ilike.*${q}*`,
+      `description.ilike.*${q}*`,
+    ]
+    if (ids.length) parts.push(`client_id.in.(${ids.join(',')})`)
+    query = query.or(parts.join(','))
+  }
+
+  if (filter.status === 'delivery') {
+    query = query.in('status', ['ready-for-delivery', 'delivered'])
+  } else if (filter.status && filter.status !== 'all') {
+    query = query.eq('status', filter.status)
+  }
+  if (filter.showArchived) query = query.not('archived_at', 'is', null)
+  else query = query.is('archived_at', null)
+
+  if (sort === 'oldest') query = query.order('created_at', { ascending: true })
+  else if (sort === 'name') query = query.order('name')
+  else if (sort === 'deadline') query = query.order('due_date', { ascending: true, nullsFirst: false })
+  else query = query.order('created_at', { ascending: false })
+
+  return executePage<ProjectWithClient>(query, page, pageSize)
+}
+
+export type ProjectListCounts = {
+  all: number
+  active: number
+  review: number
+  delivery: number
+  completed: number
+  archived: number
+}
+
+/** Summary card counts for the projects page — computed in the database, never
+ * by loading the full portfolio into the browser. */
+export async function getProjectListCounts(): Promise<Result<ProjectListCounts>> {
+  if (!supabase) return fail({ all: 0, active: 0, review: 0, delivery: 0, completed: 0, archived: 0 })
+  const client = supabase
+  const countLive = () => client.from('projects').select('id', { count: 'exact', head: true }).is('archived_at', null)
+  const countAll = () => client.from('projects').select('id', { count: 'exact', head: true })
+  const countStatus = (status: ProjectStatus) => client.from('projects').select('id', { count: 'exact', head: true }).is('archived_at', null).eq('status', status)
+  const [all, active, review, delivery, completed, archived] = await Promise.all([
+    countLive(),
+    countStatus('active'),
+    countStatus('in-review'),
+    client.from('projects').select('id', { count: 'exact', head: true }).is('archived_at', null).in('status', ['ready-for-delivery', 'delivered']),
+    countStatus('completed'),
+    countAll().not('archived_at', 'is', null),
+  ])
+  const counts: ProjectListCounts = {
+    all: all.count || 0,
+    active: active.count || 0,
+    review: review.count || 0,
+    delivery: delivery.count || 0,
+    completed: completed.count || 0,
+    archived: archived.count || 0,
+  }
+  const firstError = [all, active, review, delivery, completed, archived].find((r) => r.error)?.error
+  return firstError ? fail(counts, firstError.message) : ok(counts)
 }
 export async function getProjectById(id: string): Promise<Result<ProjectWithClient | null>> {
   if (!supabase) return fail(null)
@@ -595,6 +785,40 @@ export async function getPortfolioProjects(): Promise<Result<PortfolioProjectWit
     .order('created_at', { ascending: false })
   if (error) return fail([], error.message)
   return ok(await hydratePortfolioProjects((data || []) as unknown[]))
+}
+
+export type PortfolioProjectListFilter = {
+  search?: string
+  categoryId?: string
+  /** 'published' | 'draft' | 'archived' | 'all' (default 'all'). */
+  state?: 'all' | 'published' | 'draft' | 'archived'
+  featured?: boolean
+}
+
+/** Server-side search, category/state/featured filters, and pagination for the
+ * portfolio admin list. Ordered by display_order so the reorder controls stay
+ * meaningful on every page. */
+export async function getPortfolioProjectsPage(
+  filter: PortfolioProjectListFilter & PageQuery = {}
+): Promise<PageResult<PortfolioProjectWithRelations>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 20)
+  const { page = 1, pageSize = 20 } = filter
+  let query = supabase
+    .from('portfolio_projects')
+    .select(PORTFOLIO_ADMIN_SELECT, { count: 'exact' })
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) query = query.or(`title.ilike.*${q}*,client_name.ilike.*${q}*,description.ilike.*${q}*`)
+  if (filter.categoryId && filter.categoryId !== 'all') query = query.eq('category_id', filter.categoryId)
+  if (filter.state === 'published') query = query.eq('published', true).eq('archived', false)
+  else if (filter.state === 'draft') query = query.eq('published', false).eq('archived', false)
+  else if (filter.state === 'archived') query = query.eq('archived', true)
+  if (filter.featured !== undefined) query = query.eq('featured', filter.featured)
+
+  query = query.order('display_order', { ascending: true }).order('created_at', { ascending: false })
+  const result = await executePage<PortfolioProjectWithRelations>(query, page, pageSize)
+  if (result.error) return result
+  return { ...result, data: await hydratePortfolioProjects(result.data as unknown[]) }
 }
 
 export async function getPublicPortfolioProjects(): Promise<Result<PortfolioProjectWithRelations[]>> {
@@ -766,6 +990,45 @@ export async function getTasks(): Promise<Result<TaskWithRelations[]>> {
   if (!supabase) return fail([])
   const { data, error } = await supabase.from('tasks').select(taskWithRelationsSelect).order('created_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as TaskWithRelations[])
+}
+
+export type TaskListFilter = {
+  search?: string
+  projectId?: string
+  priority?: 'all' | TaskPriority
+  /** 'mine' resolves to the signed-in user; 'unassigned' matches null
+   * assignees; anything else is treated as an exact assignee id. */
+  assignee?: 'all' | 'mine' | 'unassigned' | string
+  status?: 'all' | TaskStatus
+}
+
+/** Server-side search/filter/pagination for the tasks board. Each board column
+ * requests its own page (`status` filter) plus the exact total for that column
+ * so "show more" can page through large boards without loading everything. */
+export async function getTasksPage(
+  filter: TaskListFilter & PageQuery = {}
+): Promise<PageResult<TaskWithRelations>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 20)
+  const { page = 1, pageSize = 20 } = filter
+  let query = supabase.from('tasks').select(taskWithRelationsSelect, { count: 'exact' })
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) query = query.or(`title.ilike.*${q}*,description.ilike.*${q}*`)
+  if (filter.projectId && filter.projectId !== 'all') query = query.eq('project_id', filter.projectId)
+  if (filter.priority && filter.priority !== 'all') query = query.eq('priority', filter.priority)
+  if (filter.status && filter.status !== 'all') query = query.eq('status', filter.status)
+
+  if (filter.assignee === 'mine') {
+    const { data: session } = await supabase.auth.getSession()
+    if (session.session?.user?.id) query = query.eq('assignee_id', session.session.user.id)
+  } else if (filter.assignee === 'unassigned') {
+    query = query.is('assignee_id', null)
+  } else if (filter.assignee && filter.assignee !== 'all') {
+    query = query.eq('assignee_id', filter.assignee)
+  }
+
+  query = query.order('due_date', { ascending: true, nullsFirst: false }).order('created_at', { ascending: false })
+  return executePage<TaskWithRelations>(query, page, pageSize)
 }
 
 export async function getTasksByProjectId(projectId: string): Promise<Result<TaskWithRelations[]>> {
@@ -1048,6 +1311,103 @@ export async function getNotifications(limit = 100): Promise<Result<Notification
   return error ? fail([], error.message) : ok(data || [])
 }
 
+// Notification inbox tabs map onto the domain `event` / UI `type` catalog in
+// lib/notifications.ts. The predicates are kept here so the same logic serves
+// both the page list and the tab counts.
+const NOTIFICATION_EVENTS = {
+  submissions: ['submission.created', 'submission.assigned', 'submission.status_changed'],
+  projects: ['project.created', 'project.assigned', 'project.deadline_approaching', 'project.overdue', 'team_member.assigned'],
+  tasks: ['task.assigned', 'task.updated', 'task.due_soon', 'task.due_today', 'task.overdue'],
+  client: ['client.feedback', 'client.approval', 'client.revision', 'file.shared', 'delivery.ready'],
+} as const
+
+const NOTIFICATION_TYPES = {
+  submissions: ['form_submission', 'submission'],
+  projects: ['assignment', 'project_update'],
+  tasks: ['task_assignment', 'task_update', 'deadline_reminder'],
+  client: ['client_feedback', 'client_approval', 'client_revision', 'file_shared', 'delivery_ready'],
+} as const
+
+export type NotificationTabKey = 'all' | 'unread' | 'submissions' | 'projects' | 'tasks' | 'client'
+
+/** Builds the PostgREST `or()` predicate for one inbox tab ('' for 'all'). */
+function notificationTabPredicate(tab: NotificationTabKey): string {
+  if (tab === 'all' || tab === 'unread') return ''
+  const events = NOTIFICATION_EVENTS[tab as keyof typeof NOTIFICATION_EVENTS]
+  const types = NOTIFICATION_TYPES[tab as keyof typeof NOTIFICATION_TYPES]
+  const quotedEvents = events.map((event) => `"${event}"`).join(',')
+  const quotedTypes = types.map((type) => `"${type}"`).join(',')
+  return `event.in.(${quotedEvents}),type.in.(${quotedTypes})`
+}
+
+export type NotificationListFilter = {
+  tab?: NotificationTabKey
+  search?: string
+}
+
+function notificationSearchPredicate(search: string): string {
+  const q = escapeFilterValue(search)
+  if (!q) return ''
+  return [
+    `title.ilike.*${q}*`,
+    `message.ilike.*${q}*`,
+    `metadata->>client_name.ilike.*${q}*`,
+    `metadata->>respondent_name.ilike.*${q}*`,
+    `metadata->>form_name.ilike.*${q}*`,
+    `metadata->>project_name.ilike.*${q}*`,
+    `metadata->>task_title.ilike.*${q}*`,
+    `metadata->>assigned_by.ilike.*${q}*`,
+  ].join(',')
+}
+
+/** Server-side tab filtering, search, and pagination for the notifications
+ * inbox. The browser only receives the current page plus the total. */
+export async function getNotificationsPage(
+  filter: NotificationListFilter & PageQuery = {}
+): Promise<PageResult<Notification>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 25)
+  const { page = 1, pageSize = 25, tab = 'all' } = filter
+  let query = supabase.from('notifications').select('*', { count: 'exact' })
+
+  if (tab === 'unread') query = query.is('read_at', null)
+  const tabPredicate = notificationTabPredicate(tab)
+  if (tabPredicate) query = query.or(tabPredicate)
+
+  const searchPredicate = notificationSearchPredicate(filter.search || '')
+  if (searchPredicate) {
+    query = query.or(searchPredicate)
+  }
+
+  query = query.order('created_at', { ascending: false })
+  return executePage<Notification>(query, page, pageSize)
+}
+
+export type NotificationTabCounts = Record<NotificationTabKey, number>
+
+/** Exact per-tab inbox counts computed in the database (cheap head queries). */
+export async function getNotificationTabCounts(): Promise<Result<NotificationTabCounts>> {
+  if (!supabase) return fail({ all: 0, unread: 0, submissions: 0, projects: 0, tasks: 0, client: 0 })
+  const db = supabase
+  const head = () => db.from('notifications').select('id', { count: 'exact', head: true })
+  const byTab = async (tab: NotificationTabKey) => {
+    let query = head()
+    if (tab === 'unread') query = query.is('read_at', null)
+    const predicate = notificationTabPredicate(tab)
+    if (predicate) query = query.or(predicate)
+    const { count } = await query
+    return count || 0
+  }
+  const [all, unread, submissions, projects, tasks, client] = await Promise.all([
+    head().then((r) => r.count || 0),
+    byTab('unread'),
+    byTab('submissions'),
+    byTab('projects'),
+    byTab('tasks'),
+    byTab('client'),
+  ])
+  return ok({ all, unread, submissions, projects, tasks, client })
+}
+
 export async function markNotificationRead(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('notifications').update({ read_at: new Date().toISOString() }).eq('id', id)
@@ -1101,6 +1461,34 @@ export async function getFormTemplates(): Promise<Result<import('./types').FormT
     .select('*, form_questions(count), form_submissions(count)')
     .order('updated_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as import('./types').FormTemplateWithCounts[])
+}
+
+export type FormTemplateListFilter = {
+  search?: string
+  status?: 'all' | import('./types').FormTemplate['status']
+  sort?: 'updated' | 'created' | 'title'
+}
+
+/** Server-side search, status filter, sort, and pagination for the admin form
+ * inventory. Question/submission counts stay as embedded aggregates. */
+export async function getFormTemplatesPage(
+  filter: FormTemplateListFilter & PageQuery = {}
+): Promise<PageResult<import('./types').FormTemplateWithCounts>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 25)
+  const { page = 1, pageSize = 25, sort = 'updated' } = filter
+  let query = supabase
+    .from('form_templates')
+    .select('*, form_questions(count), form_submissions(count)', { count: 'exact' })
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) query = query.or(`title.ilike.*${q}*,description.ilike.*${q}*`)
+  if (filter.status && filter.status !== 'all') query = query.eq('status', filter.status)
+
+  if (sort === 'created') query = query.order('created_at', { ascending: false })
+  else if (sort === 'title') query = query.order('title')
+  else query = query.order('updated_at', { ascending: false })
+
+  return executePage<import('./types').FormTemplateWithCounts>(query, page, pageSize)
 }
 
 /**
@@ -1242,6 +1630,71 @@ export async function getAdminInboxSubmissions(): Promise<Result<AdminSubmission
     .select('*, form_templates(title, slug), reviewer:profiles!form_submissions_reviewer_id_fkey(id, full_name, email, avatar_url, job_title)')
     .order('submitted_at', { ascending: false })
   return error ? fail([], error.message) : ok((data || []) as unknown as AdminSubmissionRow[])
+}
+
+export type SubmissionInboxFilter = {
+  search?: string
+  status?: 'all' | 'assigned_to_me' | SubmissionStatus
+  reviewer?: 'all' | 'assigned_to_me' | 'unassigned' | string
+  formId?: string
+  sort?: 'newest' | 'oldest' | 'status'
+}
+
+/** Server-side search, filters, workflow-priority sort, and pagination for the
+ * submission review inbox. Runs through the `get_submission_inbox_page`
+ * SECURITY INVOKER RPC so search covers the form title and reviewer name too,
+ * the "workflow priority" sort stays correct across pages, and the exact total
+ * comes back in the same round trip. RLS still applies to every row read. */
+export async function getSubmissionInboxPage(
+  filter: SubmissionInboxFilter & PageQuery = {}
+): Promise<PageResult<AdminSubmissionRow>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 25)
+  const { page = 1, pageSize = 25 } = filter
+
+  let reviewerId: string | null = null
+  let reviewerMode: 'assigned_to_me' | 'unassigned' | null = null
+  if (filter.reviewer === 'assigned_to_me' || filter.reviewer === 'unassigned') reviewerMode = filter.reviewer
+  else if (filter.reviewer && filter.reviewer !== 'all') reviewerId = filter.reviewer
+
+  const { data, error } = await supabase.rpc('get_submission_inbox_page', {
+    p_search: filter.search?.trim() || null,
+    p_status: filter.status && filter.status !== 'all' ? filter.status : null,
+    p_reviewer_mode: reviewerMode,
+    p_reviewer_id: reviewerId,
+    p_form_id: filter.formId && filter.formId !== 'all' ? filter.formId : null,
+    p_sort: filter.sort || 'newest',
+    p_page: page,
+    p_page_size: pageSize,
+  })
+  if (error) return pagedFail(page, pageSize, error.message)
+  const payload = (data || {}) as { data?: unknown; total?: number }
+  return {
+    data: (payload.data as AdminSubmissionRow[]) || [],
+    total: payload.total || 0,
+    page,
+    pageSize,
+    error: null,
+  }
+}
+
+export type SubmissionPipelineCounts = {
+  byStatus: Record<string, number>
+  assignedToMe: number
+  total: number
+}
+
+/** Pipeline summary counts for the submission inbox — aggregated entirely in
+ * the database, never by shipping the full inbox to the browser. */
+export async function getSubmissionPipelineCounts(): Promise<Result<SubmissionPipelineCounts>> {
+  if (!supabase) return fail({ byStatus: {}, assignedToMe: 0, total: 0 })
+  const { data, error } = await supabase.rpc('get_submission_pipeline_counts')
+  if (error) return fail({ byStatus: {}, assignedToMe: 0, total: 0 }, error.message)
+  const payload = (data || {}) as { total?: number; by_status?: Record<string, number> | null; assigned_to_me?: number }
+  return ok({
+    byStatus: payload.by_status || {},
+    assignedToMe: payload.assigned_to_me || 0,
+    total: payload.total || 0,
+  })
 }
 
 export async function getAdminInboxSubmission(id: string): Promise<Result<AdminSubmissionRow | null>> {
@@ -1449,6 +1902,66 @@ export async function getTeamMembers(): Promise<Result<Profile[]>> {
     .neq('role', 'client')
     .order('full_name')
   return error ? fail([], error.message) : ok((data as Profile[]) || [])
+}
+
+export type TeamMemberListFilter = {
+  search?: string
+  /** Dynamic role id ('' or 'all' disables the filter). */
+  roleId?: string
+  /** Legacy role key (admin/manager/employee) — OR'd with roleId when both
+   * are set so dynamic and legacy role assignments both match. */
+  roleKey?: string
+  status?: 'all' | ProfileStatus
+  /** Exact match on department OR specialization ('' or 'all' disables). */
+  department?: string
+}
+
+/** Server-side search, filters, and pagination for team directories and the
+ * admin team table. Client accounts are always excluded, matching the legacy
+ * full-list helper. */
+export async function getTeamMembersPage(
+  filter: TeamMemberListFilter & PageQuery = {}
+): Promise<PageResult<Profile>> {
+  if (!supabase) return pagedFail(filter.page || 1, filter.pageSize || 25)
+  const { page = 1, pageSize = 25 } = filter
+  let query = supabase.from('profiles').select('*', { count: 'exact' }).neq('role', 'client')
+
+  const q = escapeFilterValue(filter.search || '')
+  if (q) {
+    query = query.or(
+      `full_name.ilike.*${q}*,email.ilike.*${q}*,job_title.ilike.*${q}*,department.ilike.*${q}*,specialization.ilike.*${q}*,location.ilike.*${q}*`
+    )
+  }
+  const roleParts: string[] = []
+  if (filter.roleId && filter.roleId !== 'all' && filter.roleId !== '') roleParts.push(`role_id.eq.${filter.roleId}`)
+  if (filter.roleKey && filter.roleKey !== 'all' && filter.roleKey !== '') roleParts.push(`role.eq.${filter.roleKey}`)
+  if (roleParts.length) query = query.or(roleParts.join(','))
+  if (filter.status && filter.status !== 'all') query = query.eq('status', filter.status)
+  if (filter.department && filter.department !== 'all' && filter.department !== '') {
+    query = query.or(`department.eq.${filter.department},specialization.eq.${filter.department}`)
+  }
+
+  query = query.order('full_name')
+  return executePage<Profile>(query, page, pageSize)
+}
+
+/** Distinct department/specialization values for filter dropdowns — a light
+ * projection, not the full member list. */
+export async function getTeamMemberDepartments(): Promise<Result<string[]>> {
+  if (!supabase) return fail([])
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('department, specialization')
+    .neq('role', 'client')
+    .limit(1000)
+  if (error) return fail([], error.message)
+  const departments = new Set<string>()
+  for (const row of data || []) {
+    const item = row as { department?: string | null; specialization?: string | null }
+    if (item.department) departments.add(item.department)
+    if (item.specialization) departments.add(item.specialization)
+  }
+  return ok([...departments].sort((a, b) => a.localeCompare(b)))
 }
 
 export async function getTeamMemberById(id: string): Promise<Result<Profile | null>> {

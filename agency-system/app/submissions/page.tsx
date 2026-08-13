@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import {
   AlertCircle,
@@ -33,11 +33,13 @@ import {
   addFormSubmissionNote,
   assignFormSubmissionReviewer,
   deleteFormSubmissionNote,
-  getAdminInboxSubmissions,
+  getAdminInboxSubmission,
   getClients,
   getFormFileUrl,
   getFormSubmissionDetails,
   getFormTemplates,
+  getSubmissionInboxPage,
+  getSubmissionPipelineCounts,
   getTeamMembers,
   updateFormSubmissionStatus,
   type AdminSubmissionRow,
@@ -53,6 +55,8 @@ import type {
   SubmissionStatus,
 } from '@/lib/supabase/types'
 import { formatAnswer } from '@/lib/forms/question-types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import { SubmissionConversionModal } from '@/components/submissions/submission-conversion-modal'
 import {
   SUBMISSION_STATUS_DESCRIPTIONS,
@@ -60,7 +64,6 @@ import {
   SUBMISSION_STATUSES,
   submissionEventLabel,
   submissionStatusLabel,
-  submissionStatusRank,
   submissionStatusStyle,
 } from '@/lib/submissions'
 import {
@@ -78,6 +81,8 @@ import {
 
 type SortMode = 'newest' | 'oldest' | 'status'
 type DetailTab = 'answers' | 'notes' | 'activity'
+
+const PAGE_SIZE = 25
 
 type SubmissionDetails = {
   answers: FormSubmissionAnswer[]
@@ -111,6 +116,9 @@ export default function SubmissionsPage() {
   const canOpenForm = can('form.manage') || can('form.view')
 
   const [rows, setRows] = useState<AdminSubmissionRow[]>([])
+  const [total, setTotal] = useState(0)
+  const [counts, setCounts] = useState<{ byStatus: Record<string, number>; assignedToMe: number; total: number }>({ byStatus: {}, assignedToMe: 0, total: 0 })
+  const [page, setPage] = useState(1)
   const [team, setTeam] = useState<Profile[]>([])
   const [clients, setClients] = useState<Client[]>([])
   const [forms, setForms] = useState<{ id: string; title: string }[]>([])
@@ -123,6 +131,8 @@ export default function SubmissionsPage() {
   const [reviewerFilter, setReviewerFilter] = useState<string>('all')
   const [formFilter, setFormFilter] = useState<string>('all')
   const [sort, setSort] = useState<SortMode>('newest')
+
+  const debouncedSearch = useDebouncedValue(search, 300)
 
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [detailTabs, setDetailTabs] = useState<Record<string, DetailTab>>({})
@@ -154,38 +164,62 @@ export default function SubmissionsPage() {
     setDetailsCache((cache) => ({ ...cache, [submissionId]: result.data }))
   }, [])
 
+  const refreshCounts = useCallback(async () => {
+    const result = await getSubmissionPipelineCounts()
+    if (!result.error) setCounts(result.data)
+  }, [])
+
   const load = useCallback(async () => {
     setLoading(true)
-    const [submissionResult, teamResult, clientResult, formResult] = await Promise.all([
-      getAdminInboxSubmissions(),
+    const [submissionResult, teamResult, clientResult, formResult, countsResult] = await Promise.all([
+      getSubmissionInboxPage({
+        search: debouncedSearch,
+        status: statusFilter,
+        reviewer: reviewerFilter,
+        formId: formFilter,
+        sort,
+        page,
+        pageSize: PAGE_SIZE,
+      }),
       getTeamMembers(),
       getClients(),
       getFormTemplates(),
+      getSubmissionPipelineCounts(),
     ])
     setRows(submissionResult.data)
+    setTotal(submissionResult.total)
     setTeam(teamResult.data)
     setClients(clientResult.data)
     setForms(formResult.data.map((form) => ({ id: form.id, title: form.title })))
-    setError(submissionResult.error || teamResult.error || clientResult.error || formResult.error || '')
+    setCounts(countsResult.data)
+    setError(submissionResult.error || teamResult.error || clientResult.error || formResult.error || countsResult.error || '')
     setLoading(false)
-  }, [])
+  }, [debouncedSearch, statusFilter, reviewerFilter, formFilter, sort, page])
 
   useEffect(() => {
     if (allowed) void load()
     else setLoading(false)
   }, [allowed, load])
 
-  // Handle URL ?submission=<id> parameter
+  // Search / filter / sort changes start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedSearch, statusFilter, reviewerFilter, formFilter, sort])
+
+  // Handle URL ?submission=<id> parameter — the linked submission may live on
+  // any page, so it is fetched directly and pinned to the top of the list.
   useEffect(() => {
-    if (typeof window !== 'undefined' && rows.length > 0) {
-      const sp = new URLSearchParams(window.location.search)
-      const subParam = sp.get('submission')
-      if (subParam && rows.some((r) => r.id === subParam)) {
-        setExpandedId(subParam)
-        void loadDetails(subParam)
-      }
-    }
-  }, [rows, loadDetails])
+    if (typeof window === 'undefined') return
+    const sp = new URLSearchParams(window.location.search)
+    const subParam = sp.get('submission')
+    if (!subParam) return
+    void (async () => {
+      const result = await getAdminInboxSubmission(subParam)
+      if (result.error || !result.data) return
+      const linked = result.data
+      setRows((current) => (current.some((r) => r.id === subParam) ? current : [linked, ...current]))
+      setExpandedId(subParam)
+      void loadDetails(subParam)
+    })()
+  }, [loadDetails])
 
   const toggle = async (submissionId: string) => {
     if (expandedId === submissionId) {
@@ -200,6 +234,14 @@ export default function SubmissionsPage() {
 
   const setSubmissionDetailTab = (submissionId: string, tab: DetailTab) => {
     setDetailTabs((prev) => ({ ...prev, [submissionId]: tab }))
+  }
+
+  /** True when a row still belongs on the current page after a status edit —
+   * mirrors the server-side status filter so edited rows leave immediately. */
+  const stillMatchesStatusFilter = (submission: AdminSubmissionRow): boolean => {
+    if (statusFilter === 'assigned_to_me') return submission.reviewer_id === user?.id
+    if (statusFilter !== 'all') return submission.status === statusFilter
+    return true
   }
 
   const promptStatusChange = (submission: AdminSubmissionRow, status: SubmissionStatus) => {
@@ -226,6 +268,11 @@ export default function SubmissionsPage() {
     setRows((items) =>
       items.map((item) => (item.id === statusModalSubmission.id ? { ...item, status: targetStatus } : item))
     )
+    if (!stillMatchesStatusFilter({ ...statusModalSubmission, status: targetStatus })) {
+      setRows((items) => items.filter((item) => item.id !== statusModalSubmission.id))
+      setTotal((value) => Math.max(0, value - 1))
+    }
+    await refreshCounts()
     // Reload submission details if expanded
     if (expandedId === statusModalSubmission.id) {
       await loadDetails(statusModalSubmission.id)
@@ -242,6 +289,11 @@ export default function SubmissionsPage() {
       `Marked “${submission.respondent_name || submission.respondent_email || 'this submission'}” as ${submissionStatusLabel(status)}.`
     )
     setRows((items) => items.map((item) => (item.id === submission.id ? { ...item, status } : item)))
+    if (!stillMatchesStatusFilter({ ...submission, status })) {
+      setRows((items) => items.filter((item) => item.id !== submission.id))
+      setTotal((value) => Math.max(0, value - 1))
+    }
+    await refreshCounts()
     if (expandedId === submission.id) {
       await loadDetails(submission.id)
     }
@@ -278,6 +330,7 @@ export default function SubmissionsPage() {
         }
       })
     )
+    await refreshCounts()
     if (expandedId === submission.id) {
       await loadDetails(submission.id)
     }
@@ -343,68 +396,7 @@ export default function SubmissionsPage() {
     window.open(result.data, '_blank', 'noopener')
   }
 
-  const visibleRows = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    const filtered = rows.filter((submission) => {
-      // Status & Assignee filter
-      if (statusFilter === 'assigned_to_me') {
-        if (submission.reviewer_id !== user?.id) return false
-      } else if (statusFilter !== 'all' && submission.status !== statusFilter) {
-        return false
-      }
-
-      // Reviewer filter
-      if (reviewerFilter === 'unassigned' && submission.reviewer_id !== null) return false
-      if (reviewerFilter === 'assigned_to_me' && submission.reviewer_id !== user?.id) return false
-      if (reviewerFilter !== 'all' && reviewerFilter !== 'unassigned' && reviewerFilter !== 'assigned_to_me' && submission.reviewer_id !== reviewerFilter) {
-        return false
-      }
-
-      // Form filter
-      if (formFilter !== 'all' && submission.form_id !== formFilter) return false
-
-      // Search query
-      if (q) {
-        const haystack = [
-          submission.reference_number,
-          submission.respondent_name,
-          submission.respondent_email,
-          submission.respondent_phone,
-          submission.company_name,
-          submission.form_templates?.title,
-          submissionStatusLabel(submission.status),
-          submission.reviewer?.full_name,
-          submission.reviewer?.email,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase()
-        if (!haystack.includes(q)) return false
-      }
-      return true
-    })
-
-    const sorted = [...filtered]
-    if (sort === 'newest') sorted.sort((a, b) => +new Date(b.submitted_at) - +new Date(a.submitted_at))
-    else if (sort === 'oldest') sorted.sort((a, b) => +new Date(a.submitted_at) - +new Date(b.submitted_at))
-    else
-      sorted.sort(
-        (a, b) =>
-          submissionStatusRank(a.status) - submissionStatusRank(b.status) ||
-          +new Date(b.submitted_at) - +new Date(a.submitted_at)
-      )
-    return sorted
-  }, [rows, search, statusFilter, reviewerFilter, formFilter, sort, user])
-
-  const counts = useMemo(() => {
-    const byStatus: Record<string, number> = {}
-    let assignedToMeCount = 0
-    for (const submission of rows) {
-      byStatus[submission.status] = (byStatus[submission.status] || 0) + 1
-      if (user?.id && submission.reviewer_id === user.id) assignedToMeCount++
-    }
-    return { byStatus, assignedToMeCount }
-  }, [rows, user])
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   if (!allowed) {
     return (
@@ -451,7 +443,7 @@ export default function SubmissionsPage() {
             <span className="font-mono-tech text-[10px] uppercase tracking-wider text-text-tertiary">All Responses</span>
             <Inbox className="h-3.5 w-3.5 text-text-tertiary group-hover:text-fg" />
           </div>
-          <p className="mt-2 font-mono-tech text-2xl font-bold text-fg">{rows.length}</p>
+          <p className="mt-2 font-mono-tech text-2xl font-bold text-fg">{counts.total}</p>
           <p className="mt-0.5 text-[11px] text-text-tertiary">Total submissions</p>
         </button>
 
@@ -550,7 +542,7 @@ export default function SubmissionsPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
             <input
               className={`${inputClassName} pl-9`}
-              placeholder="Search name, e-mail, company, reviewer…"
+              placeholder="Search reference, name, e-mail, company, form, reviewer…"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               aria-label="Search submissions"
@@ -575,8 +567,8 @@ export default function SubmissionsPage() {
               onChange={(event) => setStatusFilter(event.target.value as 'all' | 'assigned_to_me' | SubmissionStatus)}
               aria-label="Filter by status"
             >
-              <option value="all">All statuses ({rows.length})</option>
-              {user?.id && <option value="assigned_to_me">Assigned to Me ({counts.assignedToMeCount})</option>}
+              <option value="all">All statuses ({counts.total})</option>
+              {user?.id && <option value="assigned_to_me">Assigned to Me ({counts.assignedToMe})</option>}
               {SUBMISSION_STATUSES.map((status) => (
                 <option key={status} value={status}>
                   {SUBMISSION_STATUS_LABELS[status]} ({counts.byStatus[status] || 0})
@@ -631,13 +623,13 @@ export default function SubmissionsPage() {
       {/* Submissions List */}
       <Panel
         title="Submissions Queue"
-        description={`${visibleRows.length} of ${rows.length} submission${
-          rows.length === 1 ? '' : 's'
-        } — select a submission to review answers, assign reviewers, post internal notes, and track qualification history.`}
+        description={`${rows.length} of ${total} submission${
+          total === 1 ? '' : 's'
+        } — select a submission to review answers, assign reviewers, post internal notes, and track qualification history. Search, filters, and pagination run in the database.`}
       >
         {loading ? (
           <LoadingState label="Loading submission review queue…" />
-        ) : visibleRows.length === 0 ? (
+        ) : rows.length === 0 ? (
           <EmptyState
             icon={Inbox}
             title="No submissions match"
@@ -660,8 +652,9 @@ export default function SubmissionsPage() {
             }
           />
         ) : (
+          <>
           <div className="divide-y divide-border">
-            {visibleRows.map((submission) => {
+            {rows.map((submission) => {
               const expanded = expandedId === submission.id
               const details = detailsCache[submission.id]
               const reviewer = submission.reviewer
@@ -1266,6 +1259,8 @@ export default function SubmissionsPage() {
               )
             })}
           </div>
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))} />
+          </>
         )}
       </Panel>
 

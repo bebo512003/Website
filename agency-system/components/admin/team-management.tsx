@@ -10,11 +10,13 @@ import {
   deleteTeamMember,
   getAppRoles,
   getEmployeeRoles,
-  getTeamMembers,
+  getTeamMembersPage,
   updateTeamMember,
   uploadTeamAvatar,
 } from '@/lib/supabase/database'
 import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import type { AppRoleWithPermissions, EmployeeRole, Profile, ProfileStatus } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
@@ -43,9 +45,12 @@ const emptyForm = {
   status: 'active' as 'active' | 'inactive',
 }
 
+const PAGE_SIZE = 25
+
 export function TeamManagement() {
   const { can } = useAuth()
   const [members, setMembers] = useState<Profile[]>([])
+  const [total, setTotal] = useState(0)
   const [roles, setRoles] = useState<AppRoleWithPermissions[]>([])
   const [employeeRoles, setEmployeeRoles] = useState<EmployeeRole[]>([])
   const [loading, setLoading] = useState(true)
@@ -53,6 +58,9 @@ export function TeamManagement() {
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const [search, setSearch] = useState('')
+  const [roleFilter, setRoleFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | ProfileStatus>('all')
+  const [page, setPage] = useState(1)
 
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Profile | null>(null)
@@ -70,36 +78,34 @@ export function TeamManagement() {
   const canManage = can('employee.manage') || can('admin.manage')
   const viewingSocialLinks = viewing ? getSocialLinks(viewing.social_links) : {}
 
+  const debouncedSearch = useDebouncedValue(search, 300)
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const [membersRes, rolesRes, empRolesRes] = await Promise.all([getTeamMembers(), getAppRoles(), getEmployeeRoles()])
+    const [membersRes, rolesRes, empRolesRes] = await Promise.all([
+      getTeamMembersPage({ search: debouncedSearch, roleId: roleFilter, status: statusFilter, page, pageSize: PAGE_SIZE }),
+      getAppRoles(),
+      getEmployeeRoles(),
+    ])
     setMembers(membersRes.data || [])
+    setTotal(membersRes.total)
     setRoles(rolesRes.data || [])
     setEmployeeRoles(empRolesRes.data || [])
     setError(membersRes.error || rolesRes.error || empRolesRes.error || '')
     setLoading(false)
-  }, [])
+  }, [debouncedSearch, roleFilter, statusFilter, page])
 
   useEffect(() => { void load() }, [load])
+
+  // Search / filter changes start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedSearch, roleFilter, statusFilter])
 
   const roleMap = useMemo(() => new Map(roles.map(r => [r.id, r])), [roles])
   const employeeRoleMap = useMemo(() => new Map(employeeRoles.map(r => [r.id, r])), [employeeRoles])
 
   // Exclude client role from assignment list
   const assignableRoles = useMemo(() => roles.filter(r => r.key !== 'client' && r.is_active), [roles])
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase()
-    if (!q) return members
-    return members.filter(m =>
-      (m.full_name?.toLowerCase().includes(q)) ||
-      m.email.toLowerCase().includes(q) ||
-      (m.job_title?.toLowerCase().includes(q)) ||
-      (m.department?.toLowerCase().includes(q)) ||
-      (m.specialization?.toLowerCase().includes(q))
-    )
-  }, [members, search])
 
   const resetForm = () => {
     setForm(emptyForm)
@@ -317,14 +323,26 @@ export function TeamManagement() {
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <button onClick={openAdd} className={primaryButtonClassName} disabled={!canManage}>
-            <Plus className="h-4 w-4" />
-            Create Team Account
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <select aria-label="Filter by role" className={`${inputClassName} w-44`} value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)}>
+              <option value="all">All roles</option>
+              {assignableRoles.map((role) => <option key={role.id} value={role.id}>{role.name}</option>)}
+            </select>
+            <select aria-label="Filter by status" className={`${inputClassName} w-40`} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as 'all' | ProfileStatus)}>
+              <option value="all">Active + inactive</option>
+              <option value="active">Active</option>
+              <option value="inactive">Inactive</option>
+            </select>
+            <span className="text-xs text-text-tertiary">{total} member{total === 1 ? '' : 's'}</span>
+            <button onClick={openAdd} className={primaryButtonClassName} disabled={!canManage}>
+              <Plus className="h-4 w-4" />
+              Create Team Account
+            </button>
+          </div>
         </div>
 
-        {filtered.length === 0 ? (
-          <EmptyState icon={Users} title="No team members" description={search ? 'No members match your search' : 'Add your first team member to get started'} />
+        {members.length === 0 ? (
+          <EmptyState icon={Users} title="No team members" description={search || roleFilter !== 'all' || statusFilter !== 'all' ? 'No members match your search or filters' : 'Add your first team member to get started'} />
         ) : (
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-border">
@@ -338,7 +356,7 @@ export function TeamManagement() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {filtered.map((member) => {
+                {members.map((member) => {
                   const role = member.role_id ? roleMap.get(member.role_id) : null
                   const jobRole = member.employee_role_id ? employeeRoleMap.get(member.employee_role_id) : null
                   return (
@@ -419,6 +437,9 @@ export function TeamManagement() {
               </tbody>
             </table>
           </div>
+        )}
+        {members.length > 0 && (
+          <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), Math.max(1, Math.ceil(total / PAGE_SIZE))))} />
         )}
       </Panel>
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
   Bell,
@@ -21,16 +21,17 @@ import {
 import {
   deleteAllReadNotifications,
   deleteNotification,
-  getNotifications,
+  getNotificationTabCounts,
+  getNotificationsPage,
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationUnread,
 } from '@/lib/supabase/database'
 import type { Notification } from '@/lib/supabase/types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import {
   getNotificationMetadata,
-  isClientCollaborationNotification,
-  isProjectNotification,
   isSubmissionNotification,
   isTaskNotification,
   notificationEvent,
@@ -93,9 +94,14 @@ function getNotificationTypeBadge(notification: Notification) {
   }
 }
 
+const PAGE_SIZE = 25
+
 export default function NotificationsPage() {
   const router = useRouter()
   const [notifications, setNotifications] = useState<Notification[]>([])
+  const [total, setTotal] = useState(0)
+  const [tabCounts, setTabCounts] = useState<{ all: number; unread: number; submissions: number; projects: number; tasks: number; client: number }>({ all: 0, unread: 0, submissions: 0, projects: 0, tasks: 0, client: 0 })
+  const [page, setPage] = useState(1)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [tab, setTab] = useState<NotificationFilterTab>('all')
@@ -104,12 +110,20 @@ export default function NotificationsPage() {
   const [busyActionId, setBusyActionId] = useState<string | null>(null)
   const [clearingRead, setClearingRead] = useState(false)
 
+  const debouncedSearch = useDebouncedValue(searchQuery, 300)
+
   const load = useCallback(async () => {
-    const result = await getNotifications(100)
-    setNotifications(result.data)
-    setError(result.error || '')
+    setLoading(true)
+    const [pageResult, countsResult] = await Promise.all([
+      getNotificationsPage({ tab, search: debouncedSearch, page, pageSize: PAGE_SIZE }),
+      getNotificationTabCounts(),
+    ])
+    setNotifications(pageResult.data)
+    setTotal(pageResult.total)
+    setTabCounts(countsResult.data)
+    setError(pageResult.error || countsResult.error || '')
     setLoading(false)
-  }, [])
+  }, [tab, debouncedSearch, page])
 
   useEffect(() => {
     void load()
@@ -118,62 +132,16 @@ export default function NotificationsPage() {
     return () => window.removeEventListener('agency-notifications-changed', handleChanged)
   }, [load])
 
-  const unreadCount = useMemo(() => notifications.filter((n) => !n.read_at).length, [notifications])
-  const readCount = useMemo(() => notifications.filter((n) => !!n.read_at).length, [notifications])
-  const submissionCount = useMemo(
-    () => notifications.filter((n) => isSubmissionNotification(n)).length,
-    [notifications]
-  )
-  const projectCount = useMemo(
-    () => notifications.filter((n) => isProjectNotification(n) && !isClientCollaborationNotification(n)).length,
-    [notifications]
-  )
-  const taskCount = useMemo(
-    () => notifications.filter((n) => isTaskNotification(n)).length,
-    [notifications]
-  )
-  const clientCount = useMemo(
-    () => notifications.filter((n) => isClientCollaborationNotification(n)).length,
-    [notifications]
-  )
+  // A new tab or search always starts from page 1.
+  useEffect(() => { setPage(1) }, [tab, debouncedSearch])
 
-  const filteredNotifications = useMemo(() => {
-    let list = notifications
-
-    // Filter by tab
-    if (tab === 'unread') {
-      list = list.filter((n) => !n.read_at)
-    } else if (tab === 'submissions') {
-      list = list.filter((n) => isSubmissionNotification(n))
-    } else if (tab === 'projects') {
-      list = list.filter((n) => isProjectNotification(n) && !isClientCollaborationNotification(n))
-    } else if (tab === 'tasks') {
-      list = list.filter((n) => isTaskNotification(n))
-    } else if (tab === 'client') {
-      list = list.filter((n) => isClientCollaborationNotification(n))
-    }
-
-    // Filter by search query
-    const q = searchQuery.trim().toLowerCase()
-    if (q) {
-      list = list.filter((n) => {
-        const meta = getNotificationMetadata(n)
-        return (
-          n.title.toLowerCase().includes(q) ||
-          n.message.toLowerCase().includes(q) ||
-          (meta.client_name && meta.client_name.toLowerCase().includes(q)) ||
-          (meta.form_name && meta.form_name.toLowerCase().includes(q)) ||
-          (meta.project_name && meta.project_name.toLowerCase().includes(q)) ||
-          (meta.task_title && meta.task_title.toLowerCase().includes(q)) ||
-          (meta.assigned_by && meta.assigned_by.toLowerCase().includes(q)) ||
-          (meta.submission_id && meta.submission_id.toLowerCase().includes(q)) ||
-          (n.submission_id && n.submission_id.toLowerCase().includes(q))
-        )
-      })
-    }
-
-    return list
-  }, [notifications, tab, searchQuery])
+  const unreadCount = tabCounts.unread
+  const readCount = Math.max(0, tabCounts.all - tabCounts.unread)
+  const submissionCount = tabCounts.submissions
+  const projectCount = tabCounts.projects
+  const taskCount = tabCounts.tasks
+  const clientCount = tabCounts.client
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   const openNotification = async (notification: Notification) => {
     if (!notification.read_at) {
@@ -373,19 +341,19 @@ export default function NotificationsPage() {
       {/* Notifications List */}
       <Panel
         title="Inbox"
-        description={`${filteredNotifications.length} notification${
-          filteredNotifications.length === 1 ? '' : 's'
+        description={`${total} notification${
+          total === 1 ? '' : 's'
         } ${tab !== 'all' ? `(${tab})` : ''}`}
       >
         {loading ? (
           <LoadingState label="Loading notifications…" />
-        ) : notifications.length === 0 ? (
+        ) : tabCounts.all === 0 ? (
           <EmptyState
             icon={Bell}
             title="Your inbox is empty"
             description="Form submissions, project assignments, and task updates will be delivered here automatically."
           />
-        ) : filteredNotifications.length === 0 ? (
+        ) : notifications.length === 0 ? (
           <EmptyState
             icon={Filter}
             title="No matching notifications"
@@ -411,7 +379,7 @@ export default function NotificationsPage() {
           />
         ) : (
           <div className="divide-y divide-border">
-            {filteredNotifications.map((notification) => {
+            {notifications.map((notification) => {
               const isUnread = !notification.read_at
               const meta = getNotificationMetadata(notification)
               const badge = getNotificationTypeBadge(notification)
@@ -659,6 +627,7 @@ export default function NotificationsPage() {
             })}
           </div>
         )}
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), pageCount))} />
       </Panel>
     </Page>
   )

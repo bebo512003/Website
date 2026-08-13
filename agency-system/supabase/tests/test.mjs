@@ -3023,6 +3023,50 @@ async function main() {
   ok('fresh: public tracking reflects qualification status',
     freshTrackingQualified?.stage_index === 3 && freshTrackingQualified?.client_status_label === 'Qualified')
 
+  // Session 23 — server-side inbox pagination RPCs (SECURITY INVOKER).
+  const inboxPage = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC returns the page plus exact total',
+    Array.isArray(inboxPage?.data) && inboxPage.data.length === 1 && inboxPage.total === 1)
+  ok('fresh: inbox page RPC joins form title and reviewer',
+    inboxPage?.data?.[0]?.form_templates?.title === 'Fresh Form' && inboxPage.data[0]?.reviewer?.email === 'employee@fresh.test')
+  const inboxSearchHit = (await dbB.query(
+    `select * from public.get_submission_inbox_page('visitor@fresh.test', null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC searches respondent fields', inboxSearchHit?.total === 1)
+  const inboxSearchMiss = (await dbB.query(
+    `select * from public.get_submission_inbox_page('no-such-person', null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC returns an empty page on no match', inboxSearchMiss?.total === 0 && inboxSearchMiss?.data?.length === 0)
+  const inboxStatus = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, 'qualified', null, null, null, 'status', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC filters by status', inboxStatus?.total === 1 && inboxStatus?.data?.[0]?.status === 'qualified')
+  const inboxReviewer = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, $1, null, 'newest', 1, 25)`,
+    [employeeB]
+  )).rows[0]
+  ok('fresh: inbox page RPC filters by reviewer id', inboxReviewer?.total === 1)
+  const inboxAssignedToMe = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, 'assigned_to_me', null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC assigned-to-me honors auth.uid()', inboxAssignedToMe?.total === 0)
+  await asUser(dbB, employeeB)
+  const employeeInbox = (await dbB.query(
+    `select * from public.get_submission_inbox_page(null, null, null, null, null, 'newest', 1, 25)`
+  )).rows[0]
+  ok('fresh: inbox page RPC is RLS-scoped (staff without submission.view sees nothing)',
+    employeeInbox?.total === 0 && employeeInbox?.data?.length === 0)
+  await asUser(dbB, aliceB)
+  const pipelineBefore = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
+  ok('fresh: pipeline counts aggregate in the database',
+    pipelineBefore?.total === 1 && pipelineBefore?.by_status?.qualified === 1 && pipelineBefore?.assigned_to_me === 0)
+  await dbB.query(`select public.assign_form_submission_reviewer($1, $2, 'Pagination suite')`, [freshSubmission.id, aliceB])
+  const pipelineAssigned = (await dbB.query(`select * from public.get_submission_pipeline_counts()`)).rows[0]
+  ok('fresh: pipeline counts track the assigned-to-me bucket',
+    pipelineAssigned?.assigned_to_me === 1 && pipelineAssigned?.total === 1)
+
   const freshProject = (await dbB.query(
     `select * from public.convert_submission_to_project(
        $1, $2, null, 'Fresh Converted Project', 'Fresh conversion', 'General', 'medium', 'active',
