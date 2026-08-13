@@ -3,35 +3,27 @@
 import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, CalendarDays, FolderKanban, Hash, Layers, Type } from 'lucide-react'
-import { getClientPortalCollaboration, getClientPortalProject } from '@/lib/db'
-import type { ClientPortalCollaboration, ClientPortalProject } from '@/lib/supabase/types'
-import { PortalProjectCollaboration } from '@/components/portal/portal-project-collaboration'
+import { getClientPortalProject } from '@/lib/db'
+import type { ClientPortalProject } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, secondaryButtonClassName } from '@/components/ui/page'
 import { Progress } from '@/components/ui/progress'
 import { PROJECT_STATUS_LABELS, projectStatusBadgeClass } from '@/lib/project-lifecycle'
 
 /**
  * Client-facing project detail. Project fields come from the sanitized
- * `get_client_portal_project` RPC. Files, messages, and approval actions come
- * from `get_client_portal_collaboration` — only selected/delivered files and
- * client-visible messages. Internal comments, tasks, team, and activity never
- * reach this page.
+ * `get_client_portal_project` RPC — no owner, manager, team, budget, health,
+ * priority, or internal audit fields are exposed to clients.
  */
 export default function ClientPortalProjectPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params)
   const [project, setProject] = useState<ClientPortalProject | null>(null)
-  const [collaboration, setCollaboration] = useState<ClientPortalCollaboration | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    const [projectResult, collabResult] = await Promise.all([
-      getClientPortalProject(id),
-      getClientPortalCollaboration(id),
-    ])
+    const [projectResult] = await Promise.all([getClientPortalProject(id)])
     setProject(projectResult.data)
-    setCollaboration(collabResult.data)
-    setError(projectResult.error || collabResult.error || '')
+    setError(projectResult.error || '')
     setLoading(false)
   }, [id])
 

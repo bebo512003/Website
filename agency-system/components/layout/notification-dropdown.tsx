@@ -363,7 +363,7 @@ export function NotificationDropdown({ viewAllHref = '/notifications' }: { viewA
           {/* Footer */}
           <div className="border-t border-border bg-surface-raised/50 p-2 text-center">
             <Link
-              href="/notifications"
+              href={viewAllHref}
               onClick={() => setOpen(false)}
               className="inline-flex items-center justify-center gap-1.5 w-full rounded py-1.5 text-xs font-semibold text-accent hover:brightness-110 transition"
             >

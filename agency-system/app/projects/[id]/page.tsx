@@ -4,8 +4,8 @@ import { use, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { ArrowLeft, Calendar, CheckCircle2, ChevronRight, FileInput, Flag, FolderKanban, HeartPulse, LoaderCircle, Plus, Trash2, UserRound, Users, UserPlus } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { addProjectMember, completeProject, deleteTask, getClientApprovals, getClientMessages, getClientSharedFiles, getFilesByProjectId, getProfiles, getProjectById, getProjectComments, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/db'
-import type { ClientApproval, ClientMessageWithAuthor, ClientSharedFileWithFile, CommentWithAuthor, FileItem, Profile, ProjectDeliveryWithFiles, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
+import { addProjectMember, completeProject, deleteTask, getFilesByProjectId, getProfiles, getProjectById, getProjectDeliveries, getProjectMembers, getTasksByProjectId, removeProjectMember, updateProject, updateTask } from '@/lib/db'
+import type { FileItem, Profile, ProjectDeliveryWithFiles, ProjectHealth, ProjectMember, ProjectPriority, ProjectStatus, ProjectWithClient, TaskStatus, TaskWithRelations } from '@/lib/supabase/types'
 import {
   PROJECT_FLOW, PROJECT_HEALTH_LABELS, PROJECT_HEALTH_ORDER, PROJECT_STATUS_LABELS,
   nextProjectStatuses, projectHealthBadgeClass, projectStatusBadgeClass,
@@ -16,7 +16,6 @@ import {
 import { CreateTaskModal } from '@/components/tasks/create-task-modal'
 import { TaskDetailModal } from '@/components/tasks/task-detail-modal'
 import { ProjectActivityTimeline } from '@/components/projects/project-activity-timeline'
-import { ProjectClientCollaborationPanel } from '@/components/projects/project-client-collaboration-panel'
 import { ProjectDeliveryPanel } from '@/components/projects/project-delivery-panel'
 import { currentDelivery, deliveryReadiness } from '@/lib/project-delivery'
 import { EmptyState, InlineAlert, LoadingState, Page, PageHeader, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
@@ -39,10 +38,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
   const [team, setTeam] = useState<Profile[]>([])
   const [deliveries, setDeliveries] = useState<ProjectDeliveryWithFiles[]>([])
   const [projectFiles, setProjectFiles] = useState<FileItem[]>([])
-  const [sharedFiles, setSharedFiles] = useState<ClientSharedFileWithFile[]>([])
-  const [clientMessages, setClientMessages] = useState<ClientMessageWithAuthor[]>([])
-  const [clientApprovals, setClientApprovals] = useState<ClientApproval[]>([])
-  const [internalComments, setInternalComments] = useState<CommentWithAuthor[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [taskModal, setTaskModal] = useState(false)
@@ -67,10 +62,9 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
 
   const load = useCallback(async () => {
     setLoading(true)
-    const [projectResult, tasksResult, membersResult, teamResult, deliveriesResult, filesResult, sharedResult, messagesResult, approvalsResult, commentsResult] = await Promise.all([
+    const [projectResult, tasksResult, membersResult, teamResult, deliveriesResult, filesResult] = await Promise.all([
       getProjectById(id), getTasksByProjectId(id), getProjectMembers(id), getProfiles(),
       getProjectDeliveries(id), getFilesByProjectId(id),
-      getClientSharedFiles(id), getClientMessages(id), getClientApprovals(id), getProjectComments(id),
     ])
     setProject(projectResult.data)
     setTasks(tasksResult.data)
@@ -78,10 +72,6 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
     setTeam(teamResult.data)
     setDeliveries(deliveriesResult.data)
     setProjectFiles(filesResult.data)
-    setSharedFiles(sharedResult.data)
-    setClientMessages(messagesResult.data)
-    setClientApprovals(approvalsResult.data)
-    setInternalComments(commentsResult.data)
     if (projectResult.data) {
       const p = projectResult.data
       setProjectForm({
@@ -90,7 +80,7 @@ export default function ProjectDetailPage({ params }: { params: Promise<{ id: st
         due_date: p.due_date || '', owner_id: p.owner_id || '', manager_id: p.manager_id || '',
       })
     }
-    setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || deliveriesResult.error || filesResult.error || sharedResult.error || messagesResult.error || approvalsResult.error || commentsResult.error || '')
+    setError(projectResult.error || tasksResult.error || membersResult.error || teamResult.error || deliveriesResult.error || filesResult.error || '')
     setLoading(false)
     setActivityKey((key) => key + 1)
   }, [id])
