@@ -4,8 +4,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { Filter, Search, UsersRound } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
-import { getAppRoles, getEmployeeRoles, getTeamMembers } from '@/lib/supabase/database'
+import { getAppRoles, getEmployeeRoles, getTeamMemberDepartments, getTeamMembersPage } from '@/lib/supabase/database'
 import type { AppRoleRow, EmployeeRole, Profile } from '@/lib/supabase/types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import { EmptyState, InlineAlert, LoadingState, Panel, inputClassName } from '@/components/ui/page'
 
 type StatusFilter = 'active' | 'inactive' | 'all'
@@ -26,11 +28,15 @@ function Initials({ member }: { member: Profile }) {
   )
 }
 
+const PAGE_SIZE = 24
+
 export function TeamDirectory() {
   const { can } = useAuth()
   const [members, setMembers] = useState<Profile[]>([])
+  const [total, setTotal] = useState(0)
   const [roles, setRoles] = useState<AppRoleRow[]>([])
   const [employeeRoles, setEmployeeRoles] = useState<EmployeeRole[]>([])
+  const [departmentOptions, setDepartmentOptions] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -38,28 +44,58 @@ export function TeamDirectory() {
   const [roleFilter, setRoleFilter] = useState('all')
   const [departmentFilter, setDepartmentFilter] = useState('all')
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
+  const [page, setPage] = useState(1)
 
   // Only users who can manage the team are allowed to see inactive members.
   // Everyone else sees the active team only — inactive people never appear as
   // active team members (and never appear at all for regular staff).
   const canManage = can('employee.manage') || can('admin.manage')
 
+  const debouncedSearch = useDebouncedValue(search, 300)
+
+  // The role filter is expressed in display names; resolve it to the dynamic
+  // role id and/or the legacy role key for the server-side query.
+  const selectedRoleId = useMemo(() => {
+    if (roleFilter === 'all') return 'all'
+    return roles.find((r) => r.name === roleFilter)?.id || 'all'
+  }, [roles, roleFilter])
+
+  const selectedRoleKey = useMemo(() => {
+    if (roleFilter === 'all') return 'all'
+    const legacy = (Object.entries(ROLE_LABELS).find(([, label]) => label === roleFilter) || [])[0]
+    return legacy || 'all'
+  }, [roleFilter])
+
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const [membersRes, rolesRes, empRolesRes] = await Promise.all([
-      getTeamMembers(),
+    const [membersRes, rolesRes, empRolesRes, departmentsRes] = await Promise.all([
+      getTeamMembersPage({
+        search: debouncedSearch,
+        roleId: selectedRoleId,
+        roleKey: selectedRoleKey,
+        department: departmentFilter,
+        status: canManage ? statusFilter : 'active',
+        page,
+        pageSize: PAGE_SIZE,
+      }),
       getAppRoles(),
       getEmployeeRoles(),
+      getTeamMemberDepartments(),
     ])
     setMembers(membersRes.data || [])
+    setTotal(membersRes.total)
     setRoles(rolesRes.data || [])
     setEmployeeRoles(empRolesRes.data || [])
+    setDepartmentOptions(departmentsRes.data || [])
     setError(membersRes.error || '')
     setLoading(false)
-  }, [])
+  }, [debouncedSearch, selectedRoleId, selectedRoleKey, departmentFilter, statusFilter, canManage, page])
 
   useEffect(() => { void load() }, [load])
+
+  // Search / filter changes start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedSearch, roleFilter, departmentFilter, statusFilter])
 
   const roleMap = useMemo(() => new Map(roles.map((r) => [r.id, r])), [roles])
   const employeeRoleMap = useMemo(() => new Map(employeeRoles.map((r) => [r.id, r])), [employeeRoles])
@@ -68,10 +104,6 @@ export function TeamDirectory() {
     const fromRoleSystem = member.role_id ? roleMap.get(member.role_id)?.name : undefined
     return fromRoleSystem || ROLE_LABELS[member.role] || member.role
   }, [roleMap])
-
-  const memberDepartment = useCallback((member: Profile): string => {
-    return member.department || member.specialization || ''
-  }, [])
 
   const memberJobTitle = useCallback((member: Profile): string => {
     if (member.job_title) return member.job_title
@@ -85,45 +117,14 @@ export function TeamDirectory() {
     return jobRole?.name || ''
   }, [employeeRoleMap])
 
-  // Defence in depth: never render client accounts, regardless of what the
-  // database returns. Users without management powers only ever see active members.
-  const visibleMembers = useMemo(() => {
-    return members
-      .filter((member) => member.role !== 'client')
-      .filter((member) => (canManage ? true : member.status === 'active'))
-  }, [members, canManage])
-
   const roleOptions = useMemo(() => {
-    const names = [...new Set(visibleMembers.map((member) => displayRoleName(member)))]
-    return names.sort((a, b) => a.localeCompare(b))
-  }, [visibleMembers, displayRoleName])
+    const names = new Set<string>([
+      ...roles.filter((r) => r.key !== 'client' && r.is_active).map((r) => r.name),
+      ...Object.values(ROLE_LABELS),
+    ])
+    return [...names].sort((a, b) => a.localeCompare(b))
+  }, [roles])
 
-  const departmentOptions = useMemo(() => {
-    const names = [...new Set(visibleMembers.map((member) => memberDepartment(member)).filter(Boolean))]
-    return names.sort((a, b) => a.localeCompare(b))
-  }, [visibleMembers, memberDepartment])
-
-  const filtered = useMemo(() => {
-    const query = search.trim().toLowerCase()
-    return visibleMembers.filter((member) => {
-      if (roleFilter !== 'all' && displayRoleName(member) !== roleFilter) return false
-      if (departmentFilter !== 'all' && memberDepartment(member) !== departmentFilter) return false
-      if (statusFilter === 'active' && member.status !== 'active') return false
-      if (statusFilter === 'inactive' && member.status !== 'inactive') return false
-      if (!query) return true
-      const haystack = [
-        member.full_name,
-        member.email,
-        memberJobTitle(member),
-        member.specialization,
-        member.department,
-        member.bio,
-      ].filter(Boolean).join(' ').toLowerCase()
-      return haystack.includes(query)
-    })
-  }, [visibleMembers, search, roleFilter, departmentFilter, statusFilter, displayRoleName, memberDepartment, memberJobTitle])
-
-  const activeCount = useMemo(() => visibleMembers.filter((m) => m.status === 'active').length, [visibleMembers])
   const hasFilters = search.trim() !== '' || roleFilter !== 'all' || departmentFilter !== 'all' || statusFilter !== 'active'
 
   const resetFilters = () => {
@@ -195,8 +196,8 @@ export function TeamDirectory() {
         </div>
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-5 py-3 text-xs text-text-tertiary">
           <span>
-            {filtered.length} of {activeCount} active member{activeCount === 1 ? '' : 's'}
-            {canManage && statusFilter !== 'active' ? ` (status: ${statusFilter})` : ''}
+            {total} member{total === 1 ? '' : 's'}
+            {!canManage ? ' · showing active members' : statusFilter !== 'active' ? ` · status: ${statusFilter}` : ''}
           </span>
           {hasFilters && (
             <button type="button" onClick={resetFilters} className="text-accent hover:underline">
@@ -207,7 +208,7 @@ export function TeamDirectory() {
       </Panel>
 
       {/* Cards */}
-      {filtered.length === 0 ? (
+      {members.length === 0 ? (
         <Panel>
           <EmptyState
             icon={UsersRound}
@@ -217,7 +218,7 @@ export function TeamDirectory() {
         </Panel>
       ) : (
         <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3" aria-label="Team members">
-          {filtered.map((member) => {
+          {members.map((member) => {
             const inactive = member.status !== 'active'
             const jobTitle = memberJobTitle(member)
             const specialization = memberSpecialization(member)
@@ -267,6 +268,9 @@ export function TeamDirectory() {
             )
           })}
         </ul>
+      )}
+      {members.length > 0 && (
+        <Pagination page={page} pageSize={PAGE_SIZE} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), Math.max(1, Math.ceil(total / PAGE_SIZE))))} />
       )}
     </div>
   )

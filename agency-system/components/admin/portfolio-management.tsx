@@ -14,6 +14,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Search,
   Star,
   Tag,
   Trash2,
@@ -29,7 +30,7 @@ import {
   deletePortfolioImage,
   deletePortfolioProject,
   getPortfolioCategories,
-  getPortfolioProjects,
+  getPortfolioProjectsPage,
   reorderPortfolioProjects,
   setPortfolioProjectCoverImage,
   updatePortfolioCategory,
@@ -37,6 +38,8 @@ import {
   uploadPortfolioImage,
 } from '@/lib/supabase/database'
 import { validateFile, STORAGE_RULES } from '@/lib/storage-config'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import type { PortfolioCategory, PortfolioProject, PortfolioProjectWithRelations } from '@/lib/supabase/types'
 import {
   EmptyState,
@@ -105,11 +108,16 @@ export function PortfolioManagement() {
   const { user, can } = useAuth()
   const canManage = can('portfolio.manage')
   const [projects, setProjects] = useState<PortfolioProjectWithRelations[]>([])
+  const [total, setTotal] = useState(0)
   const [categories, setCategories] = useState<PortfolioCategory[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [search, setSearch] = useState('')
+  const [categoryFilter, setCategoryFilter] = useState('all')
+  const [stateFilter, setStateFilter] = useState<'all' | 'published' | 'draft' | 'archived'>('all')
+  const [page, setPage] = useState(1)
   const [projectModalOpen, setProjectModalOpen] = useState(false)
   const [editingProject, setEditingProject] = useState<PortfolioProjectWithRelations | null>(null)
   const [projectForm, setProjectForm] = useState<ProjectForm>(emptyProjectForm)
@@ -118,20 +126,29 @@ export function PortfolioManagement() {
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null)
   const [editingCategoryName, setEditingCategoryName] = useState('')
 
+  const debouncedSearch = useDebouncedValue(search, 300)
+
   const load = useCallback(async () => {
     if (!canManage) {
       setLoading(false)
       return
     }
     setLoading(true)
-    const [projectResult, categoryResult] = await Promise.all([getPortfolioProjects(), getPortfolioCategories(true)])
+    const [projectResult, categoryResult] = await Promise.all([
+      getPortfolioProjectsPage({ search: debouncedSearch, categoryId: categoryFilter, state: stateFilter, page, pageSize: 20 }),
+      getPortfolioCategories(true),
+    ])
     setProjects(projectResult.data)
+    setTotal(projectResult.total)
     setCategories(categoryResult.data)
     setError(projectResult.error || categoryResult.error || '')
     setLoading(false)
-  }, [canManage])
+  }, [canManage, debouncedSearch, categoryFilter, stateFilter, page])
 
   useEffect(() => { void load() }, [load])
+
+  // Search / filter changes start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedSearch, categoryFilter, stateFilter])
 
   const activeCategories = useMemo(() => categories.filter((category) => category.is_active), [categories])
 
@@ -262,11 +279,19 @@ export function PortfolioManagement() {
   const moveProject = async (index: number, direction: -1 | 1) => {
     const targetIndex = index + direction
     if (targetIndex < 0 || targetIndex >= projects.length) return
+    const current = projects[index]
+    const target = projects[targetIndex]
+    if (!current || !target) return
+    // Swap only the two adjacent display_order values — safe on any page of a
+    // paginated list, unlike renumbering the entire collection.
     const reordered = [...projects]
-    const [moved] = reordered.splice(index, 1)
-    reordered.splice(targetIndex, 0, moved)
+    reordered[index] = { ...target, display_order: current.display_order }
+    reordered[targetIndex] = { ...current, display_order: target.display_order }
     setProjects(reordered)
-    const result = await reorderPortfolioProjects(reordered.map((project, position) => ({ id: project.id, display_order: position })))
+    const result = await reorderPortfolioProjects([
+      { id: current.id, display_order: target.display_order },
+      { id: target.id, display_order: current.display_order },
+    ])
     if (result.error) {
       setError(result.error)
       await load()
@@ -355,16 +380,47 @@ export function PortfolioManagement() {
         title="Portfolio projects"
         description="Public visibility is controlled by Published. Draft, unpublished, and archived projects stay private under Supabase RLS."
       >
-        <div className="flex flex-col gap-3 border-b border-border p-5 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <p className="text-sm font-semibold text-fg">{projects.length} project{projects.length === 1 ? '' : 's'}</p>
-            <p className="mt-1 text-xs text-text-tertiary">Use the arrows to control the public grid order.</p>
+        <div className="flex flex-col gap-3 border-b border-border p-5 xl:flex-row xl:items-center xl:justify-between">
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="relative w-full max-w-56">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+              <input
+                placeholder="Search projects…"
+                className={`${inputClassName} pl-9`}
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                aria-label="Search portfolio projects"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-fg"
+                  aria-label="Clear portfolio search"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </button>
+              )}
+            </div>
+            <select aria-label="Filter by category" className={`${inputClassName} w-44`} value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="all">All categories</option>
+              {activeCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+            </select>
+            <select aria-label="Filter by state" className={`${inputClassName} w-40`} value={stateFilter} onChange={(event) => setStateFilter(event.target.value as 'all' | 'published' | 'draft' | 'archived')}>
+              <option value="all">All states</option>
+              <option value="published">Published</option>
+              <option value="draft">Drafts</option>
+              <option value="archived">Archived</option>
+            </select>
           </div>
-          <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New portfolio project</button>
+          <div className="flex items-center gap-3">
+            <p className="text-xs text-text-tertiary">{total} project{total === 1 ? '' : 's'} · arrows control the public grid order</p>
+            <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> New portfolio project</button>
+          </div>
         </div>
 
         {projects.length === 0 ? (
-          <EmptyState icon={ImagePlus} title="No portfolio projects yet" description="Create a project, add images, and publish it when it is ready for the public site." action={<button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> Create first project</button>} />
+          <EmptyState icon={ImagePlus} title={total ? 'No portfolio projects match' : 'No portfolio projects yet'} description={total ? 'Try different search text or filters.' : 'Create a project, add images, and publish it when it is ready for the public site.'} action={!total ? <button onClick={openCreate} className={primaryButtonClassName}><Plus className="h-4 w-4" /> Create first project</button> : undefined} />
         ) : (
           <div className="divide-y divide-border">
             {projects.map((project, index) => {
@@ -401,6 +457,9 @@ export function PortfolioManagement() {
               )
             })}
           </div>
+        )}
+        {projects.length > 0 && (
+          <Pagination page={page} pageSize={20} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), Math.max(1, Math.ceil(total / 20))))} />
         )}
       </Panel>
 

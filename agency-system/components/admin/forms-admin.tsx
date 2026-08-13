@@ -13,17 +13,21 @@ import {
   Plus,
   Power,
   PowerOff,
+  Search,
   Trash2,
+  X,
 } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import {
   createFormTemplate,
   deleteFormTemplate,
   duplicateFormTemplate,
-  getFormTemplates,
+  getFormTemplatesPage,
   updateFormTemplate,
 } from '@/lib/supabase/database'
 import type { FormStatus, FormTemplateWithCounts } from '@/lib/supabase/types'
+import { useDebouncedValue } from '@/lib/use-debounced-value'
+import { Pagination } from '@/components/ui/pagination'
 import { EmptyState, InlineAlert, LoadingState, Modal, Panel, inputClassName, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 
 // ── Admin · Forms ────────────────────────────────────────────────────────────
@@ -53,23 +57,33 @@ export function FormsAdmin() {
   const { can } = useAuth()
   const canManage = can('form.manage')
   const [templates, setTemplates] = useState<FormTemplateWithCounts[]>([])
+  const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
+  const [search, setSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState<'all' | FormStatus>('all')
+  const [page, setPage] = useState(1)
   const [createOpen, setCreateOpen] = useState(false)
   const [createForm, setCreateForm] = useState({ title: '', description: '' })
   const [creating, setCreating] = useState(false)
 
+  const debouncedSearch = useDebouncedValue(search, 300)
+
   const load = useCallback(async () => {
     setLoading(true)
-    const result = await getFormTemplates()
+    const result = await getFormTemplatesPage({ search: debouncedSearch, status: statusFilter, page, pageSize: 25 })
     setTemplates(result.data)
+    setTotal(result.total)
     setError(result.error || '')
     setLoading(false)
-  }, [])
+  }, [debouncedSearch, statusFilter, page])
 
   useEffect(() => { void load() }, [load])
+
+  // Search / filter changes start again from page 1.
+  useEffect(() => { setPage(1) }, [debouncedSearch, statusFilter])
 
   const run = async (id: string, action: () => Promise<{ error: string | null }>, success: string) => {
     setBusy(id)
@@ -138,8 +152,37 @@ export function FormsAdmin() {
       title="Form templates"
       description="Build and publish Dynamic Forms. Respondents answer them at their public link — every form, question, and option below lives in the database, not in code."
     >
-      <div className="flex items-center justify-between gap-3 border-b border-border p-5">
-        <p className="text-xs text-text-tertiary">{templates.length} form{templates.length === 1 ? '' : 's'}</p>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border p-5">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="relative w-full max-w-64">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-text-tertiary" />
+            <input
+              placeholder="Search forms…"
+              className={`${inputClassName} pl-9`}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              aria-label="Search forms"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-tertiary hover:text-fg"
+                aria-label="Clear form search"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          <select aria-label="Filter by status" className={`${inputClassName} w-40`} value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as 'all' | FormStatus)}>
+            <option value="all">All statuses</option>
+            <option value="draft">Draft</option>
+            <option value="published">Enabled</option>
+            <option value="disabled">Disabled</option>
+            <option value="archived">Archived</option>
+          </select>
+          <p className="text-xs text-text-tertiary">{total} form{total === 1 ? '' : 's'}</p>
+        </div>
         {canManage && (
           <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}>
             <Plus className="h-4 w-4" /> New form
@@ -159,9 +202,9 @@ export function FormsAdmin() {
       ) : templates.length === 0 ? (
         <EmptyState
           icon={ClipboardList}
-          title="No forms yet"
-          description="Create your first form with the button above, add questions in the builder, then enable it and share its public link."
-          action={canManage ? <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Create the first form</button> : undefined}
+          title={total ? 'No forms match' : 'No forms yet'}
+          description={total ? 'Try different search text or a different status filter.' : 'Create your first form with the button above, add questions in the builder, then enable it and share its public link.'}
+          action={!total && canManage ? <button className={primaryButtonClassName} onClick={() => setCreateOpen(true)}><Plus className="h-4 w-4" /> Create the first form</button> : undefined}
         />
       ) : (
         <div className="divide-y divide-border">
@@ -215,6 +258,9 @@ export function FormsAdmin() {
             )
           })}
         </div>
+      )}
+      {templates.length > 0 && (
+        <Pagination page={page} pageSize={25} total={total} onChange={(next) => setPage(Math.min(Math.max(1, next), Math.max(1, Math.ceil(total / 25))))} />
       )}
 
       <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create a new form" description="The form starts as a draft. Add questions in the builder, then enable it to share its public link.">

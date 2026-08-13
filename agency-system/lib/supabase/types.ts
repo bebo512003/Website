@@ -962,6 +962,20 @@ export interface Database {
       unarchive_project: { Args: { p_project_id: string }; Returns: ProjectRow }
       project_completion_blockers: { Args: { p_project_id: string }; Returns: string[] }
       get_public_submission_tracking: { Args: { p_tracking_key: string }; Returns: PublicSubmissionTracking | null }
+      get_submission_inbox_page: {
+        Args: {
+          p_search?: string | null
+          p_status?: string | null
+          p_reviewer_mode?: string | null
+          p_reviewer_id?: string | null
+          p_form_id?: string | null
+          p_sort?: string
+          p_page?: number
+          p_page_size?: number
+        }
+        Returns: { data: Json; total: number }
+      }
+      get_submission_pipeline_counts: { Args: Record<string, never>; Returns: { total: number; by_status: Json; assigned_to_me: number } }
       generate_submission_reference: { Args: Record<string, never>; Returns: string }
       get_client_portal_projects: { Args: Record<string, never>; Returns: ClientPortalProjectRow[] }
       get_client_portal_project: { Args: { p_project_id: string }; Returns: ClientPortalProjectRow[] }
