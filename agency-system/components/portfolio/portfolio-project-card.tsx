@@ -1,16 +1,20 @@
 import Link from 'next/link'
-import { ArrowUpRight, ImageIcon } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import type { PortfolioProjectWithRelations } from '@/lib/supabase/types'
+import { coverImageRecord, portfolioImageAlt } from '@/lib/public/portfolio-media'
+import { PortfolioImage } from '@/components/public/portfolio-image'
 
-function projectImage(project: PortfolioProjectWithRelations) {
-  if (project.cover_image_path) {
-    return project.portfolio_project_images.find((image) => image.storage_path === project.cover_image_path)?.image_url || null
-  }
-  return project.portfolio_project_images[0]?.image_url || null
-}
-
-export function PortfolioProjectCard({ project, featured = false }: { project: PortfolioProjectWithRelations; featured?: boolean }) {
-  const image = projectImage(project)
+export function PortfolioProjectCard({
+  project,
+  featured = false,
+  priority = false,
+}: {
+  project: PortfolioProjectWithRelations
+  featured?: boolean
+  priority?: boolean
+}) {
+  const cover = coverImageRecord(project)
+  const alt = portfolioImageAlt(project, cover?.alt_text, 'cover')
 
   return (
     <Link
@@ -18,12 +22,13 @@ export function PortfolioProjectCard({ project, featured = false }: { project: P
       className={`group block overflow-hidden border border-white/10 bg-white/[0.035] transition duration-300 hover:-translate-y-1 hover:border-accent/60 hover:bg-white/[0.06] ${featured ? 'md:col-span-2' : ''}`}
     >
       <div className={`relative overflow-hidden bg-surface-raised ${featured ? 'aspect-[16/9]' : 'aspect-[4/3]'}`}>
-        {image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={image} alt={project.title} className="h-full w-full object-cover transition duration-700 group-hover:scale-105" />
-        ) : (
-          <div className="flex h-full items-center justify-center bg-gradient-to-br from-surface-raised via-surface-overlay to-accent/20"><ImageIcon className="h-8 w-8 text-white/30" strokeWidth={1} /></div>
-        )}
+        <PortfolioImage
+          src={cover?.image_url}
+          alt={alt}
+          priority={priority}
+          sizes={featured ? '(min-width: 768px) 80vw, 100vw' : '(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw'}
+          className="transition duration-700 group-hover:scale-105"
+        />
         <span className="absolute left-4 top-4 border border-white/20 bg-black/60 px-2.5 py-1 font-mono-tech text-[10px] text-white/80 backdrop-blur-sm">
           {project.portfolio_categories?.name || 'Selected work'}
         </span>
