@@ -218,7 +218,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
     const result = await deleteFormTemplate(template.id)
     setBusy(false)
     if (result.error) return setError(result.error)
-    router.replace('/admin')
+    router.replace('/admin/forms')
   }
 
   const copyLink = async () => {

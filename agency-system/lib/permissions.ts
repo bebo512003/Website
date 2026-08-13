@@ -149,10 +149,15 @@ export type RoutePermissionRule = {
 // Longest matching prefix wins. Public pages (/forms, /f/*, /portfolio, /)
 // never consult this list because AppShell renders them outside the staff shell.
 export const ROUTE_PERMISSIONS: RoutePermissionRule[] = [
-  { prefix: '/admin/forms', anyOf: ['form.manage', 'form.view', 'submission.view'] },
+  { prefix: '/admin/forms', anyOf: ['form.manage', 'form.view'] },
+  { prefix: '/admin/submissions', anyOf: ['submission.view'] },
   { prefix: '/admin/portfolio', anyOf: ['portfolio.manage'] },
+  { prefix: '/admin/access', anyOf: ['role.view', 'role.assign_permissions', 'permission.view', 'permission.manage'] },
   { prefix: '/admin/roles', anyOf: ['role.view', 'role.assign_permissions', 'permission.view', 'permission.manage'] },
   { prefix: '/admin/team', anyOf: ['employee.manage', 'employee.edit'] },
+  { prefix: '/admin/clients', anyOf: ['client.view'] },
+  { prefix: '/admin/projects', anyOf: ['project.view'] },
+  { prefix: '/admin/operations', anyOf: ['admin.manage', 'project.assign', 'role.create'] },
   { prefix: '/admin', anyOf: ADMIN_AREA_PERMISSIONS },
   { prefix: '/submissions', anyOf: ['submission.view'] },
   { prefix: '/team', anyOf: ['employee.view'] },
