@@ -7,21 +7,21 @@ import { LoaderCircle, ShieldOff, ShieldAlert, UserX, LogOut, Home } from 'lucid
 import { Sidebar } from './sidebar'
 import { TopBar } from './topbar'
 import { ForcedPasswordChangeScreen } from './forced-password-change'
-import { useAccent } from '@/contexts/accent-context'
+import { useTheme } from '@/contexts/theme-context'
 import { useAuth } from '@/contexts/auth-context'
 import { secondaryButtonClassName, primaryButtonClassName } from '@/components/ui/page'
 import { firstAllowedStaffPath, pathAllowed } from '@/lib/permissions'
 
-function LoadingScreen({ style, label = 'Loading your workspace…' }: { style: Record<string, string>; label?: string }) {
+function LoadingScreen({ label = 'Loading your workspace…' }: { label?: string }) {
   return (
-    <div className="flex min-h-screen items-center justify-center gap-3 bg-bg text-sm text-text-secondary" style={style}>
+    <div className="flex min-h-screen items-center justify-center gap-3 bg-bg text-sm text-text-secondary">
       <LoaderCircle className="h-5 w-5 animate-spin text-accent" />
       {label}
     </div>
   )
 }
 
-function DeactivatedScreen({ style }: { style: Record<string, string> }) {
+function DeactivatedScreen() {
   const router = useRouter()
   const { signOut } = useAuth()
 
@@ -31,7 +31,7 @@ function DeactivatedScreen({ style }: { style: Record<string, string> }) {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5">
       <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
           <ShieldOff className="h-6 w-6 text-accent" />
@@ -49,7 +49,7 @@ function DeactivatedScreen({ style }: { style: Record<string, string> }) {
   )
 }
 
-function AccountRemovedScreen({ style }: { style: Record<string, string> }) {
+function AccountRemovedScreen() {
   const router = useRouter()
   const { signOut } = useAuth()
 
@@ -59,7 +59,7 @@ function AccountRemovedScreen({ style }: { style: Record<string, string> }) {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5">
       <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
           <UserX className="h-6 w-6 text-accent" />
@@ -77,9 +77,9 @@ function AccountRemovedScreen({ style }: { style: Record<string, string> }) {
   )
 }
 
-function RestrictedScreen({ style, fallbackHref }: { style: Record<string, string>; fallbackHref: string }) {
+function RestrictedScreen({ fallbackHref }: { fallbackHref: string }) {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5">
       <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 text-center shadow-2xl">
         <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-md border border-border bg-surface-raised">
           <ShieldAlert className="h-6 w-6 text-accent" />
@@ -100,26 +100,21 @@ function RestrictedScreen({ style, fallbackHref }: { style: Record<string, strin
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
-  const { accent } = useAccent()
+  const { theme } = useTheme()
   const { user, profile, profileLoaded, isClient, isDeactivated, mustChangePassword, isAnonymous, loading, can, permissionsLoaded } = useAuth()
   const isAuthPage = pathname === '/auth'
   // Published dynamic forms are public respondent pages (/f/<slug>).
   const isPublicFormPage = pathname.startsWith('/f/')
-  // The public forms listing page (/forms) is for selecting and requesting projects.
+  // The public project desk (/forms) is for new requests and follow-up.
   const isFormsPage = pathname === '/forms'
   // The company portfolio is intentionally outside the authenticated staff shell.
   const isPortfolioPage = pathname === '/portfolio' || pathname.startsWith('/portfolio/')
-  const isTrackPage = pathname === '/track' || pathname.startsWith('/track/')
   const isPortalPage = pathname === '/portal' || pathname.startsWith('/portal/')
-  // The root is a public Client Landing Page. Staff users are routed to the
-  // dashboard so the landing stays client-focused for visitors.
   const isLandingPage = pathname === '/'
-  const isStaffDashboard = pathname === '/dashboard'
   const isServicesPage = pathname === '/services'
-  // The client landing page, public portfolio, public forms listing, public forms,
-  // public tracking, services redirect, and the auth screen are the only publicly reachable pages.
-  // Everything else sits behind the staff shell.
-  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage || isTrackPage || isServicesPage
+  // Legacy URLs redirect before reaching the shell. Public portfolio detail
+  // pages and the project desk remain outside workspace access gates.
+  const isPublicPage = isLandingPage || isAuthPage || isFormsPage || isPublicFormPage || isPortfolioPage || isServicesPage
 
   useEffect(() => {
     if (loading) return
@@ -132,69 +127,62 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
     if (!user || isAnonymous || !profile) return
 
-    // Signed-in staff members are routed to the dashboard from the root so the
-    // landing page always reads as a client-facing entry point.
-    if (!isClient && isLandingPage && !isStaffDashboard) {
+    // A plain visit to / takes staff to the dashboard. An explicit section
+    // link (including the portfolio editor's /#work) opens the public site.
+    if (!isClient && isLandingPage && !window.location.hash) {
       router.replace('/dashboard')
       return
     }
 
     // Client accounts never see staff pages; they are routed to the client portal.
-    if (isClient && !isPortalPage && !isFormsPage && !isAuthPage && !isPublicFormPage && !isPortfolioPage && !isLandingPage && !isTrackPage && !isServicesPage) {
+    if (isClient && !isPortalPage && !isPublicPage) {
       router.replace('/portal')
       return
     }
 
     // Team members have no business on the client portal.
     if (!isClient && isPortalPage) router.replace('/dashboard')
-  }, [isAuthPage, isClient, isFormsPage, isAnonymous, isLandingPage, isPortfolioPage, isPortalPage, isPublicFormPage, isPublicPage, isServicesPage, isStaffDashboard, isTrackPage, loading, profile, router, user])
+  }, [isClient, isAnonymous, isLandingPage, isPortalPage, isPublicPage, loading, profile, router, user])
 
-  const style = {
-    ['--accent' as string]: accent.hsl,
-    ['--accent-glow' as string]: accent.glow,
-  }
+  // PublicPage provides its own landmarks and navigation. Keep the workspace
+  // access gates below separate from the public routes.
+  if (isPublicPage) return children
 
-  // Public pages render without the workspace shell but still expose a main
-  // landmark so a screen reader (or the skip link) can jump straight to the
-  // primary content.
-  if (isAuthPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
-  if (isFormsPage || isPublicFormPage || isPortfolioPage || isLandingPage || isTrackPage || isServicesPage) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
-
-  if (loading || !user || isAnonymous) return <LoadingScreen style={style} />
+  if (loading || !user || isAnonymous) return <LoadingScreen />
 
   // A signed-in, non-anonymous user whose profile is gone was removed from the
   // workspace (deletion deletes profile + Auth account; this covers live sessions).
-  if (profileLoaded && !profile) return <AccountRemovedScreen style={style} />
+  if (profileLoaded && !profile) return <AccountRemovedScreen />
 
   // Inactive accounts lose all workspace functionality (RLS blocks the data too,
   // and the Auth sign-in ban rejects new logins).
-  if (isDeactivated) return <DeactivatedScreen style={style} />
+  if (isDeactivated) return <DeactivatedScreen />
 
   // Accounts still holding their temporary password cannot reach any workspace
   // page — including /profile — until they replace it. The database enforces the
   // same block by withholding all permissions while the flag is pending. Client
   // portal accounts go through the same gate so a temporary password is never
   // left in place.
-  if (mustChangePassword) return <ForcedPasswordChangeScreen style={style} />
+  if (mustChangePassword) return <ForcedPasswordChangeScreen />
 
   if (isPortalPage) {
-    if (isClient) return <div style={style}><SkipToMain /><main id="main-content">{children}</main></div>
-    return <LoadingScreen style={style} />
+    if (isClient) return <div><SkipToMain /><main id="main-content">{children}</main></div>
+    return <LoadingScreen />
   }
 
   // Clients are never allowed into the staff shell; redirect is in flight.
-  if (isClient) return <LoadingScreen style={style} />
+  if (isClient) return <LoadingScreen />
 
   // Route-level authorization: a user who lacks every permission accepted by a
   // page is blocked even if they type the URL. RLS enforces the same rule in
   // the database, so this is defence-in-depth, not the only guard.
   const routeAllowed = pathAllowed(pathname, can)
   if (permissionsLoaded && !routeAllowed) {
-    return <RestrictedScreen style={style} fallbackHref={firstAllowedStaffPath(can)} />
+    return <RestrictedScreen fallbackHref={firstAllowedStaffPath(can)} />
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-bg text-fg" style={style}>
+    <div className="flex h-screen overflow-hidden bg-bg text-fg" data-workspace-theme={theme}>
       <SkipToMain />
       <Sidebar />
       <div className="relative z-10 flex min-w-0 flex-1 flex-col overflow-hidden">

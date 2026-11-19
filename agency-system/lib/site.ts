@@ -1,12 +1,12 @@
 import type { Metadata } from 'next'
 
-export const SITE_NAME = 'Agency OS'
-export const SITE_TAGLINE = 'Creative studio'
-export const SITE_DEFAULT_TITLE = 'Agency OS — Build something extraordinary'
+export const SITE_NAME = 'Beshoy Ashraf'
+export const SITE_TAGLINE = 'Brands, Engineered.'
+export const SITE_DEFAULT_TITLE = `${SITE_NAME} — ${SITE_TAGLINE}`
 export const SITE_DEFAULT_DESCRIPTION =
-  'Start a new project, browse our portfolio of published work, and access the forms you need — all without an account.'
+  'Brand identity design for founders and growing businesses in Egypt and the Gulf. Explore the work or share a project brief.'
 
-/** ISR window for public catalog pages (landing, forms, portfolio). */
+/** Cache window for the published forms catalog. */
 export const PUBLIC_REVALIDATE_SECONDS = 120
 
 export function getSiteUrl(): string {
@@ -65,3 +65,20 @@ export function pageMetadata({
     },
   }
 }
+
+export const SITE_NAME_AR = 'بيشوي أشرف'
+export const SITE_MOTTO_AR = 'خليك تقيل… عشان الخفيف بيطير.'
+
+export const SELECTED_WORK_PATH = '/#work'
+export const PROJECT_DESK_PATH = '/forms'
+
+export function projectDeskPath(lang: 'en' | 'ar' = 'en') {
+  return `${PROJECT_DESK_PATH}${lang === 'ar' ? '?lang=ar' : ''}#request`
+}
+
+export const SITE_NAVIGATION = [
+  { key: 'services', href: '/#services', sectionId: 'services', en: 'Services', ar: 'الخدمات' },
+  { key: 'portfolio', href: SELECTED_WORK_PATH, sectionId: 'work', en: 'Portfolio', ar: 'الأعمال' },
+  { key: 'forms', href: PROJECT_DESK_PATH, sectionId: 'available-forms', en: 'Project desk', ar: 'طلبات المشاريع' },
+  { key: 'contact', href: '#contact', sectionId: 'contact', en: 'Contact', ar: 'التواصل' },
+] as const

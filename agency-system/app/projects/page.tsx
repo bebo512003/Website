@@ -232,7 +232,7 @@ export default function ProjectsPage() {
               <option value="deadline">Deadline soonest</option>
             </select>
             <label className="flex items-center gap-2 text-xs text-text-secondary">
-              <input type="checkbox" className="h-4 w-4 accent-[hsl(var(--accent))]" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              <input type="checkbox" className="h-4 w-4 accent-accent" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
               Archived ({counts.archived})
             </label>
             <p className="text-xs text-text-tertiary">{total} result{total === 1 ? '' : 's'}</p>
@@ -298,7 +298,7 @@ export default function ProjectsPage() {
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {activeTeam.map((member) => (
                     <label key={member.id} className="flex cursor-pointer items-start gap-2 rounded border border-border bg-surface p-2.5 text-xs text-text-secondary hover:border-line-light">
-                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[hsl(var(--accent))]" checked={teamMemberIds.includes(member.id)} onChange={() => toggleTeamMember(member.id)} />
+                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-accent" checked={teamMemberIds.includes(member.id)} onChange={() => toggleTeamMember(member.id)} />
                       <span>{displayName(member)}</span>
                     </label>
                   ))}

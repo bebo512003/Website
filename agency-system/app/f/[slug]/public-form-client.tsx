@@ -1,19 +1,21 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
-import Link from 'next/link'
-import { ArrowLeft, LoaderCircle, Send, ShieldCheck } from 'lucide-react'
+import { ArrowRight, LoaderCircle, Send, ShieldCheck } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { uploadFormFile } from '@/lib/db'
 import type { FormQuestion, FormSubmissionRow, PublicFormTemplate } from '@/lib/supabase/types'
 import { DynamicFormRenderer } from '@/components/forms/dynamic-form-renderer'
 import { SubmissionConfirmation } from '@/components/forms/submission-confirmation'
+import { RequestSteps } from '@/components/forms/request-steps'
 import { TurnstileWidget } from '@/components/forms/turnstile-widget'
 import { isAnswerEmpty, isQuestionVisible, ratingMax, type AnswerMap, type AnswerValue, type UploadedFileMeta } from '@/lib/forms/question-types'
 import { validateFile } from '@/lib/storage-config'
-import { InlineAlert, primaryButtonClassName } from '@/components/ui/page'
-import { PublicSiteHeader } from '@/components/public/public-site-header'
-import { PublicSiteFooter } from '@/components/public/public-site-footer'
+import { projectDeskPath } from '@/lib/site'
+import { publicTrackingPath } from '@/lib/submissions'
+import { InlineAlert, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
+import { PublicPage } from '@/components/public/public-page'
+import { PublicPageIntro, PublicNote, PublicWorkArea, publicPanelClassName } from '@/components/public/public-page-sections'
 
 // ── Public dynamic form page ─────────────────────────────────────────────────
 // Renders any published form straight from the database. An admin can create a
@@ -106,6 +108,10 @@ export function PublicFormClient({
   const [cooldownRemaining, setCooldownRemaining] = useState(0)
   const cooldownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const submitTimeRef = useRef<number>(0)
+
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('lang') === 'ar') setLang('ar')
+  }, [])
 
   // Best-effort anonymous session for rate-limit identity. Submit never waits
   // on this — a hang or 422 must not freeze the form.
@@ -314,20 +320,12 @@ export function PublicFormClient({
     setErrorDebug('')
   }
 
-  // ── Success / Confirmation View (Session 16) ────────────────────────────
+  const isAr = lang === 'ar'
+  const backLink = { href: projectDeskPath(lang), label: i18n.backToForms }
+
   if (done) {
     return (
-      <div className="relative min-h-screen bg-bg">
-        <PublicSiteHeader
-          activeKey="forms"
-          lang={lang}
-          onLangChange={setLang}
-          backLink={{
-            href: '/forms',
-            label: i18n.backToForms,
-          }}
-        />
-
+      <PublicPage activeKey="forms" lang={lang} onLangChange={setLang} backLink={backLink}>
         <SubmissionConfirmation
           submission={submittedData || {
             id: 'mock',
@@ -335,70 +333,55 @@ export function PublicFormClient({
             submitted_at: new Date().toISOString(),
           }}
           formTitle={template.title}
-          formDescription={template.description}
           lang={lang}
           onReset={reset}
           cooldownRemaining={cooldownRemaining}
         />
-        <PublicSiteFooter />
-      </div>
+      </PublicPage>
     )
   }
 
-  // ── Form ─────────────────────────────────────────────────────────────────
   return (
-    <div className="relative min-h-screen bg-bg">
-      <PublicSiteHeader
-        activeKey="forms"
-        lang={lang}
-        onLangChange={setLang}
-        backLink={{
-          href: '/forms',
-          label: i18n.backToForms,
-        }}
+    <PublicPage activeKey="forms" lang={lang} onLangChange={setLang} backLink={backLink}>
+      <PublicPageIntro
+        eyebrow={isAr ? 'طلب مشروع' : 'Project brief'}
+        title={template.title}
+        description={template.description || i18n.noAccount}
+        backLink={backLink}
+        compact
       />
-
-      <div className="mx-auto max-w-3xl px-4 py-7 sm:px-5 sm:py-9" dir={lang === 'ar' ? 'rtl' : 'ltr'}>
-        <Link href="/forms" className="inline-flex min-h-10 items-center gap-2 text-xs text-text-secondary transition hover:text-fg sm:hidden">
-          <ArrowLeft className="h-3.5 w-3.5" /> {i18n.backToForms}
-        </Link>
-
-        <ol className="mb-8 mt-3 grid grid-cols-3 gap-2" aria-label={lang === 'ar' ? 'خطوات إرسال الطلب' : 'Request steps'}>
-          {[
-            lang === 'ar' ? 'اختيار النموذج' : 'Select form',
-            lang === 'ar' ? 'تعبئة النموذج' : 'Fill form',
-            lang === 'ar' ? 'إرسال الطلب' : 'Submit',
-          ].map((label, index) => (
-            <li key={label} className={`border-t-2 pt-2 text-[10px] sm:text-xs ${index === 1 ? 'border-accent font-semibold text-fg' : 'border-border text-text-tertiary'}`}>
-              <span className="me-1 font-mono-tech">0{index + 1}</span> {label}
-            </li>
-          ))}
-        </ol>
-
-        <div className="mb-8">
-          <h1 className="break-words font-display text-[clamp(2.5rem,12vw,3.5rem)] leading-none tracking-tight text-fg">{template.title}</h1>
-          {template.description && <p className="mt-3 text-sm leading-6 text-text-secondary">{template.description}</p>}
-          <p className="mt-4 flex items-start gap-2 rounded-md border border-border bg-surface px-4 py-3 text-xs leading-5 text-text-secondary">
-            <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-accent" /> {i18n.noAccount}
-          </p>
-        </div>
+      <PublicWorkArea aside={(
+        <PublicNote
+          eyebrow={isAr ? 'بعد الإرسال' : 'After you submit'}
+          title={isAr ? 'احتفظ بالرقم المرجعي' : 'Keep your reference number.'}
+          action={<a href={publicTrackingPath(undefined, lang)} className={secondaryButtonClassName}>
+            {isAr ? 'تتبع طلبًا سابقًا' : 'Track an existing request'} <ArrowRight className="size-4 rtl:rotate-180" aria-hidden="true" />
+          </a>}
+        >
+          {isAr
+            ? 'ستجد الرقم المرجعي على شاشة التأكيد. استخدمه لمتابعة حالة طلبك دون إنشاء حساب.'
+            : 'Your reference appears on the confirmation screen. Use it to check the status of your request — no account needed.'}
+        </PublicNote>
+      )}>
+        <RequestSteps lang={lang} current={2} className="mb-6" />
 
         {(error || errorDebug) && (
           <div className="mb-6 space-y-2">
             {error ? <InlineAlert>{error}</InlineAlert> : null}
             {errorDebug ? (
-              <p className="break-all rounded-md border border-border bg-surface px-3 py-2 font-mono text-[11px] leading-5 text-text-tertiary">
+              <p className="break-all rounded-md border border-border bg-surface px-3 py-2 font-mono text-xs leading-5 text-text-tertiary">
                 {errorDebug}
               </p>
             ) : null}
           </div>
         )}
 
-        <form className="rounded-md border border-border bg-surface" onSubmit={(event) => { event.preventDefault(); void submit() }}>
-          <div className="border-b border-border p-4 sm:p-5">
-            <p className="text-xs text-text-tertiary">{i18n.requiredHint}</p>
+        <form className={publicPanelClassName} onSubmit={(event) => { event.preventDefault(); void submit() }}>
+          <div className="border-b border-border px-5 py-4 sm:px-6">
+            <p className="type-label text-text-secondary">{isAr ? 'تفاصيل المشروع' : 'Project details'}</p>
+            <p className="mt-2 text-sm text-text-secondary">{i18n.requiredHint}</p>
           </div>
-          <div className="p-4 sm:p-5">
+          <div className="p-5 sm:p-6">
             {/* ── Session 05: Honeypot field ────────────────────────────────
                 Hidden from human view via CSS. Bots that auto-fill every
                 <input> will populate this, allowing us to silently reject
@@ -442,13 +425,13 @@ export function PublicFormClient({
               errors={errors}
             />
           </div>
-          <div className="flex flex-col items-stretch gap-3 border-t border-border p-4 sm:items-end sm:p-5">
+          <div className="flex flex-col items-stretch gap-3 border-t border-border p-5 sm:items-end sm:p-6">
             {/* ── Session 05: Turnstile widget (invisible when configured) ─ */}
             <TurnstileWidget onVerify={setTurnstileToken} className="mb-1" />
 
             <div className="flex flex-col-reverse gap-3 sm:flex-row sm:items-center">
               {process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY && (
-                <span className="flex items-center justify-center gap-1 text-[10px] text-text-tertiary">
+                <span className="flex items-center justify-center gap-1 text-xs text-text-tertiary">
                   <ShieldCheck className="h-3 w-3" />
                   Protected
                 </span>
@@ -464,10 +447,8 @@ export function PublicFormClient({
             </div>
           </div>
         </form>
-      </div>
-
-      <PublicSiteFooter />
-    </div>
+      </PublicWorkArea>
+    </PublicPage>
   )
 }
 

@@ -3,6 +3,7 @@
 // exist is the form_submissions.status CHECK constraint in Postgres; this module
 // only labels and colours them for the UI.
 import type { SubmissionStatus } from '@/lib/supabase/types'
+import { PROJECT_DESK_PATH } from '@/lib/site'
 
 export const SUBMISSION_STATUSES: SubmissionStatus[] = [
   'new',
@@ -104,13 +105,23 @@ export function submissionClientLabel(submission: {
 
 // ── Public Tracking & Confirmation Metadata (Session 16) ───────────────────
 
-export const AGENCY_CONTACT = {
-  email: 'support@agencyos.studio',
-  phone: '+1 (555) 019-2834',
-  hours: 'Monday – Friday, 9:00 AM – 6:00 PM EST',
-  hoursAr: 'من الإثنين إلى الجمعة، 9:00 ص – 6:00 م',
-  expectedResponse: '1–2 business days (24–48 hours)',
-  expectedResponseAr: 'خلال 1–2 يوم عمل (24–48 ساعة)',
+export function publicTrackingPath(reference?: string, lang: 'en' | 'ar' = 'en') {
+  const params = new URLSearchParams()
+  if (reference) params.set('ref', reference)
+  if (lang === 'ar') params.set('lang', 'ar')
+  const query = params.toString()
+  return `${PROJECT_DESK_PATH}${query ? `?${query}` : ''}#track`
+}
+
+export const CLIENT_STATUS_LABELS_AR: Record<SubmissionStatus, string> = {
+  new: 'تم الاستلام',
+  reviewing: 'قيد المراجعة',
+  need_information: 'نحتاج إلى تفاصيل إضافية',
+  qualified: 'تم التأهيل',
+  approved: 'تم الاعتماد',
+  converted: 'قيد التنفيذ',
+  rejected: 'تعذر قبول الطلب',
+  archived: 'تمت الأرشفة',
 }
 
 export const CLIENT_STATUS_DESCRIPTIONS: Record<string, { en: string; ar: string }> = {

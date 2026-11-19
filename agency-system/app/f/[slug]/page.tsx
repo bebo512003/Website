@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { notFound } from 'next/navigation'
 import { getCachedPublishedFormBySlug, getCachedPublishedForms } from '@/lib/supabase/public-server'
-import { pageMetadata, truncateMeta } from '@/lib/site'
+import { pageMetadata, SITE_NAME, truncateMeta } from '@/lib/site'
 import { PublicFormClient } from './public-form-client'
 
 export const revalidate = 120
@@ -20,14 +20,14 @@ export async function generateMetadata({
   const { template } = await getCachedPublishedFormBySlug(slug)
   if (!template) {
     return pageMetadata({
-      title: 'Form not found — Agency OS',
+      title: `Form not found — ${SITE_NAME}`,
       description: 'This project request form is not available.',
       path: `/f/${slug}`,
       noIndex: true,
     })
   }
   return pageMetadata({
-    title: `${template.title} — Agency OS`,
+    title: `${template.title} — ${SITE_NAME}`,
     description: truncateMeta(template.description) || `Complete the ${template.title} form without creating an account.`,
     path: `/f/${template.slug}`,
   })

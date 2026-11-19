@@ -1,31 +1,35 @@
 import Link from 'next/link'
-import { ArrowRight, ArrowUpRight, FileText } from 'lucide-react'
+import { ArrowUpRight, FileText } from 'lucide-react'
 import type { PublicFormTemplateSummary } from '@/lib/supabase/types'
+import { PROJECT_DESK_PATH } from '@/lib/site'
+import { secondaryButtonClassName } from '@/components/ui/page'
 
-export function PublishedFormCard({
-  form,
-  compact = false,
-}: {
+export function PublishedFormCard({ form, compact = false, lang = 'en', openInDesk = false }: {
   form: PublicFormTemplateSummary
   compact?: boolean
+  lang?: 'en' | 'ar'
+  openInDesk?: boolean
 }) {
+  const isAr = lang === 'ar'
+  const href = `${openInDesk ? PROJECT_DESK_PATH : `/f/${form.slug}`}${isAr ? '?lang=ar' : ''}`
+  const label = openInDesk
+    ? (isAr ? 'افتح النموذج من صفحة طلبات المشاريع' : 'Open form in Project desk')
+    : (isAr ? `افتح نموذج ${form.title}` : `Open ${form.title}`)
   const questionCount = form.form_questions?.[0]?.count ?? 0
+  const countLabel = isAr ? `عدد الأسئلة: ${questionCount.toLocaleString('ar-EG')}` : `${questionCount} ${questionCount === 1 ? 'question' : 'questions'}`
   return (
-    <article className="group flex flex-col gap-4 rounded-md border border-border bg-surface p-6 transition hover:border-line-light hover:shadow-lg">
-      <div className="flex items-center justify-between gap-3">
-        <h3 className={`min-w-0 break-words font-semibold text-fg ${compact ? 'text-base' : 'text-lg'}`}>{form.title}</h3>
-        <span className="rounded border border-green-500/30 bg-green-500/5 px-1.5 py-0.5 font-mono-tech text-[9px] text-green-400">LIVE</span>
+    <article className="flex min-w-0 flex-col gap-4 border border-border bg-surface p-6 transition-colors hover:border-line-light">
+      <div className="flex items-center justify-between gap-3 border-b border-border pb-4">
+        <FileText className="size-5 shrink-0 text-fg" strokeWidth={1.5} aria-hidden="true" />
+        <p className="type-label text-text-secondary">{countLabel}</p>
       </div>
-      {form.description && <p className="line-clamp-2 text-sm leading-5 text-text-secondary">{form.description}</p>}
-      <p className="font-mono-tech text-[10px] text-text-tertiary">
-        {questionCount} QUESTIONS · NO ACCOUNT REQUIRED
-      </p>
-      <Link
-        href={`/f/${form.slug}`}
-        className={`mt-auto inline-flex items-center gap-2 self-start rounded-md border border-accent bg-accent font-semibold text-accent-foreground transition hover:brightness-110 ${compact ? 'px-4 py-2.5 text-xs' : 'px-5 py-2.5 text-sm'}`}
-      >
-        <FileText className={compact ? 'h-3.5 w-3.5' : 'h-4 w-4'} /> Open form {compact ? <ArrowUpRight className="h-3.5 w-3.5" /> : <ArrowRight className="h-4 w-4" />}
-      </Link>
+      <h3 className={`wrap-anywhere font-semibold text-fg ${compact ? 'text-base' : 'text-lg'}`}><bdi>{form.title}</bdi></h3>
+      {form.description && <p className="line-clamp-2 text-sm text-text-secondary"><bdi>{form.description}</bdi></p>}
+      <div className="mt-auto pt-2">
+        <Link href={href} aria-label={label} className={secondaryButtonClassName}>
+          {isAr ? 'افتح النموذج' : 'Open form'} <ArrowUpRight className="size-4 rtl:-scale-x-100" aria-hidden="true" />
+        </Link>
+      </div>
     </article>
   )
 }

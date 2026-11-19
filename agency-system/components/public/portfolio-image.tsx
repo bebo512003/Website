@@ -1,39 +1,47 @@
+'use client'
+
 import Image from 'next/image'
-import { ImageIcon } from 'lucide-react'
+import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
 export function PortfolioImage({
   src,
   alt,
-  priority = false,
-  sizes,
+  fallbackLabel,
   className,
-  fill = true,
+  natural = false,
 }: {
-  src: string | null | undefined
+  src?: string | null
   alt: string
-  priority?: boolean
-  sizes: string
+  fallbackLabel?: string
   className?: string
-  fill?: boolean
+  natural?: boolean
 }) {
-  if (!src) {
-    return (
-      <div className={cn('flex h-full w-full items-center justify-center bg-gradient-to-br from-surface-raised via-surface-overlay to-accent/20', className)}>
-        <ImageIcon className="h-8 w-8 text-white/30" strokeWidth={1} aria-hidden />
-      </div>
-    )
-  }
+  // A changed cover gets a fresh image state, even after the old URL failed.
+  return <ImageFrame key={src} src={src} alt={alt} fallbackLabel={fallbackLabel} className={className} natural={natural} />
+}
 
+function ImageFrame({ src, alt, fallbackLabel, className, natural }: Parameters<typeof PortfolioImage>[0]) {
+  const [failed, setFailed] = useState(false)
+  const visible = Boolean(src && !failed)
   return (
-    <Image
-      src={src}
-      alt={alt}
-      fill={fill}
-      sizes={sizes}
-      priority={priority}
-      loading={priority ? 'eager' : 'lazy'}
-      className={cn('object-cover', className)}
-    />
+    <div className={cn('relative overflow-hidden rounded-lg border border-border bg-surface-raised', !visible && 'min-h-24', className)}>
+      {src && !failed ? (
+        /* Uploaded images stay on the public-authorized image endpoint. The
+           original Behance files also go straight to the browser, unmodified. */
+        natural ? (
+          // The intrinsic proportions of remote art are not known in advance.
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={src} alt={alt} loading="lazy" decoding="async" className="mx-auto block h-auto max-w-full" onError={() => setFailed(true)} />
+        ) : (
+          <Image src={src} alt={alt} fill unoptimized className="object-contain" onError={() => setFailed(true)} />
+        )
+      ) : (
+        <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 p-3 text-center">
+          <span className="font-display text-lg font-black tracking-tight text-text-tertiary">{fallbackLabel || 'Portfolio project'}</span>
+          <span className="text-xs text-text-secondary">{src ? 'Image unavailable' : 'No cover image'}</span>
+        </div>
+      )}
+    </div>
   )
 }

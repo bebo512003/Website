@@ -1,0 +1,24 @@
+.heroLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  align-items: center;
+}
+
+.portrait {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 28rem;
+  height: auto;
+  border: 1px solid var(--signal-red);
+}
+
+@media (max-width: 47.999rem) {
+  .heroLayout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .portrait {
+    grid-row: 2;
+  }
+}

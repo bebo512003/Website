@@ -340,7 +340,7 @@ export function SubmissionConversionModal({
                 <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                   {activeTeam.map((member) => (
                     <label key={member.id} className="flex cursor-pointer items-start gap-2 rounded border border-border bg-surface p-2.5 text-xs text-text-secondary hover:border-line-light">
-                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-[hsl(var(--accent))]" checked={draft.teamMemberIds.includes(member.id)} onChange={() => toggleTeamMember(member.id)} />
+                      <input type="checkbox" className="mt-0.5 h-4 w-4 accent-accent" checked={draft.teamMemberIds.includes(member.id)} onChange={() => toggleTeamMember(member.id)} />
                       <span>{displayName(member)}</span>
                     </label>
                   ))}

@@ -1388,6 +1388,9 @@ export type Database = {
         created_by: string | null
         created_at: string
         updated_at: string
+        subtitle: string | null
+        cover_image_url: string | null
+        detail_image_url: string | null
         }
         Insert: {
         id?: string
@@ -1407,6 +1410,9 @@ export type Database = {
         created_by?: string | null
         created_at?: string
         updated_at?: string
+        subtitle?: string | null
+        cover_image_url?: string | null
+        detail_image_url?: string | null
         }
         Update: {
         id?: string
@@ -1426,6 +1432,9 @@ export type Database = {
         created_by?: string | null
         created_at?: string
         updated_at?: string
+        subtitle?: string | null
+        cover_image_url?: string | null
+        detail_image_url?: string | null
         }
         Relationships: [
           {
@@ -2534,6 +2543,13 @@ export type Database = {
         }
         Returns: Json
       }
+      get_public_portfolio_entries: {
+        Args: {
+          p_selected_only?: boolean | null
+          p_slug?: string | null
+        }
+        Returns: Record<string, unknown>[]
+      }
       get_public_portfolio_project: {
         Args: {
           p_slug: string | null
@@ -2936,6 +2952,13 @@ export type Database = {
           p_answers: Json | null
         }
         Returns: Database['public']['Tables']['form_submissions']['Row']
+      }
+      swap_portfolio_project_order: {
+        Args: {
+          p_project_id: string | null
+          p_neighbor_id: string | null
+        }
+        Returns: undefined
       }
       sync_delivery_on_project_status: {
         Args: Record<PropertyKey, never>

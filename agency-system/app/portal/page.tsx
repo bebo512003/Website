@@ -13,8 +13,9 @@ import {
 import type { ClientFormSubmission, ClientPortalClient, ClientPortalProject } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, primaryButtonClassName, secondaryButtonClassName } from '@/components/ui/page'
 import { Progress } from '@/components/ui/progress'
+import { PublicEyebrow } from '@/components/public/public-page-sections'
 import { PROJECT_STATUS_LABELS, projectStatusBadgeClass } from '@/lib/project-lifecycle'
-import { SUBMISSION_STATUS_LABELS, submissionStatusStyle } from '@/lib/submissions'
+import { publicTrackingPath, SUBMISSION_STATUS_LABELS, submissionStatusStyle } from '@/lib/submissions'
 
 type Summary = {
   total: number
@@ -71,11 +72,8 @@ export default function ClientPortalPage() {
   return (
     <div className="mx-auto max-w-4xl space-y-7 px-5 py-8">
       <header className="border-b border-border pb-7">
-        <div className="mb-3 flex items-center gap-3 font-mono-tech text-[10px] text-text-tertiary">
-          <span className="h-px w-7 bg-accent" />
-          CLIENT ACCOUNT
-        </div>
-        <h1 className="font-display text-5xl leading-none tracking-tight text-fg sm:text-6xl">
+        <PublicEyebrow className="mb-4">Client account</PublicEyebrow>
+        <h1 className="type-h1 text-fg">
           Welcome, {displayName.split(' ')[0]}<span className="text-text-tertiary">.</span>
         </h1>
         <p className="mt-3 flex items-center gap-2 text-sm text-text-secondary">
@@ -115,7 +113,7 @@ export default function ClientPortalPage() {
                     <div className="flex items-center gap-2">
                       <p className="truncate text-sm font-semibold text-fg">{project.name}</p>
                       {project.reference_number && (
-                        <span className="font-mono-tech rounded border border-border bg-surface-raised px-1.5 py-0.5 text-[10px] text-accent">
+                        <span className="font-mono-tech rounded border border-border bg-surface-raised px-1.5 py-0.5 text-xs text-accent">
                           {project.reference_number}
                         </span>
                       )}
@@ -125,7 +123,7 @@ export default function ClientPortalPage() {
                       {project.due_date ? ` · due ${new Date(project.due_date).toLocaleDateString()}` : ''}
                     </p>
                   </div>
-                  <span className={`inline-flex w-fit shrink-0 items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${projectStatusBadgeClass(project.status)}`}>
+                  <span className={`inline-flex w-fit shrink-0 items-center rounded border px-2.5 py-1 text-xs font-semibold ${projectStatusBadgeClass(project.status)}`}>
                     {PROJECT_STATUS_LABELS[project.status]}
                   </span>
                 </div>
@@ -161,7 +159,7 @@ export default function ClientPortalPage() {
                         {submission.form_templates?.title || 'Service request'}
                       </p>
                       {submission.reference_number && (
-                        <span className="font-mono-tech rounded border border-border bg-surface-raised px-1.5 py-0.5 text-[10px] text-accent">
+                        <span className="font-mono-tech rounded border border-border bg-surface-raised px-1.5 py-0.5 text-xs text-accent">
                           {submission.reference_number}
                         </span>
                       )}
@@ -171,16 +169,16 @@ export default function ClientPortalPage() {
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${submissionStatusStyle(submission.status)}`}>
+                    <span className={`inline-flex w-fit items-center rounded border px-2.5 py-1 text-xs font-semibold ${submissionStatusStyle(submission.status)}`}>
                       {SUBMISSION_STATUS_LABELS[submission.status as keyof typeof SUBMISSION_STATUS_LABELS] || submission.status}
                     </span>
                     {submission.reference_number && (
-                      <Link
-                        href={`/track?ref=${encodeURIComponent(submission.reference_number)}`}
-                        className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-[11px] font-medium text-text-secondary hover:border-line-light hover:text-fg"
+                      <a
+                        href={publicTrackingPath(submission.reference_number)}
+                        className="inline-flex items-center rounded border border-border bg-surface px-2 py-1 text-xs font-medium text-text-secondary hover:border-line-light hover:text-fg"
                       >
                         Track
-                      </Link>
+                      </a>
                     )}
                   </div>
                 </div>
@@ -208,7 +206,7 @@ function StatCard({ icon: Icon, label, value }: { icon: typeof FolderKanban; lab
   return (
     <div className="rounded-md border border-border bg-surface p-4">
       <Icon className="h-4 w-4 text-accent" />
-      <p className="mt-3 font-display text-3xl leading-none text-fg">{value}</p>
+      <p className="mt-3 font-mono text-3xl leading-none text-fg">{value}</p>
       <p className="mt-1 text-xs text-text-tertiary">{label}</p>
     </div>
   )

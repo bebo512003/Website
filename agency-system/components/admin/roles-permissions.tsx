@@ -63,7 +63,7 @@ function PermissionGrid({
                   ref={(el) => { if (el) el.indeterminate = someChecked }}
                   onChange={() => onToggleCategory(group.items.map((permission) => permission.key), !allChecked)}
                   aria-label={`Select all ${group.label} permissions`}
-                  className="h-3.5 w-3.5 accent-[hsl(var(--accent))]"
+                  className="h-3.5 w-3.5 accent-accent"
                 />
                 {group.label}
               </label>
@@ -78,7 +78,7 @@ function PermissionGrid({
                     disabled={disabled}
                     onChange={(event) => onToggleKey(permission.key, event.target.checked)}
                     aria-label={permission.name}
-                    className="mt-0.5 h-4 w-4 shrink-0 accent-[hsl(var(--accent))]"
+                    className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
                   />
                   <span>
                     <span className="block font-medium leading-tight text-fg">{permission.name}</span>
@@ -418,7 +418,7 @@ export function RolesPermissionsAdmin() {
                         <input aria-label="Role name" className={inputClassName} value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} disabled={!can('role.edit')} />
                         <input aria-label="Role description" className={inputClassName} value={editForm.description} onChange={(event) => setEditForm({ ...editForm, description: event.target.value })} placeholder="Description" disabled={!can('role.edit')} />
                         <label className="flex items-center gap-2 text-xs text-text-secondary">
-                          <input type="checkbox" checked={editForm.is_active} onChange={(event) => setEditForm({ ...editForm, is_active: event.target.checked })} disabled={!can('role.edit')} className="h-4 w-4 accent-[hsl(var(--accent))]" />
+                          <input type="checkbox" checked={editForm.is_active} onChange={(event) => setEditForm({ ...editForm, is_active: event.target.checked })} disabled={!can('role.edit')} className="h-4 w-4 accent-accent" />
                           Active
                         </label>
                       </div>

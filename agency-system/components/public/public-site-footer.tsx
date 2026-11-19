@@ -1,116 +1,45 @@
 import Link from 'next/link'
-import { Zap } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { ArrowUpRight } from 'lucide-react'
+import { SITE_NAME, SITE_NAME_AR, SITE_NAVIGATION } from '@/lib/site'
+import { BrandLockup } from './brand'
+import { ContactLinks } from './contact-links'
+import { PublicLink } from './public-link'
 
-export function PublicSiteFooter({ variant = 'standard' }: { variant?: 'standard' | 'dark' | 'light' }) {
-  const isDark = variant === 'dark'
+export function PublicSiteFooter({ lang = 'en' }: { lang?: 'en' | 'ar' }) {
+  const isAr = lang === 'ar'
+  const name = isAr ? SITE_NAME_AR : SITE_NAME
 
   return (
-    <footer
-      className={cn(
-        'w-full border-t transition-colors duration-200',
-        isDark
-          ? 'border-white/10 bg-[#080808] text-white'
-          : 'border-border bg-bg text-fg'
-      )}
-    >
-      <div className="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-10 sm:flex-row sm:items-center sm:justify-between sm:px-6 lg:px-8">
-        {/* Brand Logo in Footer */}
-        <Link
-          href="/"
-          className="group flex items-center gap-3 transition-opacity hover:opacity-90"
-          aria-label="Agency OS — Back to home"
-        >
-          <span
-            className={cn(
-              'flex h-8 w-8 items-center justify-center rounded-md border text-accent transition-colors group-hover:border-accent',
-              isDark
-                ? 'border-white/20 bg-white/[0.05]'
-                : 'border-line-light bg-surface-raised'
-            )}
-          >
-            <Zap className="h-4 w-4" />
-          </span>
-          <div className="flex flex-col">
-            <span
-              className={cn(
-                'text-sm font-bold tracking-[0.22em] leading-tight transition-colors',
-                isDark ? 'text-white' : 'text-fg'
-              )}
-            >
-              AGENCY OS
-            </span>
-            <span
-              className={cn(
-                'font-mono-tech text-[8px] tracking-[0.2em] leading-tight transition-colors',
-                isDark ? 'text-white/40' : 'text-text-tertiary'
-              )}
-            >
-              CREATIVE STUDIO
-            </span>
+    <footer className="border-t border-border bg-bg" dir={isAr ? 'rtl' : 'ltr'} lang={lang}>
+      <div className="site-container">
+        <div className="grid gap-8 py-12 sm:grid-cols-2 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1.1fr)_minmax(0,0.7fr)] lg:gap-10 lg:py-16">
+          <div>
+            <Link href="/" aria-label={isAr ? `${name} — الرئيسية` : `${name} — Home`} className="inline-flex">
+              <BrandLockup lang={lang} />
+            </Link>
+            <p className="mt-4 max-w-64 text-sm text-text-secondary">
+              {isAr ? 'تصميم هويات للمؤسسين والشركات النامية في مصر والخليج.' : 'Brand identity design for founders and growing businesses in Egypt and the Gulf.'}
+            </p>
           </div>
-        </Link>
-
-        {/* Canonical Footer Navigation Links */}
-        <nav
-          className="flex flex-wrap items-center gap-x-6 gap-y-2 text-xs"
-          aria-label="Footer navigation"
-        >
-          <Link
-            href="/#services"
-            className={cn(
-              'transition-colors',
-              isDark ? 'text-white/60 hover:text-white' : 'text-text-secondary hover:text-fg'
-            )}
-          >
-            Services
+          <div id="contact" className="min-w-0 scroll-mt-24">
+            <h2 className="type-label text-text-secondary">{isAr ? 'التواصل' : 'Contact'}</h2>
+            <ContactLinks lang={lang} className="mt-2" />
+          </div>
+          <div>
+            <h2 className="type-label text-text-secondary">{isAr ? 'استكشف' : 'Explore'}</h2>
+            <ul className="mt-3 grid gap-1">
+              {SITE_NAVIGATION.filter((link) => link.key !== 'contact').map((link) => (
+                <li key={link.key}><PublicLink href={link.href} className="inline-block py-1 text-sm text-fg hover:underline hover:underline-offset-4">{link[lang]}</PublicLink></li>
+              ))}
+            </ul>
+          </div>
+        </div>
+        <div className="flex flex-wrap items-center justify-between gap-4 border-t border-border py-5 text-xs text-text-secondary">
+          <span>© {new Date().getFullYear()} {name}</span>
+          <Link href="/auth" className="inline-flex items-center gap-1.5 text-fg hover:underline hover:underline-offset-4">
+            {isAr ? 'دخول الفريق والعملاء' : 'Team and client login'} <ArrowUpRight className="size-3.5 rtl:-scale-x-100" aria-hidden="true" />
           </Link>
-          <Link
-            href="/portfolio"
-            className={cn(
-              'transition-colors',
-              isDark ? 'text-white/60 hover:text-white' : 'text-text-secondary hover:text-fg'
-            )}
-          >
-            Portfolio
-          </Link>
-          <Link
-            href="/forms"
-            className={cn(
-              'transition-colors',
-              isDark ? 'text-white/60 hover:text-white' : 'text-text-secondary hover:text-fg'
-            )}
-          >
-            Available forms
-          </Link>
-          <Link
-            href="/track"
-            className={cn(
-              'transition-colors',
-              isDark ? 'text-white/60 hover:text-white' : 'text-text-secondary hover:text-fg'
-            )}
-          >
-            Track request
-          </Link>
-          <Link
-            href="/auth"
-            className={cn(
-              'transition-colors',
-              isDark ? 'text-white/60 hover:text-white' : 'text-text-secondary hover:text-fg'
-            )}
-          >
-            Login
-          </Link>
-        </nav>
-
-        <p
-          className={cn(
-            'font-mono-tech text-[9px] tracking-wider',
-            isDark ? 'text-white/40' : 'text-text-tertiary'
-          )}
-        >
-          © {new Date().getFullYear()} AGENCY OS. ALL RIGHTS RESERVED.
-        </p>
+        </div>
       </div>
     </footer>
   )

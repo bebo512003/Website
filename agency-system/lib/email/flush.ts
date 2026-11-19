@@ -13,7 +13,9 @@
 
 import { createClient } from '@supabase/supabase-js'
 import type { Database, EmailOutboxRow, EmailTemplateKey, Json } from '@/lib/supabase/types'
-import { renderEmailTemplate } from '@/lib/email/templates'
+import { isClientEmailTemplate, renderEmailTemplate } from '@/lib/email/templates'
+import { SITE_CONTACT } from '@/lib/contact'
+import { SITE_NAME } from '@/lib/site'
 
 const RESEND_API_URL = 'https://api.resend.com/emails'
 const BATCH_SIZE = 25
@@ -40,7 +42,7 @@ function getServerConfig() {
 }
 
 export function getEmailIdentity() {
-  const brandName = process.env.EMAIL_BRAND_NAME || 'Agency OS'
+  const brandName = process.env.EMAIL_BRAND_NAME || SITE_NAME
   const fromAddress = process.env.EMAIL_FROM_ADDRESS || 'onboarding@resend.dev'
   const fromName = process.env.EMAIL_FROM_NAME || brandName
   return { brandName, fromAddress, fromName, from: `${fromName} <${fromAddress}>` }
@@ -62,6 +64,7 @@ async function sendViaResend(apiKey: string, email: {
   html: string
   text: string
   messageId: string
+  replyTo?: string
 }): Promise<string> {
   const response = await fetch(RESEND_API_URL, {
     method: 'POST',
@@ -72,6 +75,7 @@ async function sendViaResend(apiKey: string, email: {
     body: JSON.stringify({
       from: email.from,
       to: [email.to],
+      ...(email.replyTo ? { reply_to: email.replyTo } : {}),
       subject: email.subject,
       html: email.html,
       text: email.text,
@@ -221,6 +225,7 @@ async function sendOutboxRow(
     html: rendered.html,
     text: rendered.text,
     messageId: row.id,
+    replyTo: isClientEmailTemplate(knownTemplate) ? SITE_CONTACT.email : undefined,
   })
 
   const { error } = await service
