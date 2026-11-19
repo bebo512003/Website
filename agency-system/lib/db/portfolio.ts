@@ -9,7 +9,7 @@ import { validateFile, sanitizeFileName, STORAGE_RULES } from '../storage-config
 import type { PortfolioCategory, PortfolioCategoryInsert, PortfolioCategoryUpdate, PortfolioProject, PortfolioProjectImage, PortfolioProjectInsert, PortfolioProjectUpdate, PortfolioProjectWithRelations } from '../supabase/types'
 // Public company portfolio
 
-const PORTFOLIO_ADMIN_SELECT = `id, title, slug, cover_image_path, description, client_name, category_id, services, project_date, external_url, featured, published, archived, display_order, portfolio_categories(id, name, slug, is_active), portfolio_project_images(id, project_id, storage_path, alt_text, display_order)`
+const PORTFOLIO_ADMIN_SELECT = `id, title, slug, subtitle, cover_image_path, cover_image_url, detail_image_url, description, client_name, category_id, services, project_date, external_url, featured, published, archived, display_order, portfolio_categories(id, name, slug, is_active), portfolio_project_images(id, project_id, storage_path, alt_text, display_order)`
 
 
 const slugifyPortfolio = (value: string) => {
@@ -38,8 +38,8 @@ async function hydratePortfolioProjects(rows: unknown[]): Promise<PortfolioProje
 export type PortfolioProjectListFilter = {
   search?: string
   categoryId?: string
-  /** 'published' | 'draft' | 'archived' | 'all' (default 'all'). */
-  state?: 'all' | 'published' | 'draft' | 'archived'
+  /** 'selected' | 'published' | 'draft' | 'archived' | 'all' (default 'all'). */
+  state?: 'all' | 'selected' | 'published' | 'draft' | 'archived'
   featured?: boolean
 }
 
@@ -60,12 +60,13 @@ export async function getPortfolioProjectsPage(
   const q = escapeFilterValue(filter.search || '')
   if (q) query = query.or(`title.ilike.*${q}*,client_name.ilike.*${q}*,description.ilike.*${q}*`)
   if (filter.categoryId && filter.categoryId !== 'all') query = query.eq('category_id', filter.categoryId)
-  if (filter.state === 'published') query = query.eq('published', true).eq('archived', false)
+  if (filter.state === 'selected') query = query.eq('featured', true).eq('published', true).eq('archived', false)
+  else if (filter.state === 'published') query = query.eq('published', true).eq('archived', false)
   else if (filter.state === 'draft') query = query.eq('published', false).eq('archived', false)
   else if (filter.state === 'archived') query = query.eq('archived', true)
   if (filter.featured !== undefined) query = query.eq('featured', filter.featured)
 
-  query = query.order('display_order', { ascending: true }).order('created_at', { ascending: false })
+  query = query.order('display_order', { ascending: true }).order('created_at', { ascending: false }).order('id', { ascending: true })
   const result = await executePage<PortfolioProjectWithRelations>(query, page, pageSize)
   if (result.error) return result
   return { ...result, data: await hydratePortfolioProjects(result.data as unknown[]) }
@@ -128,11 +129,9 @@ export async function deletePortfolioProject(id: string): Promise<Result<boolean
 }
 
 
-export async function reorderPortfolioProjects(items: { id: string; display_order: number }[]): Promise<Result<boolean>> {
-  const client = supabase
-  if (!client) return fail(false)
-  const results = await Promise.all(items.map((item) => client.from('portfolio_projects').update({ display_order: item.display_order }).eq('id', item.id)))
-  const error = results.find((result) => result.error)?.error
+export async function swapPortfolioProjectOrder(projectId: string, neighborId: string): Promise<Result<boolean>> {
+  if (!supabase) return fail(false)
+  const { error } = await supabase.rpc('swap_portfolio_project_order', { p_project_id: projectId, p_neighbor_id: neighborId })
   return error ? fail(false, error.message) : ok(true)
 }
 

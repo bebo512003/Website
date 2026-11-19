@@ -1038,38 +1038,87 @@ async function runTeamDirectorySuite(db, ids, label) {
 
 async function runPortfolioSuite(db, ids, label) {
   const { anonVisitor, alice, bob } = ids
+  const home = async () => (await db.query(`select * from public.get_public_portfolio_entries(true)`)).rows
+  const publicDetail = async (slug) => scalar(db, `select * from public.get_public_portfolio_entries(p_slug := $1)`, [slug])
+
+  await asUser(db, anonVisitor, 'anon')
+  const originals = await home()
+  ok(`${label}: original Selected work cards are seeded in order`,
+    originals.map(({ slug }) => slug).join(',') === 'tahatan-holding,meraak,3-girls-fruit,inventionsx')
+  ok(`${label}: imported cards keep their original art, case-study slugs and links`,
+    originals.length === 4 && originals.every((project, index) => {
+      const galleryId = ['257985759', '254584701', '229223805', '235338327'][index]
+      return project.subtitle && project.cover_image_url.includes(galleryId)
+        && project.detail_image_url.includes(galleryId) && project.external_url.includes(`/gallery/${galleryId}/`)
+        && !('created_by' in project)
+    }))
 
   await asUser(db, alice)
-  const category = (await db.query(`select id from public.portfolio_categories where slug = 'branding'`)).rows[0]
-  const draft = (await db.query(`insert into public.portfolio_projects (title, slug, category_id, services) values ('Private Draft', 'private-draft', $1, array['Brand strategy']) returning id`, [category.id])).rows[0]
-  await db.query(`insert into public.portfolio_project_images (project_id, storage_path, uploaded_by) values ($1, 'draft-image/draft.png', $2)`, [draft.id, alice])
-  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('portfolio-images', 'draft-image/draft.png', $1)`, [alice])
+  const category = await scalar(db, `select id from public.portfolio_categories where slug = 'branding'`)
+  const draft = await scalar(db, `insert into public.portfolio_projects (title, slug, featured, category_id, services) values ('Private Draft', 'private-draft', true, $1, array['Brand strategy']) returning id, display_order`, [category.id])
+  const last = originals.at(-1)
+  ok(`${label}: new projects get a position after existing work`, draft.display_order > last.display_order)
+  const imagePath = 'draft-image/draft.png'
+  await db.query(`insert into public.portfolio_project_images (project_id, storage_path, uploaded_by) values ($1, $2, $3)`, [draft.id, imagePath, alice])
+  await db.query(`insert into storage.objects (bucket_id, name, owner_id) values ('portfolio-images', $1, $2)`, [imagePath, alice])
+  ok(`${label}: non-Behance or unsafe linked art cannot be saved`, await expectError(db, () => db.query(
+    `update public.portfolio_projects set cover_image_url = 'https://mir-s3-cdn-cf.behance.net.example.com/projects/x.jpg' where id = $1`, [draft.id])))
 
-  // Staff without the portfolio permission cannot browse or mutate the separate system.
+  // Staff without portfolio.manage can see public content but not drafts, and
+  // can't modify public projects or call the atomic reorder operation.
   await asUser(db, bob)
-  ok(`${label}: employee cannot read an unpublished portfolio project`, (await scalar(db, 'select count(*)::int n from public.portfolio_projects')).n === 0)
-  const employeePublishResult = await db.query(`update public.portfolio_projects set published = true where id = $1 returning id`, [draft.id]).catch(() => ({ rows: [] }))
-  ok(`${label}: employee cannot publish portfolio content`, employeePublishResult.rows.length === 0)
+  ok(`${label}: employee cannot read an unpublished portfolio project`, !(await scalar(db, `select id from public.portfolio_projects where id = $1`, [draft.id])))
+  const employeeEdit = await db.query(`update public.portfolio_projects set title = 'Not authorized' where id = $1 returning id`, [last.id]).catch(() => ({ rows: [] }))
+  ok(`${label}: employee cannot edit a selected project`, employeeEdit.rows.length === 0)
+  ok(`${label}: employee cannot reorder Selected work`, await expectError(db, () => db.query(
+    `select public.swap_portfolio_project_order($1, $2)`, [last.id, originals[0].id])))
 
-  // Anonymous visitors see neither the draft row nor its private image object.
   await asUser(db, anonVisitor, 'anon')
-  ok(`${label}: anonymous visitor cannot read an unpublished project`, (await scalar(db, 'select count(*)::int n from public.get_public_portfolio_projects()')).n === 0)
-  ok(`${label}: anonymous visitor cannot read an unpublished image through the public API`, (await scalar(db, `select coalesce(sum(jsonb_array_length(images)), 0)::int n from public.get_public_portfolio_projects()`)).n === 0)
-  ok(`${label}: anonymous visitor cannot read an unpublished storage object`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
+  ok(`${label}: anonymous visitors cannot reorder Selected work`, await expectError(db, () => db.query(
+    `select public.swap_portfolio_project_order($1, $2)`, [last.id, originals[0].id])))
+  ok(`${label}: unpublished selection and details are private`, (await home()).length === 4 && !(await publicDetail('private-draft')))
+  ok(`${label}: legacy public RPCs still exclude unpublished projects and images`,
+    !(await scalar(db, `select id from public.get_public_portfolio_project('private-draft')`)) &&
+    (await scalar(db, `select coalesce(sum(jsonb_array_length(images)), 0)::int n from public.get_public_portfolio_projects()`)).n === 0)
+  ok(`${label}: unpublished uploads are private in Storage and the public image API`,
+    !(await scalar(db, `select public.is_public_portfolio_image($1) v`, [imagePath])).v &&
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
 
   await asUser(db, alice)
-  await db.query(`update public.portfolio_projects set published = true where id = $1`, [draft.id])
+  await db.query(`update public.portfolio_projects set published = true, featured = false, cover_image_path = $2 where id = $1`, [draft.id, imagePath])
   await asUser(db, anonVisitor, 'anon')
-  ok(`${label}: published portfolio project is publicly readable`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_projects() where slug = 'private-draft'`)).n === 1)
-  ok(`${label}: public project details resolve by slug`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_project('private-draft')`)).n === 1)
-  ok(`${label}: published portfolio image is publicly readable through the narrow API`, (await scalar(db, `select coalesce(sum(jsonb_array_length(images)), 0)::int n from public.get_public_portfolio_projects()`)).n === 1)
-  ok(`${label}: published portfolio image storage object is readable`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 1)
+  const published = await publicDetail('private-draft')
+  ok(`${label}: published but unselected project has a public link, not a home card`, !!published && (await home()).length === 4)
+  ok(`${label}: project details include the chosen cover and only public image metadata`,
+    published?.cover_image_path === imagePath && published?.images[0]?.storage_path === imagePath && !('uploaded_by' in published.images[0]))
+  ok(`${label}: a published upload is accessible through the public image API`,
+    (await scalar(db, `select public.is_public_portfolio_image($1) v`, [imagePath])).v &&
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 1)
 
   await asUser(db, alice)
-  await db.query(`update public.portfolio_projects set published = false, archived = true where id = $1`, [draft.id])
+  await db.query(`update public.portfolio_projects set featured = true, title = 'Published Case Study', subtitle = 'New project' where id = $1`, [draft.id])
+  await db.query(`update public.portfolio_projects set subtitle = 'Updated imported project' where id = $1`, [last.id])
+  await db.query(`select public.swap_portfolio_project_order($1, $2)`, [draft.id, last.id])
   await asUser(db, anonVisitor, 'anon')
-  ok(`${label}: archived portfolio project disappears from public view`, (await scalar(db, `select count(*)::int n from public.get_public_portfolio_projects()`)).n === 0)
-  ok(`${label}: archived portfolio image disappears from public storage`, (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
+  const updated = await home()
+  ok(`${label}: an editor can edit imported cards and reorder newly selected work`,
+    updated.length === 5 && updated[3].id === draft.id && updated[3].title === 'Published Case Study'
+    && updated[3].subtitle === 'New project' && updated[4].id === last.id && updated[4].subtitle === 'Updated imported project')
+
+  await asUser(db, alice)
+  await db.query(`update public.portfolio_projects set published = false where id = $1`, [last.id])
+  await db.query(`update public.portfolio_projects set archived = true where id = $1`, [draft.id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: unpublished imported art and archived projects disappear from both public routes`,
+    (await home()).length === 3 && !(await publicDetail('private-draft')) && !(await publicDetail(last.slug)))
+  ok(`${label}: archiving blocks storage access even if published is still true`,
+    !(await scalar(db, `select public.is_public_portfolio_image($1) v`, [imagePath])).v &&
+    (await scalar(db, `select count(*)::int n from storage.objects where bucket_id = 'portfolio-images'`)).n === 0)
+  await asUser(db, alice)
+  await db.query(`delete from public.portfolio_projects where id = $1`, [originals[0].id])
+  await asUser(db, anonVisitor, 'anon')
+  ok(`${label}: removing an imported project does not regenerate it`,
+    (await home()).length === 2 && !(await publicDetail(originals[0].slug)))
   await superUser(db)
 }
 
@@ -2323,7 +2372,13 @@ async function runSubmissionTrackingSuite(db, ids, label) {
 
   // 6. Verification of payload security: NO internal notes, reviewer ID, or audit logs leaked
   ok(`${label}: public tracking payload contains SLA and contact metadata`,
-    typeof trackingByRef?.expected_response_time === 'string' && typeof trackingByRef?.contact_email === 'string')
+    trackingByRef?.expected_response_time === '1–2 business days'
+      && trackingByRef?.contact_email === 'beshoyashrafoffecial@gmail.com'
+      && trackingByRef?.contact_phone === '+201008239401'
+      && trackingByRef?.contact_whatsapp === 'https://wa.me/201008239401'
+      && trackingByRef?.contact_behance === 'https://www.behance.net/beshoy-ashraf51'
+      && trackingByRef?.contact_linkedin === 'https://www.linkedin.com/in/beshoy-ashraf51/'
+      && trackingByRef?.support_hours === null)
   ok(`${label}: public tracking payload does not leak internal reviewer_id`,
     trackingByRef?.reviewer_id === undefined)
   ok(`${label}: public tracking payload does not leak internal notes or audit events`,
@@ -3396,6 +3451,7 @@ async function main() {
     await expectError(dbB, () => dbB.query(`select public.get_operational_analytics(30)`)))
   await superUser(dbB)
 
+  await runPortfolioSuite(dbB, { anonVisitor: anonVisitorB, alice: aliceB, bob: employeeB }, 'fresh')
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

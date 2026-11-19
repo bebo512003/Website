@@ -30,13 +30,13 @@ export function PageHeader({
     <header className="flex flex-col gap-5 border-b border-border pb-6 sm:flex-row sm:items-end sm:justify-between sm:pb-7">
       <div className="min-w-0">
         {eyebrow && (
-          <div className="mb-3 flex items-center gap-3 font-mono-tech text-[11px] text-text-tertiary">
-            <span className="h-px w-7 bg-accent" aria-hidden="true" />
+          <div className="mb-3 flex items-center gap-3 type-label text-text-tertiary">
+            <span className="h-px w-7 shrink-0 bg-accent" aria-hidden="true" />
             {eyebrow}
           </div>
         )}
-        <h1 className="break-words font-display text-4xl leading-none tracking-tight text-fg sm:text-7xl">
-          {title}<span className="text-text-tertiary" aria-hidden="true">.</span>
+        <h1 className="type-h1 break-words text-fg">
+          {title}
         </h1>
         {description && <p className="mt-3 max-w-2xl text-sm leading-6 text-text-secondary">{description}</p>}
       </div>
@@ -58,7 +58,6 @@ export function Panel({
 }) {
   return (
     <section className={cn('relative overflow-hidden rounded-md border border-border bg-surface', className)}>
-      <span className="absolute left-0 top-0 h-px w-full bg-gradient-to-r from-accent/60 via-accent/10 to-transparent" aria-hidden="true" />
       {(title || description) && (
         <div className="border-b border-border px-5 py-4">
           {title && <h2 className="text-sm font-semibold text-fg">{title}</h2>}
@@ -150,7 +149,7 @@ export function InlineAlert({
   )
 }
 
-export const inputClassName = 'min-h-11 w-full rounded-md border border-border bg-surface-raised px-3 py-2.5 text-base text-fg outline-none placeholder:text-text-tertiary focus:border-accent focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm'
-export const primaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50'
-export const secondaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-border bg-surface px-4 py-2.5 text-sm font-medium text-text-secondary transition hover:border-line-light hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50'
+export const inputClassName = 'min-h-11 w-full border border-line-light bg-surface-raised px-3 py-2.5 text-base text-fg outline-none placeholder:text-text-tertiary focus:border-accent focus-visible:ring-2 focus-visible:ring-accent disabled:cursor-not-allowed disabled:opacity-60 sm:text-sm'
+export const primaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 border border-primary bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:border-text-secondary hover:bg-text-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50'
+export const secondaryButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 border border-border bg-transparent px-4 py-2.5 text-sm font-medium text-fg transition-colors hover:border-line-light hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50'
 export const destructiveButtonClassName = 'inline-flex min-h-11 items-center justify-center gap-2 rounded-md border border-red-500/50 bg-red-500/10 px-4 py-2.5 text-sm font-semibold text-red-200 transition hover:bg-red-500/20 hover:text-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2 focus-visible:ring-offset-bg disabled:cursor-not-allowed disabled:opacity-50'

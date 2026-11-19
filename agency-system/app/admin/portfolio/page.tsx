@@ -29,7 +29,7 @@ export default function AdminPortfolioPage() {
       <PageHeader
         eyebrow="ADMIN / PORTFOLIO"
         title="Portfolio"
-        description="Anyone with Manage portfolio can publish, archive, and reorder public work. This page is not locked behind Manage system."
+        description="Add and edit projects, choose their cover images, and control what appears in Selected work on your homepage."
       />
       <AdminSectionNav />
       <PortfolioManagement />

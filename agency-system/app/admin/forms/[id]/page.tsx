@@ -447,7 +447,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                           if (ok) setDetails({ ...details, create_project_on_submit: true })
                         })
                       }}
-                      className="mt-0.5 h-4 w-4 accent-[hsl(var(--accent))]"
+                      className="mt-0.5 h-4 w-4 accent-accent"
                     />
                     <span><strong className="text-amber-300">Admin automation:</strong> auto-create a project on public submit (requires a mapped e-mail). Leave off for the normal Qualified / Approved → Convert to Project workflow.</span>
                   </span>
@@ -536,7 +536,7 @@ export default function FormBuilderPage({ params }: { params: Promise<{ id: stri
                             </label>
                           )}
                           <label className="flex items-center gap-2 text-xs text-text-secondary">
-                            <input type="checkbox" checked={editForm.required} onChange={(e) => setEditForm({ ...editForm, required: e.target.checked })} className="h-4 w-4 accent-[hsl(var(--accent))]" />
+                            <input type="checkbox" checked={editForm.required} onChange={(e) => setEditForm({ ...editForm, required: e.target.checked })} className="h-4 w-4 accent-accent" />
                             Required question
                           </label>
 

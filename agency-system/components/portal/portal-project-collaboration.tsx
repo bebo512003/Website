@@ -69,7 +69,6 @@ export function PortalProjectCollaboration({
       {message && <InlineAlert tone="success">{message}</InlineAlert>}
 
       <section className="relative overflow-hidden rounded-md border border-border bg-surface">
-        <span className="absolute left-0 top-0 h-px w-full bg-gradient-to-r from-accent/60 via-accent/10 to-transparent" />
         <div className="border-b border-border px-5 py-4">
           <h2 className="text-sm font-semibold text-fg">Shared files & deliverables</h2>
           <p className="mt-1 text-xs text-text-tertiary">
@@ -90,7 +89,7 @@ export function PortalProjectCollaboration({
                   <p className="truncate text-sm font-semibold text-fg">
                     {file.name}
                     {file.source !== 'shared' && (
-                      <span className="ml-2 rounded border border-emerald-500/30 px-1.5 py-0.5 font-mono-tech text-[9px] text-emerald-300">
+                      <span className="ml-2 rounded border border-emerald-500/30 px-1.5 py-0.5 font-mono-tech text-xs text-emerald-300">
                         DELIVERABLE
                       </span>
                     )}
@@ -115,7 +114,6 @@ export function PortalProjectCollaboration({
 
       {collaboration.delivery && (
         <section className="relative overflow-hidden rounded-md border border-border bg-surface">
-          <span className="absolute left-0 top-0 h-px w-full bg-gradient-to-r from-accent/60 via-accent/10 to-transparent" />
           <div className="border-b border-border px-5 py-4">
             <h2 className="text-sm font-semibold text-fg">Latest delivery</h2>
             <p className="mt-1 text-xs text-text-tertiary">
@@ -126,7 +124,7 @@ export function PortalProjectCollaboration({
             <div className="flex flex-wrap items-center gap-2">
               <Package className="h-4 w-4 text-accent" />
               <span className="text-sm font-semibold">Version {collaboration.delivery.version}</span>
-              <span className="rounded border border-border px-2 py-0.5 text-[11px] font-semibold capitalize text-text-secondary">
+              <span className="rounded border border-border px-2 py-0.5 text-xs font-semibold capitalize text-text-secondary">
                 {collaboration.delivery.status.replace(/_/g, ' ')}
               </span>
               {collaboration.delivery.delivered_at && (
@@ -197,7 +195,6 @@ export function PortalProjectCollaboration({
       )}
 
       <section className="relative overflow-hidden rounded-md border border-border bg-surface">
-        <span className="absolute left-0 top-0 h-px w-full bg-gradient-to-r from-accent/60 via-accent/10 to-transparent" />
         <div className="border-b border-border px-5 py-4">
           <h2 className="text-sm font-semibold text-fg">Conversation with your team</h2>
           <p className="mt-1 text-xs text-text-tertiary">
@@ -219,10 +216,10 @@ export function PortalProjectCollaboration({
               >
                 <div className="flex flex-wrap items-baseline gap-2">
                   <span className="text-xs font-semibold text-fg">{item.author_label}</span>
-                  <span className="rounded border border-border px-1.5 py-px font-mono-tech text-[9px] uppercase text-text-tertiary">
+                  <span className="rounded border border-border px-1.5 py-px font-mono-tech text-xs uppercase text-text-tertiary">
                     {item.kind}
                   </span>
-                  <span className="text-[10px] text-text-tertiary">
+                  <span className="text-xs text-text-tertiary">
                     {new Date(item.created_at).toLocaleString()}
                   </span>
                 </div>

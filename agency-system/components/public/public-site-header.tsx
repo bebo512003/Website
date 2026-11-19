@@ -1,387 +1,215 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Globe, LogIn, Menu, X, Zap } from 'lucide-react'
+import { ArrowLeft, ArrowUpRight, Globe, LogIn, Menu, X } from 'lucide-react'
+import { SITE_NAME, SITE_NAME_AR, SITE_NAVIGATION } from '@/lib/site'
 import { cn } from '@/lib/utils'
+import { BrandLockup } from './brand'
+import { PublicLink } from './public-link'
+import { primaryButtonClassName } from '@/components/ui/page'
 
-export type HeaderLink = {
-  href: string
-  label: string
-  key?: string
-  current?: boolean
-}
+const HEADER_NAVIGATION = [
+  { key: 'home', href: '/', en: 'Home', ar: 'الرئيسية' },
+  ...SITE_NAVIGATION,
+] as const
 
-export type HeaderCta = {
-  href: string
-  label: string
-  hidden?: boolean
-}
+type NavigationItem = (typeof HEADER_NAVIGATION)[number]
+type NavigationKey = NavigationItem['key']
 
-export interface PublicSiteHeaderProps {
-  /**
-   * Header visual variant.
-   * - 'standard' / 'light': Dark neutral surface with subtle border (default across the site)
-   * - 'dark': Deep black (#080808) surface with subtle border for portfolio pages
-   * - 'transparent': Translucent surface with blur
-   */
-  variant?: 'standard' | 'dark' | 'transparent' | 'light'
-  /**
-   * Explicit active key override ('home' | 'services' | 'portfolio' | 'forms' | 'track').
-   * If omitted, active state is automatically derived from the current pathname.
-   */
+type PublicSiteHeaderProps = {
   activeKey?: string
-  /**
-   * Custom navigation links. If omitted, uses the canonical public navigation:
-   * Services (/#services), Portfolio (/portfolio), Available forms (/forms), Track request (/track).
-   */
-  links?: HeaderLink[]
-  /**
-   * Primary call-to-action button. Defaults to "Request a project" linking to /forms.
-   * Pass null or { hidden: true } to hide.
-   */
-  cta?: HeaderCta | null
-  /**
-   * Optional language toggle support for bilingual public pages (/track, /f/[slug]).
-   */
   lang?: 'en' | 'ar'
   onLangChange?: (lang: 'en' | 'ar') => void
-  /**
-   * Optional contextual back-link (e.g. "Back to available forms" or "Back to all work").
-   */
-  backLink?: {
-    href: string
-    label: string
-  }
+  backLink?: { href: string; label: string }
 }
 
-export const CANONICAL_PUBLIC_LINKS: HeaderLink[] = [
-  { href: '/#services', label: 'Services', key: 'services' },
-  { href: '/portfolio', label: 'Portfolio', key: 'portfolio' },
-  { href: '/forms', label: 'Available forms', key: 'forms' },
-  { href: '/track', label: 'Track request', key: 'track' },
-]
-
-export const DEFAULT_CTA: HeaderCta = {
-  href: '/forms',
-  label: 'Request a project',
-}
-
-export function PublicSiteHeader({
-  variant = 'standard',
-  activeKey,
-  links,
-  cta,
-  lang,
-  onLangChange,
-  backLink,
-}: PublicSiteHeaderProps) {
+export function PublicSiteHeader({ activeKey, lang = 'en', onLangChange, backLink }: PublicSiteHeaderProps) {
   const [menuOpen, setMenuOpen] = useState(false)
+  const [visibleSection, setVisibleSection] = useState<{ pathname: string; key: NavigationKey } | null>(null)
+  const header = useRef<HTMLElement>(null)
+  const menuButton = useRef<HTMLButtonElement>(null)
   const pathname = usePathname() || '/'
+  const isAr = lang === 'ar'
+  const isAuthPage = pathname === '/auth'
+  const loginLabel = isAr ? 'تسجيل الدخول' : 'Sign in'
+  const requestLabel = isAr ? 'اطلب مشروعًا' : 'Request a project'
+  const switchLabel = isAr ? 'Switch to English' : 'التحويل إلى العربية'
 
-  // Close mobile menu on route change or escape key
   useEffect(() => {
     setMenuOpen(false)
   }, [pathname])
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setMenuOpen(false)
+    if (!menuOpen) return
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setMenuOpen(false)
+        menuButton.current?.focus()
+      }
     }
-    if (menuOpen) {
-      window.addEventListener('keydown', handleKeyDown)
-      return () => window.removeEventListener('keydown', handleKeyDown)
-    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
   }, [menuOpen])
 
-  const isDark = variant === 'dark'
-  const navLinks = links && links.length > 0 ? links : CANONICAL_PUBLIC_LINKS
-  const ctaToShow = cta === null || cta?.hidden ? null : (cta || DEFAULT_CTA)
-
-  const resolveActive = (link: HeaderLink) => {
-    if (typeof link.current === 'boolean') return link.current
-
-    if (activeKey) {
-      if (link.key && link.key === activeKey) return true
-      if (link.href === activeKey) return true
+  useEffect(() => {
+    const sections = SITE_NAVIGATION.flatMap(({ key, sectionId }) => {
+      if (pathname !== '/' && key !== 'contact') return []
+      const section = document.getElementById(sectionId)
+      return section ? [{ key, section }] : []
+    })
+    const contact = sections.find(({ key }) => key === 'contact')?.section
+    let frame: number | null = null
+    const scheduleUpdate = () => {
+      if (frame !== null) return
+      frame = window.requestAnimationFrame(() => {
+        frame = null
+        const headerBottom = header.current?.getBoundingClientRect().bottom ?? 0
+        const readingLine = headerBottom + 32
+        const { clientHeight, scrollHeight } = document.documentElement
+        const atEnd = window.scrollY + clientHeight >= scrollHeight - 2
+        const footerContact = atEnd ? contact?.getBoundingClientRect() : undefined
+        // The footer often can't reach the reading line before scrolling ends.
+        const atContact = footerContact && footerContact.top < clientHeight && footerContact.bottom > headerBottom
+          && (window.scrollY > 0 || window.location.hash === '#contact')
+        const key = atContact ? 'contact' : sections.find(({ section }) => {
+          const { top, bottom } = section.getBoundingClientRect()
+          return top <= readingLine && bottom > readingLine
+        })?.key
+        setVisibleSection((previous) => {
+          if (!key) return null
+          return previous?.pathname === pathname && previous.key === key ? previous : { pathname, key }
+        })
+      })
     }
 
-    // Auto-detect based on current pathname
-    if (link.key === 'portfolio' || link.href === '/portfolio') {
-      return pathname === '/portfolio' || pathname.startsWith('/portfolio/')
+    scheduleUpdate()
+    window.addEventListener('scroll', scheduleUpdate, { passive: true })
+    window.addEventListener('hashchange', scheduleUpdate)
+    window.addEventListener('resize', scheduleUpdate)
+    window.addEventListener('pageshow', scheduleUpdate)
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      window.removeEventListener('scroll', scheduleUpdate)
+      window.removeEventListener('hashchange', scheduleUpdate)
+      window.removeEventListener('resize', scheduleUpdate)
+      window.removeEventListener('pageshow', scheduleUpdate)
     }
-    if (link.key === 'forms' || link.href === '/forms') {
-      return pathname === '/forms' || pathname.startsWith('/f/')
-    }
-    if (link.key === 'track' || link.href === '/track') {
-      return pathname === '/track' || pathname.startsWith('/track/')
-    }
-    if (link.key === 'services') {
-      return pathname === '/services' || (pathname === '/' && activeKey === 'services')
-    }
-    if (link.key === 'home' || link.href === '/') {
-      return pathname === '/' && !activeKey
-    }
+  }, [pathname])
 
-    return pathname === link.href
-  }
+  const sectionKey = visibleSection?.pathname === pathname ? visibleSection.key : undefined
+  const pageKey = pathname === '/'
+    ? 'home'
+    : activeKey ?? HEADER_NAVIGATION.find(({ key, href }) =>
+      pathname === href || pathname.startsWith(`${href}/`) || (key === 'forms' && pathname.startsWith('/f/')),
+    )?.key
+  const currentKey = sectionKey ?? pageKey
+  const currentLocation = (key: NavigationKey) =>
+    key === currentKey ? (sectionKey ? 'location' : 'page') : undefined
 
   return (
-    <header
-      className={cn(
-        'sticky inset-x-0 top-0 z-40 w-full transition-colors duration-200',
-        isDark
-          ? 'border-b border-white/10 bg-[#080808]/90 backdrop-blur-md text-white'
-          : variant === 'transparent'
-            ? 'border-b border-border/40 bg-bg/75 backdrop-blur-md text-fg'
-            : 'border-b border-border bg-bg/90 backdrop-blur-md text-fg'
-      )}
-    >
-      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between gap-4 px-4 sm:px-6 lg:px-8">
-        {/* Brand Logo Treatment */}
+    <header ref={header} className="sticky inset-x-0 top-0 z-40 border-b border-border bg-bg" dir={isAr ? 'rtl' : 'ltr'} lang={lang}>
+      <div className="site-container flex min-h-18 items-center justify-between gap-3 py-3 lg:gap-5">
         <Link
           href="/"
-          className="group flex items-center gap-3 transition-opacity hover:opacity-90"
+          className="shrink-0 transition-opacity hover:opacity-85"
           onClick={() => setMenuOpen(false)}
-          aria-label="Agency OS — Back to home"
+          aria-label={isAr ? `${SITE_NAME_AR} — الرئيسية` : `${SITE_NAME} — Home`}
         >
-          <span
-            className={cn(
-              'flex h-9 w-9 shrink-0 items-center justify-center rounded-md border text-accent transition-colors group-hover:border-accent',
-              isDark
-                ? 'border-white/20 bg-white/[0.05]'
-                : 'border-line-light bg-surface-raised'
-            )}
-          >
-            <Zap className="h-4 w-4" />
-          </span>
-          <span className="flex flex-col">
-            <span
-              className={cn(
-                'text-sm font-bold tracking-[0.22em] leading-tight transition-colors',
-                isDark ? 'text-white' : 'text-fg'
-              )}
-            >
-              AGENCY OS
-            </span>
-            <span
-              className={cn(
-                'font-mono-tech text-[8px] tracking-[0.2em] leading-tight transition-colors',
-                isDark ? 'text-white/40' : 'text-text-tertiary'
-              )}
-            >
-              CREATIVE STUDIO
-            </span>
-          </span>
+          <BrandLockup lang={lang} />
         </Link>
 
-        {/* Canonical Desktop Navigation Links */}
-        <nav className="hidden items-center gap-6 lg:gap-8 md:flex" aria-label="Primary navigation">
-          {navLinks.map((link) => {
-            const active = resolveActive(link)
+        <nav className="hidden items-center gap-4 text-sm lg:flex xl:gap-7" aria-label={isAr ? 'التنقل الرئيسي' : 'Primary navigation'}>
+          {HEADER_NAVIGATION.map((link) => {
+            const current = currentLocation(link.key)
+            // A native Home link resets scroll when coming from a homepage section.
+            const NavLink = link.key === 'home' ? 'a' : PublicLink
             return (
-              <Link
-                key={link.href + link.label}
+              <NavLink
+                key={link.key}
                 href={link.href}
-                className={cn(
-                  'relative py-1 text-xs font-medium transition-colors',
-                  isDark
-                    ? active
-                      ? 'text-white font-semibold'
-                      : 'text-white/65 hover:text-white'
-                    : active
-                      ? 'text-fg font-semibold'
-                      : 'text-text-secondary hover:text-fg'
-                )}
-                aria-current={active ? 'page' : undefined}
+                aria-current={current}
+                className={cn('relative whitespace-nowrap py-2.5 hover:text-fg', current ? 'font-semibold text-fg' : 'text-text-secondary')}
               >
-                {link.label}
-                {active && (
-                  <span
-                    className="absolute -bottom-[21px] left-0 right-0 h-0.5 rounded-full bg-accent"
-                    aria-hidden="true"
-                  />
-                )}
-              </Link>
+                {link[lang]}
+                {current && <span className="absolute inset-x-0 bottom-0 mx-auto h-0.5 w-4 bg-accent" aria-hidden="true" />}
+              </NavLink>
             )
           })}
         </nav>
 
-        {/* Right-Side Action Controls */}
-        <div className="flex items-center gap-2 sm:gap-2.5">
-          {/* Optional Back link */}
-          {backLink && (
-            <Link
-              href={backLink.href}
-              className={cn(
-                'hidden items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors sm:inline-flex',
-                isDark
-                  ? 'border-white/15 bg-white/[0.04] text-white/70 hover:border-white/30 hover:text-white'
-                  : 'border-border bg-surface text-text-secondary hover:border-line-light hover:text-fg'
-              )}
-            >
-              <ArrowLeft className="h-3.5 w-3.5" />
-              <span>{backLink.label}</span>
-            </Link>
-          )}
-
-          {/* Optional Language Switcher */}
-          {lang && onLangChange && (
+        <div className="flex shrink-0 items-center gap-2 sm:gap-3">
+          {onLangChange && (
             <button
               type="button"
-              onClick={() => onLangChange(lang === 'ar' ? 'en' : 'ar')}
-              className={cn(
-                'inline-flex min-h-9 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium transition-colors',
-                isDark
-                  ? 'border-white/15 bg-white/[0.04] text-white/70 hover:border-white/30 hover:text-white'
-                  : 'border-border bg-surface text-text-secondary hover:border-line-light hover:text-fg'
-              )}
-              aria-label={lang === 'ar' ? 'Switch to English' : 'التحويل إلى العربية'}
+              onClick={() => onLangChange(isAr ? 'en' : 'ar')}
+              aria-label={switchLabel}
+              className="inline-flex size-10 items-center justify-center gap-2 border border-border text-fg hover:border-line-light sm:w-auto sm:px-3"
             >
-              <Globe className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">{lang === 'ar' ? 'English' : 'العربية'}</span>
+              <Globe className="size-4" strokeWidth={1.5} aria-hidden="true" />
+              <span className="hidden text-xs sm:inline" lang={isAr ? 'en' : 'ar'}>{isAr ? 'English' : 'العربية'}</span>
             </button>
           )}
-
-          {/* Login Button */}
           <Link
             href="/auth"
-            className={cn(
-              'hidden min-h-9 items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors sm:inline-flex',
-              isDark
-                ? 'border-white/15 bg-white/[0.04] text-white/70 hover:border-white/30 hover:text-white'
-                : 'border-border bg-surface text-text-secondary hover:border-line-light hover:text-fg'
-            )}
+            aria-label={loginLabel}
+            aria-current={isAuthPage ? 'page' : undefined}
+            className={cn('hidden size-10 items-center justify-center border border-border text-text-secondary hover:border-line-light hover:text-fg lg:inline-flex', isAuthPage && 'border-accent text-fg')}
           >
-            <LogIn className="h-3.5 w-3.5" />
-            <span>Login</span>
+            <LogIn className="size-4 rtl:rotate-180" strokeWidth={1.5} aria-hidden="true" />
           </Link>
-
-          {/* Primary CTA Button */}
-          {ctaToShow && (
-            <Link
-              href={ctaToShow.href}
-              className="inline-flex min-h-9 items-center gap-1.5 rounded-md border border-accent bg-accent px-3.5 py-1.5 text-xs font-semibold text-accent-foreground transition hover:brightness-110 shadow-sm"
-            >
-              <span>{ctaToShow.label}</span>
-              <ArrowRight className="h-3.5 w-3.5" />
-            </Link>
-          )}
-
-          {/* Mobile Menu Hamburger Toggle */}
+          <Link href="/forms" className={cn(primaryButtonClassName, 'hidden whitespace-nowrap sm:inline-flex lg:px-3')}>
+            {requestLabel} <ArrowUpRight className="hidden size-4 xl:block rtl:-scale-x-100" aria-hidden="true" />
+          </Link>
           <button
             type="button"
-            className={cn(
-              'flex h-9 w-9 items-center justify-center rounded-md border transition-colors md:hidden',
-              isDark
-                ? 'border-white/15 bg-white/[0.04] text-white hover:bg-white/[0.08]'
-                : 'border-border bg-surface text-fg hover:bg-surface-raised'
-            )}
-            onClick={() => setMenuOpen((prev) => !prev)}
-            aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+            ref={menuButton}
+            onClick={() => setMenuOpen((open) => !open)}
+            aria-label={menuOpen ? (isAr ? 'إغلاق القائمة' : 'Close navigation menu') : (isAr ? 'فتح القائمة' : 'Open navigation menu')}
             aria-expanded={menuOpen}
             aria-controls="mobile-nav-panel"
+            className="flex size-10 items-center justify-center border border-border text-fg hover:border-line-light lg:hidden"
           >
-            {menuOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
+            {menuOpen ? <X className="size-5" aria-hidden="true" /> : <Menu className="size-5" aria-hidden="true" />}
           </button>
         </div>
       </div>
 
-      {/* Cohesive Mobile Navigation Drawer */}
-      {menuOpen && (
-        <div
-          id="mobile-nav-panel"
-          className={cn(
-            'border-b backdrop-blur-xl shadow-2xl md:hidden transition-all duration-200',
-            isDark
-              ? 'border-white/10 bg-[#0d0d0d]/98'
-              : 'border-border bg-surface/98'
-          )}
-        >
-          <div className="mx-auto max-w-7xl px-4 py-4 sm:px-6">
-            <nav className="grid gap-1" aria-label="Mobile primary navigation">
-              {navLinks.map((link) => {
-                const active = resolveActive(link)
-                return (
-                  <Link
-                    key={link.href + link.label}
-                    href={link.href}
-                    onClick={() => setMenuOpen(false)}
-                    className={cn(
-                      'flex min-h-11 items-center justify-between rounded-md px-3.5 py-2.5 text-sm font-medium transition-colors',
-                      isDark
-                        ? active
-                          ? 'border-l-2 border-accent bg-white/[0.08] text-white font-semibold'
-                          : 'border-l-2 border-transparent text-white/70 hover:bg-white/[0.04] hover:text-white'
-                        : active
-                          ? 'border-l-2 border-accent bg-surface-raised text-fg font-semibold'
-                          : 'border-l-2 border-transparent text-text-secondary hover:bg-surface-raised hover:text-fg'
-                    )}
-                    aria-current={active ? 'page' : undefined}
-                  >
-                    <span>{link.label}</span>
-                    {active && (
-                      <span className="font-mono-tech text-[10px] text-accent">CURRENT</span>
-                    )}
-                  </Link>
-                )
-              })}
-            </nav>
-
-            <div
-              className={cn(
-                'mt-3 grid gap-2 border-t pt-3',
-                isDark ? 'border-white/10' : 'border-border'
-              )}
-            >
-              {lang && onLangChange && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onLangChange(lang === 'ar' ? 'en' : 'ar')
-                    setMenuOpen(false)
-                  }}
-                  className={cn(
-                    'flex min-h-11 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors',
-                    isDark
-                      ? 'border-white/15 bg-white/[0.04] text-white'
-                      : 'border-border bg-surface-raised text-fg'
-                  )}
-                >
-                  <Globe className="h-4 w-4" />
-                  <span>{lang === 'ar' ? 'Switch to English' : 'التحويل إلى العربية'}</span>
-                </button>
-              )}
-
-              <Link
-                href="/auth"
-                onClick={() => setMenuOpen(false)}
-                className={cn(
-                  'flex min-h-11 items-center justify-center gap-2 rounded-md border px-4 py-2.5 text-sm font-medium transition-colors',
-                  isDark
-                    ? 'border-white/15 bg-white/[0.04] text-white'
-                    : 'border-border bg-surface text-text-secondary hover:text-fg'
-                )}
-              >
-                <LogIn className="h-4 w-4" />
-                <span>Team & Client Login</span>
-              </Link>
-
-              {ctaToShow && (
-                <Link
-                  href={ctaToShow.href}
+      <div id="mobile-nav-panel" hidden={!menuOpen} className="absolute inset-x-0 top-full max-h-[calc(100dvh-4.5rem)] overflow-y-auto border-y border-border bg-surface lg:hidden">
+        <div className="site-container grid gap-4 py-5">
+          <nav className="grid divide-y divide-border" aria-label={isAr ? 'التنقل على الجوال' : 'Mobile navigation'}>
+            {HEADER_NAVIGATION.map((link) => {
+              const current = currentLocation(link.key)
+              const NavLink = link.key === 'home' ? 'a' : PublicLink
+              return (
+                <NavLink
+                  key={link.key}
+                  href={link.href}
                   onClick={() => setMenuOpen(false)}
-                  className="flex min-h-11 items-center justify-center gap-2 rounded-md border border-accent bg-accent px-4 py-2.5 text-sm font-semibold text-accent-foreground transition hover:brightness-110 shadow-sm"
+                  aria-current={current}
+                  className={cn('flex min-h-11 items-center justify-between gap-3 text-sm text-fg hover:text-accent', current && 'font-semibold text-accent')}
                 >
-                  <span>{ctaToShow.label}</span>
-                  <ArrowRight className="h-4 w-4" />
-                </Link>
-              )}
-            </div>
+                  <span className="relative">
+                    {link[lang]}
+                    {current && <span className="absolute start-0 -bottom-1 h-0.5 w-4 bg-accent" aria-hidden="true" />}
+                  </span>
+                  <ArrowUpRight className="size-4 text-text-secondary rtl:-scale-x-100" aria-hidden="true" />
+                </NavLink>
+              )
+            })}
+          </nav>
+          <div className="flex flex-wrap items-center gap-4 border-t border-border pt-4">
+            <Link href="/forms" onClick={() => setMenuOpen(false)} className={primaryButtonClassName}>{requestLabel}</Link>
+            <Link href="/auth" aria-current={isAuthPage ? 'page' : undefined} onClick={() => setMenuOpen(false)} className="inline-flex min-h-11 items-center gap-2 text-sm text-fg hover:underline">
+              <LogIn className="size-4 rtl:rotate-180" aria-hidden="true" /> {loginLabel}
+            </Link>
+            {backLink && <PublicLink href={backLink.href} onClick={() => setMenuOpen(false)} className="inline-flex min-h-11 items-center gap-2 text-sm text-fg hover:underline">
+              <ArrowLeft className="size-4 rtl:rotate-180" aria-hidden="true" /> {backLink.label}
+            </PublicLink>}
           </div>
         </div>
-      )}
+      </div>
     </header>
   )
 }

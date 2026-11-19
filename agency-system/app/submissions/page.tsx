@@ -59,6 +59,7 @@ import { useDebouncedValue } from '@/lib/use-debounced-value'
 import { Pagination } from '@/components/ui/pagination'
 import { SubmissionConversionModal } from '@/components/submissions/submission-conversion-modal'
 import {
+  publicTrackingPath,
   SUBMISSION_STATUS_DESCRIPTIONS,
   SUBMISSION_STATUS_LABELS,
   SUBMISSION_STATUSES,
@@ -769,15 +770,15 @@ export default function SubmissionsPage() {
                               <dd className="mt-0.5 flex items-center gap-1.5 font-mono-tech text-xs font-semibold text-accent">
                                 {submission.reference_number || '—'}
                                 {submission.reference_number && (
-                                  <Link
-                                    href={`/track?ref=${encodeURIComponent(submission.reference_number)}`}
+                                  <a
+                                    href={publicTrackingPath(submission.reference_number)}
                                     target="_blank"
                                     rel="noreferrer"
                                     className="text-text-tertiary hover:text-accent"
                                     title="View public tracking page"
                                   >
                                     <ExternalLink className="h-3 w-3" />
-                                  </Link>
+                                  </a>
                                 )}
                               </dd>
                             </div>

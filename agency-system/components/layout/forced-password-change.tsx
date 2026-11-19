@@ -12,7 +12,7 @@ import { InlineAlert, inputClassName, primaryButtonClassName } from '@/component
  * this screen except signing out — the database enforces the same block by
  * returning no permissions while the flag is pending.
  */
-export function ForcedPasswordChangeScreen({ style }: { style: Record<string, string> }) {
+export function ForcedPasswordChangeScreen() {
   const { user, signOut, refreshProfile, refreshPermissions } = useAuth()
   const [currentPassword, setCurrentPassword] = useState('')
   const [newPassword, setNewPassword] = useState('')
@@ -65,7 +65,7 @@ export function ForcedPasswordChangeScreen({ style }: { style: Record<string, st
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-bg p-5" style={style}>
+    <main className="flex min-h-screen items-center justify-center bg-bg p-5">
       <section className="w-full max-w-md rounded-md border border-border bg-surface p-8 shadow-2xl">
         <div className="mb-5 flex items-start justify-between">
           <div className="flex h-12 w-12 items-center justify-center rounded-md border border-accent/30 bg-accent/10">

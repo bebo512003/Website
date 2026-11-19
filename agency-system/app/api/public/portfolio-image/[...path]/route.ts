@@ -5,7 +5,7 @@ import { isSafePortfolioStoragePath } from '@/lib/public/portfolio-media'
 function notFound() {
   return new NextResponse('Not found', {
     status: 404,
-    headers: { 'Cache-Control': 'public, max-age=60' },
+    headers: { 'Cache-Control': 'no-store' },
   })
 }
 
@@ -34,7 +34,7 @@ export async function GET(
   const { data, error } = await supabase.storage.from('portfolio-images').createSignedUrl(storagePath, 3600)
   if (error || !data?.signedUrl) return notFound()
 
-  const upstream = await fetch(data.signedUrl)
+  const upstream = await fetch(data.signedUrl, { cache: 'no-store' })
   if (!upstream.ok || !upstream.body) return notFound()
 
   const contentType = upstream.headers.get('content-type') || 'image/jpeg'
@@ -42,7 +42,8 @@ export async function GET(
     status: 200,
     headers: {
       'Content-Type': contentType,
-      'Cache-Control': 'public, max-age=300, s-maxage=3600, stale-while-revalidate=86400',
+      // Recheck publication on each request, even after a previous 200.
+      'Cache-Control': 'private, no-cache',
     },
   })
 }

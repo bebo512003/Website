@@ -7,6 +7,8 @@
 // URL; the database only stores relative paths.
 
 import type { EmailTemplateKey, Json } from '@/lib/supabase/types'
+import { REQUEST_RESPONSE_TIME, SITE_CONTACT_LINKS } from '@/lib/contact'
+import { SITE_TAGLINE } from '@/lib/site'
 
 export type EmailTemplateOptions = {
   siteUrl: string
@@ -19,12 +21,24 @@ export type RenderedEmail = {
   text: string
 }
 
-const BRAND_COLOR = '#0a0a0a'
-const BODY_BG = '#f5f5f4'
-const CARD_BG = '#ffffff'
-const TEXT_COLOR = '#1c1c1c'
-const MUTED_COLOR = '#6b6b6b'
-const LINE_COLOR = '#e7e5e4'
+// Email clients need inline colours; use the same carbon, graphite, bone and steel as the site.
+const BODY_BG = '#0b0b0c'
+const CARD_BG = '#161618'
+const TEXT_COLOR = '#f2f0eb'
+const MUTED_COLOR = '#8c8c92'
+const LINE_COLOR = '#2a2a2e'
+const SIGNAL = '#b9282d'
+
+const CLIENT_TEMPLATES = new Set<EmailTemplateKey>([
+  'submission-received',
+  'client-invitation',
+  'delivery-ready',
+  'revision-approval-update',
+])
+
+export function isClientEmailTemplate(key: EmailTemplateKey) {
+  return CLIENT_TEMPLATES.has(key)
+}
 
 function escapeHtml(value: unknown): string {
   return String(value ?? '')
@@ -70,19 +84,28 @@ function brandLayout(opts: EmailTemplateOptions, content: {
   ctaLabel?: string
   ctaUrl?: string
   bodyText: string
+  includeContact: boolean
 }): { html: string; text: string } {
   const { siteUrl, brandName } = opts
   const ctaHtml = content.ctaLabel && content.ctaUrl
     ? `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 8px;">
         <tr>
           <td align="left">
-            <a href="${escapeHtml(absoluteUrl(content.ctaUrl, siteUrl))}" style="display:inline-block;background-color:${BRAND_COLOR};color:#ffffff;text-decoration:none;padding:13px 28px;border-radius:8px;font-size:14px;font-weight:600;">${escapeHtml(content.ctaLabel)}</a>
+            <a href="${escapeHtml(absoluteUrl(content.ctaUrl, siteUrl))}" style="display:inline-block;background-color:${TEXT_COLOR};color:${BODY_BG};text-decoration:none;padding:12px 24px;font-size:14px;font-weight:600;">${escapeHtml(content.ctaLabel)}</a>
           </td>
         </tr>
       </table>`
     : ''
   const ctaText = content.ctaLabel && content.ctaUrl
     ? `\n\n${content.ctaLabel}: ${absoluteUrl(content.ctaUrl, siteUrl)}`
+    : ''
+
+  const contactHtml = content.includeContact
+    ? `<p style="margin:24px 0 8px;font-size:14px;font-weight:600;color:${TEXT_COLOR};">Contact ${escapeHtml(brandName)}</p>
+      ${SITE_CONTACT_LINKS.map(({ en, href, value }) => `<p style="margin:0 0 4px;font-size:14px;line-height:1.5;"><a href="${escapeHtml(href)}" style="color:${TEXT_COLOR};overflow-wrap:anywhere;">${escapeHtml(value || en)}</a></p>`).join('')}`
+    : ''
+  const contactText = content.includeContact
+    ? `\n\nContact ${brandName}\n${SITE_CONTACT_LINKS.map(({ en, href, value }) => `${en}: ${value || href}`).join('\n')}`
     : ''
 
   const html = `<!DOCTYPE html>
@@ -99,16 +122,18 @@ function brandLayout(opts: EmailTemplateOptions, content: {
       <td align="center">
         <table role="presentation" width="560" cellpadding="0" cellspacing="0" style="max-width:560px;width:100%;">
           <tr>
-            <td style="background-color:${BRAND_COLOR};border-radius:12px 12px 0 0;padding:22px 32px;">
-              <span style="color:#ffffff;font-size:15px;font-weight:700;letter-spacing:0.06em;">${escapeHtml(brandName)}</span>
+            <td style="background-color:${BODY_BG};border-top:2px solid ${SIGNAL};border-right:1px solid ${LINE_COLOR};border-left:1px solid ${LINE_COLOR};padding:24px 32px;">
+              <span style="color:${TEXT_COLOR};font-size:18px;font-weight:700;">${escapeHtml(brandName)}</span><br />
+              <span style="color:${MUTED_COLOR};font-size:14px;">${SITE_TAGLINE}</span>
             </td>
           </tr>
           <tr>
-            <td style="background-color:${CARD_BG};padding:32px;border:1px solid ${LINE_COLOR};border-top:none;border-radius:0 0 12px 12px;">
-              <p style="margin:0 0 8px;font-size:11px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:${MUTED_COLOR};">${escapeHtml(content.eyebrow)}</p>
+            <td style="background-color:${CARD_BG};padding:32px;border:1px solid ${LINE_COLOR};">
+              <p style="margin:0 0 8px;font-size:12px;font-weight:700;letter-spacing:0.12em;text-transform:uppercase;color:${MUTED_COLOR};">${escapeHtml(content.eyebrow)}</p>
               <h1 style="margin:0 0 16px;font-size:22px;line-height:1.3;color:${TEXT_COLOR};">${escapeHtml(content.title)}</h1>
               <div style="font-size:14px;line-height:1.65;color:${TEXT_COLOR};">${content.bodyHtml}</div>
               ${ctaHtml}
+              ${contactHtml}
               <p style="margin:24px 0 0;padding-top:20px;border-top:1px solid ${LINE_COLOR};font-size:12px;line-height:1.6;color:${MUTED_COLOR};">
                 This is an automated message from ${escapeHtml(brandName)}.<br />
                 If you did not expect this email, you can safely ignore it.
@@ -122,7 +147,7 @@ function brandLayout(opts: EmailTemplateOptions, content: {
 </body>
 </html>`
 
-  const text = `${content.eyebrow.toUpperCase()}\n${content.title}\n\n${content.bodyText}${ctaText}\n\n—\nThis is an automated message from ${brandName}.`
+  const text = `${content.eyebrow.toUpperCase()}\n${content.title}\n\n${content.bodyText}${ctaText}${contactText}\n\n—\nThis is an automated message from ${brandName}.`
   return { html, text }
 }
 
@@ -130,8 +155,8 @@ function block(kind: 'info' | 'reference', label: string, value: unknown): strin
   const text = asText(value)
   if (!text) return ''
   if (kind === 'reference') {
-    return `<p style="margin:20px 0;padding:14px 18px;background-color:#fafaf9;border:1px solid ${LINE_COLOR};border-radius:10px;font-size:14px;color:${TEXT_COLOR};">
-      <span style="display:block;font-size:11px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:${MUTED_COLOR};margin-bottom:4px;">${escapeHtml(label)}</span>
+    return `<p style="margin:20px 0;padding:14px 18px;background-color:${BODY_BG};border:1px solid ${LINE_COLOR};font-size:14px;color:${TEXT_COLOR};">
+      <span style="display:block;font-size:12px;font-weight:700;letter-spacing:0.1em;text-transform:uppercase;color:${MUTED_COLOR};margin-bottom:4px;">${escapeHtml(label)}</span>
       <span style="font-size:18px;font-weight:700;letter-spacing:0.04em;">${escapeHtml(text)}</span>
     </p>`
   }
@@ -152,13 +177,13 @@ function templateBody(key: EmailTemplateKey, payload: Json, opts: EmailTemplateO
       return {
         subject: `We received your request — ${reference}`,
         eyebrow: 'Request received',
-        title: `Thanks${name ? `, ${name}` : ''} — we got your request`,
+        title: `Request received${name ? `, ${name}` : ''}`,
         bodyHtml: `
           <p style="margin:0 0 12px;">Your ${escapeHtml(formName)} request has been received and is now in our queue. Here is your reference number:</p>
           ${block('reference', 'Your reference', reference)}
           ${submittedAt ? block('info', 'Submitted', submittedAt) : ''}
-          <p style="margin:12px 0 0;">A member of our team will review your request and get back to you within <strong>1–2 business days</strong>. You can check progress at any time using the link below — no account needed.</p>`,
-        bodyText: `Your ${formName} request has been received.\n\nReference: ${reference}${submittedAt ? `\nSubmitted: ${submittedAt}` : ''}\n\nWe will review your request and get back to you within 1–2 business days.`,
+          <p style="margin:12px 0 0;">A member of our team will review your request and get back to you within <strong>${REQUEST_RESPONSE_TIME.en}</strong>. You can check progress at any time using the link below — no account needed.</p>`,
+        bodyText: `Your ${formName} request has been received.\n\nReference: ${reference}${submittedAt ? `\nSubmitted: ${submittedAt}` : ''}\n\nWe will review your request and get back to you within ${REQUEST_RESPONSE_TIME.en}.`,
         ctaLabel: 'Track progress',
         ctaUrl: asText(payloadValue(payload, 'tracking_path')),
       }
@@ -172,7 +197,7 @@ function templateBody(key: EmailTemplateKey, payload: Json, opts: EmailTemplateO
         title: `Your client portal is ready${clientName ? `, ${clientName}` : ''}`,
         bodyHtml: `
           <p style="margin:0 0 12px;">Your team has created a secure client portal account for you. Sign in to follow your projects, review shared files, see delivery updates, and approve work.</p>
-          <p style="margin:12px 0 0;">Your sign-in details were shared with you separately by your account manager. If you have not received them, please reply to your latest conversation with our team.</p>`,
+          <p style="margin:12px 0 0;">Your sign-in details were shared with you separately by your account manager. If you have not received them, use the contact details below.</p>`,
         bodyText: `Your client portal account is ready. Sign in to follow your projects, review shared files, see delivery updates, and approve work.\n\nYour sign-in details were shared with you separately by your account manager.`,
         ctaLabel: 'Open the portal',
         ctaUrl: asText(payloadValue(payload, 'portal_path')) || '/auth',
@@ -297,6 +322,6 @@ export function renderEmailTemplate(
 ): RenderedEmail {
   const body = templateBody(key, payload, options)
   const preheader = body.bodyText.replace(/\s+/g, ' ').slice(0, 120)
-  const { html, text } = brandLayout(options, { ...body, preheader })
+  const { html, text } = brandLayout(options, { ...body, preheader, includeContact: isClientEmailTemplate(key) })
   return { subject: body.subject, html, text }
 }

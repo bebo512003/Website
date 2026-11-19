@@ -1,5 +1,6 @@
 import { cache } from 'react'
 import { unstable_cache } from 'next/cache'
+import { connection } from 'next/server'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { PUBLIC_REVALIDATE_SECONDS } from '@/lib/site'
 import { isSafePortfolioStoragePath, portfolioImageSrc } from '@/lib/public/portfolio-media'
@@ -50,7 +51,10 @@ function publicRpcRowToProject(row: PortfolioPublicRpcRow): PortfolioProjectWith
     id: row.id,
     title: row.title,
     slug: row.slug,
+    subtitle: row.subtitle,
     cover_image_path: row.cover_image_path,
+    cover_image_url: row.cover_image_url,
+    detail_image_url: row.detail_image_url,
     description: row.description,
     client_name: row.client_name,
     category_id: row.category_id,
@@ -71,25 +75,15 @@ function publicRpcRowToProject(row: PortfolioPublicRpcRow): PortfolioProjectWith
   }
 }
 
-async function loadPublishedPortfolioProjects(): Promise<{ data: PortfolioProjectWithRelations[]; error: string | null }> {
+async function loadPublishedPortfolioProjects(options: { p_selected_only?: boolean; p_slug?: string } = {}): Promise<{ data: PortfolioProjectWithRelations[]; error: string | null }> {
   const supabase = createPublicSupabaseClient()
   if (!supabase) return { data: [], error: null }
-  const { data, error } = await supabase.rpc('get_public_portfolio_projects')
+  const { data, error } = await supabase.rpc('get_public_portfolio_entries', options)
   if (error) return { data: [], error: error.message }
   return {
     data: (data || []).map((row) => publicRpcRowToProject(row as PortfolioPublicRpcRow)),
     error: null,
   }
-}
-
-async function loadPublishedPortfolioProject(slug: string): Promise<{ data: PortfolioProjectWithRelations | null; error: string | null }> {
-  const supabase = createPublicSupabaseClient()
-  if (!supabase) return { data: null, error: null }
-  const { data, error } = await supabase.rpc('get_public_portfolio_project', { p_slug: slug })
-  if (error) return { data: null, error: error.message }
-  const row = data?.[0]
-  if (!row) return { data: null, error: null }
-  return { data: publicRpcRowToProject(row as PortfolioPublicRpcRow), error: null }
 }
 
 async function loadPublishedForms(): Promise<{ data: PublicFormTemplateSummary[]; error: string | null }> {
@@ -129,20 +123,23 @@ async function loadPublishedFormBySlug(slug: string): Promise<{
   return { template: template as PublicFormTemplate, questions: (questions || []) as unknown as FormQuestion[], error: null }
 }
 
-export const getCachedPublicPortfolioProjects = cache(async () =>
-  unstable_cache(loadPublishedPortfolioProjects, ['public-portfolio-projects'], {
-    revalidate: PUBLIC_REVALIDATE_SECONDS,
-    tags: ['public-portfolio'],
-  })(),
-)
+// These are request-time reads: edits, publishing and archiving take effect
+// on the next visit. React cache only deduplicates within a single request.
+export const getPublicPortfolioProjects = cache(async () => {
+  await connection()
+  return loadPublishedPortfolioProjects()
+})
 
-export const getCachedPublicPortfolioProject = cache(async (slug: string) =>
-  unstable_cache(
-    async () => loadPublishedPortfolioProject(slug),
-    ['public-portfolio-project', slug],
-    { revalidate: PUBLIC_REVALIDATE_SECONDS, tags: ['public-portfolio'] },
-  )(),
-)
+export const getPublicSelectedPortfolio = cache(async () => {
+  await connection()
+  return loadPublishedPortfolioProjects({ p_selected_only: true })
+})
+
+export const getPublicPortfolioProject = cache(async (slug: string) => {
+  await connection()
+  const { data, error } = await loadPublishedPortfolioProjects({ p_slug: slug })
+  return { data: data[0] ?? null, error }
+})
 
 export const getCachedPublishedForms = cache(async () =>
   unstable_cache(loadPublishedForms, ['public-published-forms'], {

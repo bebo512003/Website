@@ -1,9 +1,7 @@
 import type { Metadata } from 'next'
 import { ClientLandingPage } from './_components/client-landing-page'
-import { getCachedPublishedForms, getCachedPublicPortfolioProjects } from '@/lib/supabase/public-server'
+import { getCachedPublishedForms, getPublicSelectedPortfolio } from '@/lib/supabase/public-server'
 import { pageMetadata, SITE_DEFAULT_DESCRIPTION, SITE_DEFAULT_TITLE } from '@/lib/site'
-
-export const revalidate = 120
 
 export const metadata: Metadata = pageMetadata({
   title: SITE_DEFAULT_TITLE,
@@ -12,16 +10,9 @@ export const metadata: Metadata = pageMetadata({
 })
 
 export default async function HomePage() {
-  const [portfolio, forms] = await Promise.all([
-    getCachedPublicPortfolioProjects(),
+  const [{ data: forms }, { data: projects }] = await Promise.all([
     getCachedPublishedForms(),
+    getPublicSelectedPortfolio(),
   ])
-
-  return (
-    <ClientLandingPage
-      projects={portfolio.data}
-      forms={forms.data}
-      error={portfolio.error || forms.error}
-    />
-  )
+  return <ClientLandingPage forms={forms} projects={projects} />
 }

@@ -177,7 +177,10 @@ export type PublicSubmissionTracking = {
   expected_response_time: string
   contact_email: string
   contact_phone: string
-  support_hours: string
+  contact_whatsapp?: string
+  contact_behance?: string
+  contact_linkedin?: string
+  support_hours: string | null
 }
 
 export type ClientPortalProject = ClientPortalProjectRow

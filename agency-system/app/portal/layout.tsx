@@ -1,10 +1,12 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { LogOut, Zap } from 'lucide-react'
+import { ArrowUpRight, LogOut } from 'lucide-react'
 import { useAuth } from '@/contexts/auth-context'
 import { secondaryButtonClassName } from '@/components/ui/page'
 import { NotificationDropdown } from '@/components/layout/notification-dropdown'
+import { BrandLockup } from '@/components/public/brand'
+import { SITE_CONTACT } from '@/lib/contact'
 
 /**
  * Shared chrome for the authenticated client portal. Unlike the staff shell, the
@@ -21,14 +23,12 @@ export default function ClientPortalLayout({ children }: { children: React.React
   }
 
   return (
-    <main className="min-h-screen bg-bg pb-16">
-      <div className="sticky top-0 z-20 border-b border-border bg-bg/80 backdrop-blur">
+    <div className="min-h-screen bg-bg">
+      <div className="sticky top-0 z-20 border-b border-border bg-bg">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-3">
-          <div className="flex items-center gap-3">
-            <div className="flex h-8 w-8 items-center justify-center border border-line-light bg-surface-raised">
-              <Zap className="h-4 w-4 text-accent" />
-            </div>
-            <span className="font-mono-tech text-[10px] text-text-tertiary">AGENCY OS / CLIENT PORTAL</span>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+            <BrandLockup compact />
+            <span className="type-label hidden text-text-secondary sm:inline">Client portal</span>
           </div>
           <div className="flex items-center gap-2">
             <NotificationDropdown viewAllHref="/portal" />
@@ -40,6 +40,14 @@ export default function ClientPortalLayout({ children }: { children: React.React
       </div>
 
       {children}
-    </main>
+      <footer className="border-t border-border px-5 py-6">
+        <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="text-text-secondary">Need help with your project?</span>
+          <a href={SITE_CONTACT.mailto} className="inline-flex items-center gap-2 text-fg hover:underline">
+            Email for help <ArrowUpRight className="size-4" aria-hidden="true" />
+          </a>
+        </div>
+      </footer>
+    </div>
   )
 }

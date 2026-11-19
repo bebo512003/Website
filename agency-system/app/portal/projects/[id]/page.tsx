@@ -7,7 +7,9 @@ import { getClientPortalProject } from '@/lib/db'
 import type { ClientPortalProject } from '@/lib/supabase/types'
 import { EmptyState, InlineAlert, LoadingState, Panel, secondaryButtonClassName } from '@/components/ui/page'
 import { Progress } from '@/components/ui/progress'
+import { PublicBackLink, PublicEyebrow } from '@/components/public/public-page-sections'
 import { PROJECT_STATUS_LABELS, projectStatusBadgeClass } from '@/lib/project-lifecycle'
+import { publicTrackingPath } from '@/lib/submissions'
 
 /**
  * Client-facing project detail. Project fields come from the sanitized
@@ -38,11 +40,7 @@ export default function ClientPortalProjectPage({ params }: { params: Promise<{ 
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 px-5 py-8">
-      <div>
-        <Link href="/portal" className="inline-flex items-center gap-2 text-xs text-text-tertiary hover:text-accent">
-          <ArrowLeft className="h-3.5 w-3.5" /> Back to your projects
-        </Link>
-      </div>
+      <PublicBackLink href="/portal" label="Back to your projects" />
 
       {error && <InlineAlert>{error}</InlineAlert>}
 
@@ -60,13 +58,10 @@ export default function ClientPortalProjectPage({ params }: { params: Promise<{ 
       ) : (
         <>
           <header className="border-b border-border pb-6">
-            <div className="mb-3 flex items-center gap-3 font-mono-tech text-[10px] text-text-tertiary">
-              <span className="h-px w-7 bg-accent" />
-              PROJECT
-            </div>
+            <PublicEyebrow className="mb-4">Client project</PublicEyebrow>
             <div className="flex flex-wrap items-center gap-3">
-              <h1 className="font-display text-4xl leading-none tracking-tight text-fg">{project.name}</h1>
-              <span className={`inline-flex items-center rounded border px-2.5 py-1 text-[11px] font-semibold ${projectStatusBadgeClass(project.status)}`}>
+              <h1 className="type-h1 break-words text-fg">{project.name}</h1>
+              <span className={`inline-flex items-center rounded border px-2.5 py-1 text-xs font-semibold ${projectStatusBadgeClass(project.status)}`}>
                 {PROJECT_STATUS_LABELS[project.status]}
               </span>
             </div>
@@ -74,12 +69,12 @@ export default function ClientPortalProjectPage({ params }: { params: Promise<{ 
               <p className="mt-3 flex items-center gap-2 text-xs text-text-secondary">
                 <Hash className="h-3.5 w-3.5 text-accent" />
                 Request reference
-                <Link
-                  href={`/track?ref=${encodeURIComponent(project.reference_number)}`}
+                <a
+                  href={publicTrackingPath(project.reference_number)}
                   className="font-mono-tech text-accent hover:underline"
                 >
                   {project.reference_number}
-                </Link>
+                </a>
               </p>
             )}
           </header>
@@ -88,7 +83,7 @@ export default function ClientPortalProjectPage({ params }: { params: Promise<{ 
             <div className="p-5">
               <div className="flex items-center gap-4">
                 <Progress value={project.progress} className="h-2.5" />
-                <span className="font-display text-2xl tabular-nums text-fg">{project.progress}%</span>
+                <span className="font-mono text-2xl tabular-nums text-fg">{project.progress}%</span>
               </div>
               <p className="mt-3 text-xs text-text-tertiary">
                 {project.phase_name ? `Phase ${project.phase} — ${project.phase_name}` : `Phase ${project.phase}`}

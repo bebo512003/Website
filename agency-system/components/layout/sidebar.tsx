@@ -3,10 +3,11 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, Inbox, ClipboardList, LayoutDashboard, ListTodo, Settings, ShieldCheck, Users, UsersRound, Zap } from 'lucide-react'
+import { BarChart3, Bell, CheckSquare, ChevronLeft, ChevronRight, FileText, FolderKanban, Inbox, ClipboardList, LayoutDashboard, ListTodo, Settings, ShieldCheck, Users, UsersRound } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/contexts/auth-context'
 import { ADMIN_AREA_PERMISSIONS } from '@/lib/permissions'
+import { BrandLockup, BrandMark } from '@/components/public/brand'
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false)
@@ -42,10 +43,7 @@ export function Sidebar() {
     <>
       <aside className={cn('hidden h-screen shrink-0 flex-col border-r border-border bg-surface transition-all duration-300 md:flex', collapsed ? 'w-16' : 'w-64')}>
         <div className="relative flex h-16 items-center border-b border-border px-4">
-          <div className="flex items-center gap-3 overflow-hidden">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center border border-line-light bg-surface-raised"><Zap className="h-4 w-4 text-accent" /></div>
-            {!collapsed && <div className="whitespace-nowrap"><div className="text-sm font-bold tracking-wider">AGENCY OS</div><div className="font-mono-tech text-[8px] text-text-tertiary">OPERATIONS PLATFORM</div></div>}
-          </div>
+          {collapsed ? <BrandMark className="h-8 w-6" small monochrome /> : <BrandLockup compact monochrome /> }
         </div>
         <nav className="flex-1 space-y-1 overflow-y-auto p-3">
           {!collapsed && <p className="px-3 pb-2 pt-1 font-mono-tech text-[9px] text-text-tertiary">WORKSPACE</p>}

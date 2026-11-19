@@ -27,7 +27,10 @@ export type PortfolioProjectRow = {
   id: string
   title: string
   slug: string
+  subtitle: string | null
   cover_image_path: string | null
+  cover_image_url: string | null
+  detail_image_url: string | null
   description: string | null
   client_name: string | null
   category_id: string | null
@@ -59,7 +62,10 @@ export type PortfolioPublicRpcRow = {
   id: string
   title: string
   slug: string
+  subtitle: string | null
   cover_image_path: string | null
+  cover_image_url: string | null
+  detail_image_url: string | null
   description: string | null
   client_name: string | null
   category_id: string | null

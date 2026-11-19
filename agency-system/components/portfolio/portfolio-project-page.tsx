@@ -1,119 +1,81 @@
-import Link from 'next/link'
-import { ArrowLeft, ArrowRight, ExternalLink } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import type { PortfolioProjectWithRelations } from '@/lib/supabase/types'
-import { coverImageRecord, portfolioImageAlt } from '@/lib/public/portfolio-media'
+import { behanceImageUrl, coverImageRecord, portfolioCoverSrc, portfolioExternalUrl, portfolioImageAlt } from '@/lib/public/portfolio-media'
 import { PortfolioImage } from '@/components/public/portfolio-image'
-import { PublicSiteHeader } from '@/components/public/public-site-header'
-import { PublicSiteFooter } from '@/components/public/public-site-footer'
+import { PublicPage } from '@/components/public/public-page'
+import { ProjectInquiry, PublicPageIntro, PublicSectionHeading, publicContentClassName } from '@/components/public/public-page-sections'
+import { primaryButtonClassName } from '@/components/ui/page'
+import { SELECTED_WORK_PATH } from '@/lib/site'
 
 export function PortfolioProjectPage({ project }: { project: PortfolioProjectWithRelations }) {
+  const preview = behanceImageUrl(project.detail_image_url)
   const cover = coverImageRecord(project)
-  const gallery = (project.portfolio_project_images || []).filter((image) => image.image_url)
-  const details = cover ? gallery.filter((image) => image.id !== cover.id) : gallery
-  const heroAlt = portfolioImageAlt(project, cover?.alt_text, 'cover')
+  const hero = preview || portfolioCoverSrc(project)
+  const gallery = project.portfolio_project_images.filter((image) => image.image_url && image.image_url !== hero)
+  const external = portfolioExternalUrl(project.external_url)
+  const isBehance = external && ['www.behance.net', 'behance.net'].includes(new URL(external).hostname)
+  const hasInfo = project.client_name || project.project_date || project.services.length > 0
 
   return (
-    <div className="min-h-screen bg-[#080808] text-white">
-      <PublicSiteHeader
-        variant="dark"
-        activeKey="portfolio"
-      />
-
-      <div className="mx-auto max-w-7xl px-5 pb-20 pt-8 sm:px-8 lg:px-10 lg:pt-12">
-        <Link href="/portfolio" className="inline-flex items-center gap-2 text-xs text-white/45 transition hover:text-accent"><ArrowLeft className="h-3.5 w-3.5" /> Back to all work</Link>
-        <div className="mt-10 grid gap-10 lg:grid-cols-[1.2fr_0.8fr] lg:items-end lg:gap-20">
-          <div>
-            <p className="flex items-center gap-3 font-mono-tech text-[10px] text-accent"><span className="h-px w-8 bg-accent" />{project.portfolio_categories?.name || 'Selected work'}</p>
-            <h1 className="mt-5 max-w-4xl break-words font-display text-[clamp(3.5rem,16vw,8rem)] leading-[0.82] tracking-tight">{project.title}</h1>
-          </div>
-          <div className="lg:pb-2">
-            <p className="text-base leading-7 text-white/55">{project.description || 'A considered visual system created with clarity, intention, and attention to every detail.'}</p>
-            {project.external_url && (
-              <a href={project.external_url} target="_blank" rel="noreferrer" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-accent hover:text-white">
-                View external project <ExternalLink className="h-4 w-4" />
-              </a>
-            )}
-          </div>
-        </div>
-
-        <div className="relative mt-12 border border-white/10 bg-white/[0.035] p-2 sm:mt-16 sm:p-3">
-          <div className="relative max-h-[72vh] min-h-72 w-full overflow-hidden">
-            <div className="relative aspect-[16/9] max-h-[72vh] w-full">
-              <PortfolioImage
-                src={cover?.image_url}
-                alt={heroAlt}
-                priority
-                sizes="(min-width: 1280px) 1120px, 100vw"
-                className="max-h-[72vh]"
-              />
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-12 grid gap-10 border-b border-white/10 pb-12 lg:grid-cols-[0.7fr_1.3fr] lg:gap-20">
-          <div>
-            <p className="font-mono-tech text-[10px] text-accent">PROJECT INFORMATION</p>
-            <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-6 text-sm min-[420px]:grid-cols-2">
-              <div>
-                <dt className="text-xs text-white/35">Client / brand</dt>
-                <dd className="mt-1 font-medium text-white/80">{project.client_name || 'Confidential'}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-white/35">Date</dt>
-                <dd className="mt-1 font-medium text-white/80">
-                  {project.project_date ? new Date(`${project.project_date}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long' }) : 'Not specified'}
-                </dd>
-              </div>
-              <div className="min-[420px]:col-span-2">
-                <dt className="text-xs text-white/35">Services</dt>
-                <dd className="mt-2 flex flex-wrap gap-2">
-                  {project.services.length
-                    ? project.services.map((service) => <span key={service} className="border border-white/15 px-2.5 py-1 text-xs text-white/65">{service}</span>)
-                    : <span className="text-white/50">Creative direction and design</span>}
-                </dd>
-              </div>
-            </dl>
-          </div>
-          <div className="max-w-2xl">
-            <p className="text-lg leading-8 text-white/72 sm:text-xl">{project.description || 'Every project is an opportunity to make a clear point of view visible.'}</p>
-          </div>
-        </div>
-
-        {details.length > 0 && (
-          <section className="mt-12">
-            <div className="mb-6 flex items-end justify-between">
-              <div>
-                <p className="font-mono-tech text-[10px] text-accent">PROJECT GALLERY</p>
-                <h2 className="mt-2 font-display text-5xl">DETAILS.</h2>
-              </div>
-              <span className="text-xs text-white/35">{gallery.length} images</span>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-2">
-              {details.map((image) => (
-                <div key={image.id} className="relative aspect-[4/3] overflow-hidden border border-white/10 bg-white/[0.035]">
-                  <PortfolioImage
-                    src={image.image_url}
-                    alt={portfolioImageAlt(project, image.alt_text, 'gallery')}
-                    sizes="(min-width: 768px) 50vw, 100vw"
-                  />
-                </div>
-              ))}
-            </div>
-          </section>
+    <PublicPage activeKey="portfolio">
+      <PublicPageIntro
+        eyebrow={`Portfolio / ${project.portfolio_categories?.name || 'Selected work'}`}
+        title={project.title}
+        subtitle={project.subtitle}
+        description={project.description}
+        backLink={{ href: SELECTED_WORK_PATH, label: 'Back to selected work' }}
+        actions={external && (
+          <a href={external} target="_blank" rel="noopener noreferrer" className={primaryButtonClassName}>
+            {isBehance ? 'View full project on Behance' : 'View external project'} <ArrowUpRight className="size-4 shrink-0" aria-hidden="true" />
+          </a>
         )}
+        compact
+      />
+      {(hero || hasInfo || gallery.length > 0) && (
+        <div className={publicContentClassName}>
+          {hero && (
+            <section aria-labelledby="project-overview-title">
+              <PublicSectionHeading eyebrow="N° 01 / Project preview" title="A closer look." titleId="project-overview-title" />
+              <PortfolioImage
+                src={hero}
+                alt={portfolioImageAlt(project, preview ? null : cover?.alt_text)}
+                fallbackLabel={project.title}
+                className="mt-6 aspect-[4/3] max-h-[70vh] sm:mt-8 sm:aspect-[16/9]"
+              />
+            </section>
+          )}
 
-        <section className="mt-20 border-t border-white/10 pt-10">
-          <div className="flex flex-col justify-between gap-6 sm:flex-row sm:items-center">
-            <div>
-              <p className="font-mono-tech text-[10px] text-accent">NEXT PROJECT</p>
-              <p className="mt-2 text-sm text-white/45">Like what you see? Let&apos;s make something with intent.</p>
-            </div>
-            <Link href="/forms" className="inline-flex items-center justify-center gap-2 rounded-md border border-accent bg-accent px-5 py-3 text-sm font-semibold text-accent-foreground transition hover:brightness-110">Request a New Project <ArrowRight className="h-4 w-4" /></Link>
-          </div>
-        </section>
-      </div>
+          {hasInfo && (
+            <section className={hero ? 'mt-8 sm:mt-12' : ''} aria-labelledby="project-info-title">
+              <h2 id="project-info-title" className="type-label text-accent">Project information</h2>
+              <dl className="mt-6 grid grid-cols-1 gap-x-6 gap-y-6 text-sm min-[420px]:grid-cols-2">
+                {project.client_name && <div><dt className="text-xs text-text-secondary">Client / brand</dt><dd className="mt-1 font-medium text-fg">{project.client_name}</dd></div>}
+                {project.project_date && <div><dt className="text-xs text-text-secondary">Date</dt><dd className="mt-1 font-medium text-fg">{new Date(`${project.project_date}T00:00:00`).toLocaleDateString('en-US', { year: 'numeric', month: 'long' })}</dd></div>}
+                {project.services.length > 0 && (
+                  <div className="min-[420px]:col-span-2">
+                    <dt className="text-xs text-text-secondary">Services</dt>
+                    <dd className="mt-2 flex flex-wrap gap-2">
+                      {project.services.map((service, index) => <span key={`${service}-${index}`} className="border border-border px-2.5 py-1 text-xs text-text-secondary">{service}</span>)}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+            </section>
+          )}
 
-      <PublicSiteFooter variant="dark" />
-    </div>
+          {gallery.length > 0 && (
+            <section className="mt-12" aria-labelledby="project-gallery-title">
+              <PublicSectionHeading eyebrow="N° 02 / Project gallery" title="Project details." titleId="project-gallery-title" className="mb-6" />
+              <div className="grid items-start gap-4 sm:grid-cols-2">
+                {gallery.map((image) => (
+                  <PortfolioImage key={image.id} src={image.image_url} alt={portfolioImageAlt(project, image.alt_text, 'gallery')} fallbackLabel={project.title} natural />
+                ))}
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+      <ProjectInquiry />
+    </PublicPage>
   )
 }

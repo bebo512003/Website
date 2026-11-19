@@ -110,13 +110,13 @@ export function DynamicFormRenderer({
 
   const fieldShell = (question: FormQuestion, span: boolean, control: React.ReactNode) => (
     <div id={`question-${question.id}`} key={question.id} className={cn('scroll-mt-24 text-sm text-text-secondary', span && 'sm:col-span-2')}>
-      <span className="block font-medium text-fg">
+      <span id={`question-${question.id}-label`} className="block font-medium text-fg">
         {question.label}
-        {question.required && <span className="text-accent"> *</span>}
+        {question.required && <span className="text-accent" aria-hidden="true"> *</span>}
       </span>
-      {question.help_text && <span className="mt-1 block text-xs text-text-tertiary">{question.help_text}</span>}
+      {question.help_text && <span id={`question-${question.id}-hint`} className="mt-1 block text-xs text-text-tertiary">{question.help_text}</span>}
       {control}
-      {errors[question.id] && <span className="mt-1.5 block text-xs text-red-400">{errors[question.id]}</span>}
+      {errors[question.id] && <span id={`question-${question.id}-error`} className="mt-1.5 block text-xs text-accent">{errors[question.id]}</span>}
     </div>
   )
 
@@ -138,8 +138,8 @@ export function DynamicFormRenderer({
             </span>
             <span className="shrink-0">{progress}%</span>
           </div>
-          <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-raised">
-            <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${progress}%` }} />
+          <div className="h-1.5 w-full overflow-hidden bg-surface-raised">
+            <div className="h-full bg-accent transition-all" style={{ width: `${progress}%` }} />
           </div>
         </div>
       )}
@@ -155,6 +155,12 @@ export function DynamicFormRenderer({
             {section.questions.map((question) => {
         const meta = QUESTION_TYPE_MAP[question.question_type]
         const error = errors[question.id]
+        const fieldId = `question-${question.id}`
+        const fieldA11y = {
+          'aria-labelledby': `${fieldId}-label`,
+          'aria-describedby': [question.help_text && `${fieldId}-hint`, error && `${fieldId}-error`].filter(Boolean).join(' ') || undefined,
+          'aria-invalid': Boolean(error) || undefined,
+        }
 
         // ── Textual input types ──────────────────────────────────────────
         if (question.question_type === 'short_text' || question.question_type === 'number' || question.question_type === 'date') {
@@ -162,6 +168,8 @@ export function DynamicFormRenderer({
             question,
             false,
             <input
+              {...fieldA11y}
+              aria-required={question.required}
               type={question.question_type === 'short_text' ? 'text' : question.question_type}
               disabled={disabled}
               placeholder={question.placeholder || undefined}
@@ -177,6 +185,8 @@ export function DynamicFormRenderer({
             question,
             true,
             <textarea
+              {...fieldA11y}
+              aria-required={question.required}
               disabled={disabled}
               placeholder={question.placeholder || undefined}
               className={cn(inputClassName, 'mt-2 min-h-28 resize-y', error && 'border-red-500/50')}
@@ -192,13 +202,14 @@ export function DynamicFormRenderer({
           return fieldShell(
             question,
             false,
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div role="group" {...fieldA11y} className="mt-2 grid grid-cols-2 gap-2">
               {(['yes', 'no'] as const).map((option) => (
                 <button
                   key={option}
                   type="button"
                   disabled={disabled}
                   onClick={() => onAnswer(question.id, option)}
+                  aria-pressed={current === option}
                   className={optionPill(current === option).concat(' justify-center')}
                 >
                   {option === 'yes' ? t.yes : t.no}
@@ -216,6 +227,8 @@ export function DynamicFormRenderer({
               question,
               false,
               <select
+                {...fieldA11y}
+                aria-required={question.required}
                 disabled={disabled}
                 className={cn(inputClassName, 'mt-2', error && 'border-red-500/50')}
                 value={stringValue(question.id)}
@@ -231,9 +244,9 @@ export function DynamicFormRenderer({
             return fieldShell(
               question,
               options.length > 3,
-              <div className={cn('mt-2 grid gap-2', options.length > 2 ? 'sm:grid-cols-2' : 'grid-cols-1')}>
+              <div role="group" {...fieldA11y} className={cn('mt-2 grid gap-2', options.length > 2 ? 'sm:grid-cols-2' : 'grid-cols-1')}>
                 {options.map((option) => (
-                  <button key={option} type="button" disabled={disabled} onClick={() => onAnswer(question.id, option)} className={optionPill(current === option)}>
+                  <button key={option} type="button" disabled={disabled} onClick={() => onAnswer(question.id, option)} aria-pressed={current === option} className={optionPill(current === option)}>
                     <span className={cn('h-3.5 w-3.5 shrink-0 rounded-full border', current === option ? 'border-accent bg-accent' : 'border-line-light')} />
                     {option}
                   </button>
@@ -248,11 +261,11 @@ export function DynamicFormRenderer({
           return fieldShell(
             question,
             options.length > 3,
-            <div className={cn('mt-2 grid gap-2', options.length > 2 ? 'sm:grid-cols-2' : 'grid-cols-1')}>
+            <div role="group" {...fieldA11y} className={cn('mt-2 grid gap-2', options.length > 2 ? 'sm:grid-cols-2' : 'grid-cols-1')}>
               {options.map((option) => {
                 const active = selected.includes(option)
                 return (
-                  <button key={option} type="button" disabled={disabled} onClick={() => toggle(option)} className={optionPill(active)}>
+                  <button key={option} type="button" disabled={disabled} onClick={() => toggle(option)} aria-pressed={active} className={optionPill(active)}>
                     <span className={cn('flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-sm border', active ? 'border-accent bg-accent text-accent-foreground' : 'border-line-light')}>
                       {active && <span className="block h-1.5 w-1.5 rounded-sm bg-accent-foreground" />}
                     </span>
@@ -271,13 +284,14 @@ export function DynamicFormRenderer({
           return fieldShell(
             question,
             false,
-            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            <div role="group" {...fieldA11y} className="mt-2 flex flex-wrap items-center gap-1.5">
               {Array.from({ length: max }, (_, index) => index + 1).map((score) => (
                 <button
                   key={score}
                   type="button"
                   disabled={disabled}
-                  aria-label={`${meta.labelEn}: ${score}/${max}`}
+                  aria-label={`${lang === 'ar' ? meta.labelAr : meta.labelEn}: ${score}/${max}`}
+                  aria-pressed={current === score}
                   onClick={() => onAnswer(question.id, String(score))}
                   className="transition hover:scale-110 disabled:cursor-not-allowed disabled:opacity-60"
                 >
@@ -299,14 +313,16 @@ export function DynamicFormRenderer({
             question,
             false,
             <div className="mt-2 space-y-2">
-              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent', (disabled || fileUploadDisabled || maxReached) && 'cursor-not-allowed opacity-60')}>
+              <label className={cn('flex cursor-pointer items-center gap-3 rounded border border-dashed border-line-light p-4 text-sm text-text-secondary transition hover:border-accent focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--accent-ink)]', (disabled || fileUploadDisabled || maxReached) && 'cursor-not-allowed opacity-60')}>
                 {uploading ? <LoaderCircle className="h-5 w-5 animate-spin text-accent" /> : <CloudUpload className="h-5 w-5 text-accent" />}
                 <div className="flex flex-col">
                   <span>{uploading ? t.uploading : maxReached ? t.maxFilesReached : t.upload}</span>
-                  <span className="text-[11px] text-text-tertiary">{t.fileHint}</span>
+                  <span className="text-xs text-text-tertiary">{t.fileHint}</span>
                 </div>
                 <input
-                  className="hidden"
+                  {...fieldA11y}
+                  aria-required={question.required}
+                  className="sr-only"
                   type="file"
                   accept={STORAGE_RULES['form-files'].acceptAttribute}
                   disabled={uploadDisabled}
@@ -343,6 +359,8 @@ export function DynamicFormRenderer({
           question,
           false,
           <input
+            {...fieldA11y}
+            aria-required={question.required}
             type="text"
             disabled={disabled}
             placeholder={question.placeholder || undefined}

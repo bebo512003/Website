@@ -1,6 +1,28 @@
 import type { PortfolioProjectWithRelations } from '@/lib/supabase/types'
 import { absoluteUrl } from '@/lib/site'
 
+const BEHANCE_IMAGE_URL = /^https:\/\/mir-s3-cdn-cf\.behance\.net\/(?:projects|project_modules)\/[A-Za-z0-9_./-]+\.(?:jpg|jpeg|png|webp|avif)$/
+
+/** Match the database constraint: original Behance CDN files only. */
+export function behanceImageUrl(value: string | null | undefined): string | null {
+  const url = value?.trim()
+  return url && url.length <= 1024 && !url.includes('..') && BEHANCE_IMAGE_URL.test(url) ? url : null
+}
+
+export function portfolioExternalUrl(value: string | null | undefined): string | null {
+  if (!value) return null
+  try {
+    const url = new URL(value)
+    return (url.protocol === 'https:' || url.protocol === 'http:') && !url.username && !url.password ? url.href : null
+  } catch {
+    return null
+  }
+}
+
+export function portfolioProjectPath(slug: string) {
+  return `/portfolio/${encodeURIComponent(slug)}`
+}
+
 /** Rejects traversal and unexpected characters before we talk to Storage. */
 export function isSafePortfolioStoragePath(path: string): boolean {
   if (!path || path.length > 512) return false
@@ -15,17 +37,22 @@ export function portfolioImageSrc(storagePath: string): string {
   return `/api/public/portfolio-image/${segments.join('/')}`
 }
 
-export function portfolioImageAbsoluteSrc(storagePath: string): string {
-  return absoluteUrl(portfolioImageSrc(storagePath))
-}
-
 export function coverImageRecord(project: PortfolioProjectWithRelations) {
   const images = project.portfolio_project_images || []
   if (project.cover_image_path) {
     const cover = images.find((image) => image.storage_path === project.cover_image_path)
-    if (cover) return cover
+    if (cover?.image_url) return cover
   }
-  return images[0] || null
+  if (behanceImageUrl(project.cover_image_url)) return null
+  return images.find((image) => image.image_url) || null
+}
+
+export function portfolioCoverSrc(project: PortfolioProjectWithRelations) {
+  return coverImageRecord(project)?.image_url || behanceImageUrl(project.cover_image_url) || behanceImageUrl(project.detail_image_url)
+}
+
+export function publicPortfolioOgImage(src: string | null) {
+  return src?.startsWith('/api/public/portfolio-image/') ? absoluteUrl(src) : behanceImageUrl(src)
 }
 
 export function portfolioImageAlt(

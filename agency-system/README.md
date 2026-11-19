@@ -1,6 +1,6 @@
-# Agency OS
+# Beshoy Ashraf website and workspace
 
-Agency OS is an English-language operations workspace for creative agencies. It is built with Next.js 16, React 19, TypeScript, Tailwind CSS, and Supabase.
+The public site hosts Beshoy Ashraf’s portfolio and project request forms. Agency OS is the accompanying operations workspace. It is built with Next.js 16, React 19, TypeScript, Tailwind CSS, and Supabase.
 
 The application contains no seeded users or placeholder business records. All dashboard metrics, clients, projects, assignments, tasks, files, and notifications come from the authenticated Supabase project.
 
@@ -20,8 +20,8 @@ The application contains no seeded users or placeholder business records. All da
 - **Controlled Submission → Project Conversion**: Admins deliberately convert only Qualified/Approved submissions through client selection/creation, project configuration, owner/manager/team assignment, and a final confirmation; the database keeps immutable submission provenance and rejects duplicate/concurrent conversions
 - **Project ownership, status & lifecycle** (Session 12): every project carries an Owner, Manager, priority, deadline, health (`On track` / `At risk` / `Off track` / `Blocked`), and an assigned team. Projects move through a database-enforced lifecycle — Draft → Planned → Active → Waiting for Client → In Review → Ready for Delivery → Delivered → Completed, plus On Hold and Cancelled — where only valid transitions are accepted, the owner and manager are always project members, and ownership is shown across the project list, project detail, dashboard, and reports
 - **Project delivery & closure** (Session 15): after Active / In Review, staff assemble a **final delivery package**, mark it Ready / Delivered, record **revision required**, record an **internal client-approval placeholder**, then Complete and Archive. The database rejects Complete unless those delivery conditions are met. Delivery data is internal and kept separate from any future client-facing approval UI
-- **Public company portfolio** at `/portfolio`, backed by a separate RLS-protected portfolio schema with admin-managed projects, categories, images, ordering, featured flags, and publishing. Public pages are server-rendered and cached; unpublished work stays private.
-- **Public performance & SEO** (Session 27): landing, forms, and portfolio pages fetch published data on the server (session-less anon client + 120s cache), emit Open Graph / Twitter metadata, a sitemap, and robots rules, and serve portfolio images through a published-only proxy with responsive `next/image` sizes and alt text.
+- **Selected work** at `/#work`: four projects from Beshoy Ashraf’s Behance. Admin-managed public detail links still use RLS; unpublished workspace projects stay private.
+- **Public performance & SEO** (Session 27): landing, project desk, and portfolio detail pages fetch published data on the server (session-less anon client + 120s cache), emit Open Graph / Twitter metadata, a sitemap, and robots rules, and serve portfolio images through a published-only proxy with responsive `next/image` sizes and alt text.
 - **Client Portal** (Session 17–18) at `/portal`: an invitation-only, authenticated area for the Client role. Admins invite a client from the client detail page (creating a linked login with a temporary password); the invited client sees a dashboard with their own projects, live lifecycle status and progress, **selected/shared files**, **deliverables**, a **client-visible conversation**, and **approve / request revision** actions. All portal reads and writes go through SECURITY DEFINER RPCs scoped to the client's own CRM record — internal notes, employee tasks, staff permissions, internal activity, private working files, and other clients/projects are never exposed. Client feedback notifies the project owner; approval updates the delivery state; a revision request is a first-class operational event
 - Project and client create, read, update, and delete workflows
 - **Employee My Work workspace** (Session 13) at `/my-work`: every task assigned to the signed-in user across authorized projects, with live Open / Due today / Upcoming (7 days) / Overdue / High-priority summaries that act as one-click filters, a per-project grouping with completion progress, an inline status control, and a completed-work archive; task-assignment notifications deep-link straight into it
@@ -68,6 +68,14 @@ EMAIL_FROM_ADDRESS=                # verified sender, e.g. notifications@yourdom
 
 Deadline reminders run on the server. After deploy, set `CRON_SECRET` and `SUPABASE_SERVICE_ROLE_KEY` in the host environment. Vercel Cron hits `GET /api/cron/reminders` every day at 07:00 UTC and sends `Authorization: Bearer $CRON_SECRET` automatically when `CRON_SECRET` is set. Apply `supabase/migrations/20260905000000_deadline_escalation_reminders.sql` (or regenerate `schema.sql`) first. You can also trigger the same route from any external scheduler.
 
+## Site identity and contact
+
+The [Beshoy Ashraf design system](https://claude.ai/artifact/UB4ChUdzeDQPf2yfWshXMY#components) is implemented in `app/globals.css` and `components/public/brand.tsx`. Geist, Geist Mono and Alexandria are self-hosted. The public site and client portal use the carbon palette; the staff workspace retains a private light appearance preference.
+
+Update public contact details in `lib/contact.ts`. The footer, submission receipt, tracking view, and client-facing emails use those values. The WhatsApp link is derived from the same international number as the call link. These are site-owner details, not customer or staff account data.
+
+The public Supabase tracking RPC mirrors the contact details for direct API consumers. Existing databases must apply `supabase/migrations/20261118000000_public_tracking_contact.sql`. If the details change again, add a follow-up migration and regenerate the schema snapshot rather than rewriting migration history.
+
 ## Transactional email (Session 21)
 
 Email goes through **Resend**, triggered by a server-side queue — the browser never
@@ -109,7 +117,9 @@ Setup:
    your own account email from `onboarding@resend.dev`.
 3. Verify your domain (Resend → Domains) and set
    `EMAIL_FROM_ADDRESS=notifications@yourdomain.com` (and optionally
-   `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME`).
+   `EMAIL_FROM_NAME` / `EMAIL_BRAND_NAME`, which default to Beshoy Ashraf).
+   Client notifications use the public contact address as `Reply-To`; keep a
+   Resend-verified address as `From`.
 4. Create a webhook at **resend.com → Webhooks** pointing at
    `https://<your-deploy>/api/email/resend-webhook` for `sent`, `delivered`,
    `bounced`, and `complained` events, copy its signing secret into
@@ -251,22 +261,29 @@ Client accounts cannot read or write delivery packages directly. Real client app
 
 Apply `supabase/migrations/20260831000000_project_delivery_closure.sql` and `supabase/migrations/20260903000000_client_feedback_shared_files.sql` (or the regenerated `supabase/schema.sql`) before using this UI.
 
+## Public page design
+
+The landing page and customer-facing routes share `PublicPage` and the components in `components/public/public-page-sections.tsx`: site navigation, footer, intro, section headings, and form/help layout. Use the existing color and type tokens in `app/globals.css`. The project desk, request form, and receipt share `RequestSteps` in both languages. Authenticated portal pages reuse the same headings and tokens with their own account navigation.
+
 ## Public company portfolio
 
 The public portfolio is deliberately separate from the internal employee workspace:
 
-- Public visitors open `/portfolio` or `/portfolio/<project-slug>` without signing in. Those pages are server-rendered from the public RPC (published + not archived only) and cached for two minutes.
-- Portfolio images stay in the private `portfolio-images` bucket. The public site never embeds a signed URL in HTML; it requests `/api/public/portfolio-image/<path>`, which 404s unless `is_public_portfolio_image` is true.
-- Admins open **Administration → Portfolio Management** to create and edit portfolio projects, manage categories, upload images, choose a cover image, reorder projects, feature projects, and publish/unpublish them.
-- A project is visible publicly only when `published = true` and `archived = false`. Drafts, unpublished projects, archived projects, and their images remain private through PostgreSQL RLS and the private `portfolio-images` Storage bucket.
-- The migration `supabase/migrations/20260814000000_public_portfolio.sql` creates the portfolio tables, default categories, the `portfolio.manage` permission, RLS policies, and storage policies. Apply all migrations (or the complete `supabase/schema.sql`) before using this feature.
+- Open **Administration → Portfolio** (`/admin/portfolio`) with the **Manage portfolio** permission. Create or edit a project, add a title and card subtitle, upload images, pick a cover, and publish when ready.
+- **Selected work** (`/#work`) shows only published, non-archived projects with **Show in Selected work** enabled. Use the **On homepage** filter and the arrows to reorder them. Adding a new project appends it to the collection. Turning off the selection hides its card but keeps its published detail link; unpublishing or archiving hides both.
+- The projects stay in a compact, horizontally scrollable row if there are more cards than fit. Images are shown at their original proportions without cropping; the frame may have space around an image. Project details and uploaded galleries also show the whole image.
+- `/portfolio` redirects to `/#work`. `/portfolio/<slug>` is the public detail route; previous `/portfolio/selected/<slug>` links redirect there. The homepage, details, and sitemap read current published data on each visit.
+- The one-time migration `20261118000100_managed_selected_work.sql` moves the four existing Tahatan Holding, MERAAK, 3 Girls Fruit, and InventionsX cards into the same editor, with their original order and Behance art and links. A project with the same slug or Behance gallery ID is not overwritten or re-published. This is not an ongoing sync: any edit, unpublish or deletion from the editor is respected; there is no hardcoded fallback.
+- The original Behance images are already public and loaded directly from their CDN. For uploaded images, the `portfolio-images` bucket stays private. The public site uses `/api/public/portfolio-image/<path>` instead of embedding signed URLs, rechecking that the project is published and not archived on every request. No `portfolio.manage` or storage policy changes are required.
+
+**Deployment:** Apply all pending migrations (or the complete `supabase/schema.sql` for a new database) before deploying this code. In particular, the homepage needs the managed Selected work migration to populate the collection and add the new read API. The old portfolio RPCs continue to work.
 
 Recommended smoke test:
 
-1. Sign in as an Admin and open **Administration → Portfolio Management**.
-2. Create a project, select images, set the cover image, and click **Publish project**.
-3. Open `/portfolio` in a private/incognito window. The published project and its details page should load without login.
-4. Turn publishing off or archive the project; refresh the private window and confirm it no longer appears.
+1. Sign in with **Manage portfolio** and open **Administration → Portfolio**. Confirm the four original cards can be edited.
+2. Create a draft, add images, choose a cover and verify its title is not on `/#work`. Then select **Show in Selected work** and **Publish project**.
+3. Open `/#work` in an incognito window. The card should show the full cover and open a public detail page without login. Verify a mobile viewport and the previous `/portfolio/selected/<slug>` link.
+4. Reorder or edit a selected project and refresh to see the update. Turn off its selection, then unpublish it; confirm the first action hides only the card, while the second also removes the detail page and blocks requests for uploaded images.
 
 ## Validation
 
@@ -283,15 +300,16 @@ The client-facing flow is deliberately separate from the staff workspace:
 | Route | Public behavior |
 | --- | --- |
 | `/` | Landing page with **Request a New Project**, **Portfolio**, and **Login** paths. |
-| `/forms` | Lists published Dynamic Forms only. New Admin-published forms appear automatically. |
+| `/forms` | Project desk: start a new brief from the published forms or track an existing request by reference/token. |
 | `/f/<slug>` | Renders and submits a published form without sign-up or client credentials. |
-| `/portfolio` | Lists only published, non-archived portfolio projects. |
-| `/portfolio/<slug>` | Shows a public project only while it remains published and non-archived. |
+| `/#work` | Published projects marked **Show in Selected work**. The old `/portfolio` listing redirects here. |
+| `/portfolio/selected/<slug>` | Redirects legacy selected-project links to `/portfolio/<slug>`. |
+| `/portfolio/<slug>` | Shows an admin-managed project only while it remains published and non-archived. |
 | `/auth` | Login/reset for existing team accounts only; there is no public sign-up. |
 | `/portal` | Authenticated Client Portal dashboard (invitation-only; clients are routed here after login). |
 | `/portal/projects/<id>` | A client's own project status detail — sanitized, never internal staff data. |
 
-**Request a New Project** always opens `/forms`. There is no competing `/intake` wizard; old `/intake` bookmarks permanently redirect forward to `/forms`. No current CTA points to `/intake`.
+**Request a New Project** opens `/forms`. The receipt and portal link to `/forms?ref=<reference>#track`, with `/api/forms/track` using the existing read-only tracking RPC. Legacy `/track?ref=…`, `/track?token=…`, `/track?key=…` and `/track/<reference>` links (including older emails) redirect to the same desk and retain the lookup key. Old `/intake` bookmarks redirect to `/forms`.
 
 Public submissions use **Supabase Anonymous Sign-in** behind the scenes. The visitor never registers, chooses a password, receives a client account, or enters a portal. The short-lived anonymous identity lets the database rate-limit submissions, attribute the response, and authorize private file uploads.
 
@@ -302,8 +320,8 @@ Before production launch:
 3. Turn **Anonymous → Enable Anonymous Sign-ins** ON. This is required for public form submission and file uploads; without it the form displays a configuration warning instead of asking the client to log in.
 4. Apply every migration in `supabase/migrations/` (or `supabase/schema.sql` for a fresh project).
 5. Set the deployment values from `.env.local.example`, especially the Supabase URL/anon key and the real `NEXT_PUBLIC_SITE_URL`.
-6. Publish at least one form in **Administration → Forms** and, optionally, portfolio projects in **Administration → Portfolio Management**.
-7. Smoke-test `/forms`, one `/f/<slug>`, `/portfolio`, and `/track` in an incognito window. After a publish/unpublish, wait up to two minutes (or redeploy) for the public cache to refresh.
+6. Publish at least one form in **Administration → Forms** and manage the homepage projects in **Administration → Portfolio**.
+7. Smoke-test `/#work`, `/forms`, a published `/f/<slug>` and an existing `/track/<reference>` link in an incognito window. The published forms catalog can take up to two minutes to refresh; portfolio changes are visible on the next visit.
 
 ## Client portal
 

@@ -1,188 +1,250 @@
 @import 'tailwindcss';
 
-/* ============================================
-   AGENCY OS — BLUEPRINT DESIGN SYSTEM
-   Inspired by: Technical / Engineering / Blueprint
-   ============================================ */
-
+/* Beshoy Ashraf · Brands, Engineered. The public site stays on carbon. */
 :root {
-  /* Dark Mode Colors (Default) */
-  --color-bg: 0 0% 2%;
-  --color-fg: 0 0% 98%;
-  --color-muted: 0 0% 35%;
-  --color-line: 0 0% 18%;
-  --color-line-light: 0 0% 28%;
-  
-  /* Primary — Black */
-  --primary: 0 0% 8%;
-  --primary-foreground: 0 0% 98%;
-  
-  /* Accent — #B9282D (Deep Red) — Default */
-  --accent: 358 65% 44%;
-  --accent-foreground: 0 0% 98%;
-  --accent-glow: 358 75% 50%;
-  
-  /* Surface */
-  --surface: 0 0% 4%;
-  --surface-raised: 0 0% 6%;
-  --surface-overlay: 0 0% 10%;
-  
-  /* Border & Lines */
-  --border: 0 0% 12%;
-  --border-subtle: 0 0% 8%;
-  
-  /* Text hierarchy */
-  --text-primary: 0 0% 98%;
-  --text-secondary: 0 0% 70%;
-  /* Tertiary was 40% — bumped to 55% so small helper text keeps ≥4.5:1
-     contrast against the near-black bg (WCAG AA for normal text). */
-  --text-tertiary: 0 0% 55%;
+  color-scheme: dark;
+  --carbon: #0b0b0c;
+  --graphite: #161618;
+  --hairline: #2a2a2e;
+  --steel: #8c8c92;
+  --bone: #f2f0eb;
+  --signal-red: #b9282d;
+  --signal-red-text: #db575c;
 
-  --radius: 0.375rem;
+  --canvas: var(--carbon);
+  --panel: var(--graphite);
+  --raised: color-mix(in srgb, var(--panel) 96%, var(--ink));
+  --overlay: color-mix(in srgb, var(--panel) 94%, var(--ink));
+  --divider: var(--hairline);
+  --divider-strong: color-mix(in srgb, var(--divider) 38%, var(--ink-muted));
+  --ink: var(--bone);
+  --ink-muted: var(--steel);
+  --accent-ink: var(--signal-red-text);
+
+  --brand-sans: 'Geist Variable', 'Alexandria Variable', system-ui, sans-serif;
+  --brand-arabic: 'Alexandria Variable', 'Geist Variable', system-ui, sans-serif;
+  --brand-mono: 'Geist Mono Variable', 'Alexandria Variable', ui-monospace, monospace;
 }
 
-/* Light Mode */
-html:not(.dark) {
-  --color-bg: 0 0% 98%;
-  --color-fg: 0 0% 3.9%;
-  --color-muted: 0 0% 45%;
-  --color-line: 0 0% 90%;
-  --color-line-light: 0 0% 85%;
-  
-  --surface: 0 0% 96%;
-  --surface-raised: 0 0% 94%;
-  --surface-overlay: 0 0% 92%;
-  
-  --border: 0 0% 90%;
-  --border-subtle: 0 0% 92%;
-  
-  --text-primary: 0 0% 3.9%;
-  --text-secondary: 0 0% 35%;
-  /* Light mode tertiary needs to be *darker* than secondary was for the
-     same 4.5:1 threshold against the near-white bg. */
-  --text-tertiary: 0 0% 45%;
+/* The existing light preference is an alternate for the internal workspace only. */
+[data-workspace-theme='light'] {
+  color-scheme: light;
+  --canvas: var(--bone);
+  --panel: color-mix(in srgb, var(--bone) 96%, var(--carbon));
+  --divider: color-mix(in srgb, var(--bone) 80%, var(--carbon));
+  --raised: color-mix(in srgb, var(--canvas) 92%, var(--ink));
+  --overlay: color-mix(in srgb, var(--canvas) 88%, var(--ink));
+  --divider-strong: var(--ink-muted);
+  --ink: var(--carbon);
+  --ink-muted: #54545a;
+  --accent-ink: #9a2025;
 }
 
 @theme inline {
-  --color-bg: hsl(var(--color-bg));
-  --color-fg: hsl(var(--color-fg));
-  --color-muted: hsl(var(--color-muted));
-  --color-line: hsl(var(--color-line));
-  --color-line-light: hsl(var(--color-line-light));
-  --color-surface: hsl(var(--surface));
-  --color-surface-raised: hsl(var(--surface-raised));
-  --color-surface-overlay: hsl(var(--surface-overlay));
-  --color-accent-glow: hsl(var(--accent-glow));
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  --color-border: hsl(var(--border));
-  --color-border-subtle: hsl(var(--border-subtle));
-  --color-text-primary: hsl(var(--text-primary));
-  --color-text-secondary: hsl(var(--text-secondary));
-  --color-text-tertiary: hsl(var(--text-tertiary));
+  --font-sans: var(--brand-sans);
+  --font-mono: var(--brand-mono);
+  --color-bg: var(--canvas);
+  --color-fg: var(--ink);
+  --color-muted: var(--ink-muted);
+  --color-line: var(--divider);
+  --color-line-light: var(--divider-strong);
+  --color-surface: var(--panel);
+  --color-surface-raised: var(--raised);
+  --color-surface-overlay: var(--overlay);
+  --color-primary: var(--ink);
+  --color-primary-foreground: var(--canvas);
+  --color-accent: var(--signal-red);
+  --color-accent-foreground: var(--bone);
+  /* Red is a signal. Reserve the lighter tint for legible text and focus rings. */
+  --text-color-accent: var(--accent-ink);
+  --ring-color-accent: var(--accent-ink);
+  --color-border: var(--divider);
+  --color-border-subtle: var(--divider);
+  --color-text-primary: var(--ink);
+  --color-text-secondary: var(--ink-muted);
+  --color-text-tertiary: var(--ink-muted);
+  --color-foreground: var(--ink);
+  --color-background: var(--canvas);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--ink);
+  --color-muted-foreground: var(--ink-muted);
+  --color-secondary: var(--panel);
+  --color-secondary-foreground: var(--ink);
+  --color-ring: var(--accent-ink);
+  --color-input: var(--divider-strong);
 }
 
-@utility font-cairo {
-  font-family: 'Space Grotesk', sans-serif;
+/* Use square corners for existing controls and panels without changing pill/dot/avatar radii. */
+@theme {
+  --radius: 0px;
+  --radius-xs: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+  --radius-2xl: 0px;
+  --radius-3xl: 0px;
+  --radius-4xl: 0px;
+  --text-base--line-height: 1.5rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl--line-height: 2rem;
 }
 
 @utility font-display {
-  font-family: 'Bebas Neue', 'Space Grotesk', sans-serif;
+  font-family: var(--brand-sans);
+  &:lang(ar) { font-family: var(--brand-arabic); }
 }
 
 @utility font-mono-tech {
-  font-family: 'Space Grotesk', monospace;
-  letter-spacing: 0.15em;
+  font-family: var(--brand-mono);
+  letter-spacing: 0.14em;
   text-transform: uppercase;
+  &:lang(ar) { letter-spacing: normal; }
+}
+
+@utility type-label {
+  font-family: var(--brand-mono);
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 500;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  &:lang(ar) {
+    font-family: var(--brand-arabic);
+    line-height: 1.25rem;
+    letter-spacing: normal;
+  }
+}
+
+@utility type-display {
+  font-size: 3rem;
+  line-height: 3rem;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  &:lang(ar) { line-height: 4rem; letter-spacing: normal; }
+  @media (width >= 40rem) {
+    font-size: 4rem;
+    line-height: 4rem;
+    &:lang(ar) { line-height: 5.5rem; }
+  }
+  @media (width >= 64rem) {
+    font-size: 5rem;
+    line-height: 4.75rem;
+    &:lang(ar) { line-height: 6.75rem; }
+  }
+  @media (width >= 80rem) {
+    font-size: 6rem;
+    line-height: 5.5rem;
+    &:lang(ar) { line-height: 8rem; }
+  }
+}
+
+@utility type-h1 {
+  font-size: 2.5rem;
+  line-height: 2.75rem;
+  font-weight: 300;
+  letter-spacing: -0.015em;
+  &:lang(ar) { line-height: 3.75rem; letter-spacing: normal; }
+  @media (width >= 48rem) {
+    font-size: 4rem;
+    line-height: 4rem;
+    &:lang(ar) { line-height: 5.5rem; }
+  }
+}
+
+@utility type-h2 {
+  font-size: 2rem;
+  line-height: 2.25rem;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  &:lang(ar) { line-height: 3rem; letter-spacing: normal; }
+  @media (width >= 40rem) {
+    font-size: 2.5rem;
+    line-height: 2.75rem;
+    font-weight: 300;
+    &:lang(ar) { font-weight: 400; line-height: 3.75rem; }
+  }
+}
+
+@utility type-h3 {
+  font-size: 1.75rem;
+  line-height: 2.25rem;
+  font-weight: 600;
+  &:lang(ar) { line-height: 2.75rem; }
+}
+
+@utility type-lede {
+  font-size: 1.25rem;
+  line-height: 2rem;
+  &:lang(ar) { font-size: 1.375rem; line-height: 2.25rem; }
+}
+
+@utility type-motto {
+  font-family: var(--brand-arabic);
+  font-size: 1.375rem;
+  line-height: 2.25rem;
+  font-weight: 700;
+}
+
+@utility site-container {
+  width: 100%;
+  max-width: 80rem;
+  margin-inline: auto;
+  padding-inline: 1.5rem;
+  @media (width >= 40rem) { padding-inline: 2rem; }
+  @media (width >= 64rem) { padding-inline: 3rem; }
 }
 
 @layer base {
-  * {
-    border-color: hsl(var(--border));
-  }
-  
+  * { border-color: var(--divider); }
+
   html {
-    overflow-x: hidden;
+    overflow-x: clip;
     -webkit-text-size-adjust: 100%;
   }
 
   body {
     min-width: 320px;
-    overflow-x: hidden;
-    background-color: hsl(var(--color-bg));
-    color: hsl(var(--color-fg));
-    font-family: 'Space Grotesk', sans-serif;
+    overflow-x: clip;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--brand-sans);
+    line-height: 1.5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
 
-  button, a, input, select, textarea {
-    -webkit-tap-highlight-color: transparent;
+  :where([lang='ar']) {
+    font-family: var(--brand-arabic);
+    line-height: 1.75;
   }
 
-  /* ------------------------------------------------------------------
-     Accessibility baseline
-     ------------------------------------------------------------------
-     Every focusable control gets a visible, high-contrast focus ring
-     for keyboard users. `:focus-visible` keeps mouse clicks clean but
-     always shows the ring when navigating with Tab / arrow keys. This
-     is a global fallback — individual components may add stronger
-     rings, but nothing should ever *remove* the outline without
-     providing an equally visible replacement.
-     ------------------------------------------------------------------ */
+  :where(a, button, input, select, textarea) { -webkit-tap-highlight-color: transparent; }
 
   :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-    outline: 2px solid hsl(var(--accent));
-    outline-offset: 2px;
-    border-radius: 4px;
+    outline: 2px solid var(--accent-ink);
+    outline-offset: 3px;
   }
 }
 
-/* ============================================
-   ACCESSIBILITY UTILITIES
-   ============================================ */
-
-/* Visually hidden but still available to assistive tech (WCAG technique). */
-.sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* Skip link: hidden until focused, then anchored to the top-left so a
-   keyboard user's first Tab press exposes it and jumps past the shell nav. */
+/* Keyboard-only shortcut to bypass navigation. */
 .skip-link {
   position: absolute;
-  top: 0;
-  left: 0;
+  inset-block-start: 0;
+  inset-inline-start: 0;
   z-index: 100;
   padding: 0.75rem 1rem;
   margin: 0.5rem;
-  background: hsl(var(--accent));
-  color: hsl(var(--accent-foreground));
+  background: var(--ink);
+  color: var(--canvas);
   font-size: 0.875rem;
   font-weight: 600;
-  border-radius: 0.375rem;
   transform: translateY(-150%);
   transition: transform 0.15s ease;
 }
 
-.skip-link:focus,
-.skip-link:focus-visible {
-  transform: translateY(0);
-  outline: 2px solid hsl(var(--accent-foreground));
-  outline-offset: 2px;
-}
+.skip-link:focus { transform: translateY(0); }
 
-/* Respect user motion preferences globally. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;
@@ -192,69 +254,7 @@ html:not(.dark) {
   }
 }
 
-/* ============================================
-   BLUEPRINT GRID BACKGROUND
-   ============================================ */
-
-.blueprint-bg {
-  position: relative;
-  background-color: hsl(var(--color-bg));
-}
-
-/* ============================================
-   TYPOGRAPHY — BIG & BOLD
-   ============================================ */
-
-/* ============================================
-   RED ACCENT LINE
-   ============================================ */
-
-.accent-line-v {
-  position: relative;
-}
-
-.accent-line-v::before {
-  content: '';
-  position: absolute;
-  right: 0;
-  top: 0;
-  bottom: 0;
-  width: 2px;
-  background: linear-gradient(
-    to bottom,
-    hsl(var(--accent)),
-    hsl(var(--accent-glow)),
-    hsl(var(--accent))
-  );
-}
-
-/* ============================================
-   SCROLLBAR — MINIMAL
-   ============================================ */
-
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: hsl(var(--color-bg));
-}
-
-::-webkit-scrollbar-thumb {
-  background: hsl(var(--color-line));
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: hsl(var(--accent));
-}
-
-/* ============================================
-   SELECTION
-   ============================================ */
-
 ::selection {
-  background: hsl(var(--accent));
-  color: hsl(var(--color-fg));
+  background: var(--ink);
+  color: var(--canvas);
 }

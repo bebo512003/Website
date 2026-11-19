@@ -2,15 +2,16 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { SubmissionContact } from './submission-contact'
+import { REQUEST_RESPONSE_TIME } from '@/lib/contact'
+import { projectDeskPath, SELECTED_WORK_PATH } from '@/lib/site'
+import { PublicEyebrow, publicPanelClassName } from '@/components/public/public-page-sections'
+import { secondaryButtonClassName } from '@/components/ui/page'
 import {
-  Clock,
   Copy,
+  Clock,
   Check,
-  Mail,
-  Phone,
   Printer,
-  ShieldCheck,
-  Sparkles,
   AlertCircle,
   FileText,
   Layers3,
@@ -19,11 +20,11 @@ import {
 } from 'lucide-react'
 import type { PublicSubmissionTracking } from '@/lib/supabase/types'
 import {
-  AGENCY_CONTACT,
   CLIENT_STAGE_STEPS,
   CLIENT_STATUS_DESCRIPTIONS,
+  CLIENT_STATUS_LABELS_AR,
   getClientStageProgress,
-  submissionStatusStyle,
+  publicTrackingPath,
 } from '@/lib/submissions'
 
 type Lang = 'ar' | 'en'
@@ -63,6 +64,7 @@ export function SubmissionTrackingView({
     minute: '2-digit',
   })
 
+  const statusLabel = isAr ? CLIENT_STATUS_LABELS_AR[tracking.status] || tracking.client_status_label : tracking.client_status_label
   const statusDesc = CLIENT_STATUS_DESCRIPTIONS[tracking.status]?.[lang] || tracking.client_status_description
 
   const handleCopyRef = async () => {
@@ -78,7 +80,7 @@ export function SubmissionTrackingView({
   const handleCopyLink = async () => {
     try {
       const origin = typeof window !== 'undefined' ? window.location.origin : ''
-      const url = `${origin}/track?ref=${encodeURIComponent(tracking.reference_number)}`
+      const url = `${origin}${publicTrackingPath(tracking.reference_number, lang)}`
       await navigator.clipboard.writeText(url)
       setCopiedLink(true)
       setTimeout(() => setCopiedLink(false), 2000)
@@ -94,32 +96,24 @@ export function SubmissionTrackingView({
   }
 
   return (
-    <div className="space-y-6" dir={isAr ? 'rtl' : 'ltr'}>
+    <div className="space-y-6" dir={isAr ? 'rtl' : 'ltr'} lang={lang}>
       {/* ── Header Card ─────────────────────────────────────────────────── */}
-      <div className="rounded-md border border-border bg-surface shadow-xl">
-        <div className="flex flex-col gap-4 border-b border-border p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
+      <div className={publicPanelClassName}>
+        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border p-6 sm:p-8">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full border border-border bg-surface-raised px-2.5 py-0.5 font-mono-tech text-[10px] text-text-tertiary">
-                <ShieldCheck className="h-3 w-3 text-accent" />
-                {isAr ? 'تتبع آمن للقراءة فقط' : 'Secure Read-Only Tracking'}
-              </span>
-              <span className={`inline-flex items-center rounded border px-2.5 py-0.5 text-[11px] font-semibold ${submissionStatusStyle(tracking.status)}`}>
-                {tracking.client_status_label}
-              </span>
-            </div>
+            <PublicEyebrow>{isAr ? 'الرقم المرجعي' : 'Request reference'}</PublicEyebrow>
 
             <div className="mt-3 flex flex-wrap items-center gap-3">
-              <span className="font-mono-tech text-2xl font-bold tracking-wider text-accent sm:text-3xl">
+              <span className="wrap-anywhere font-mono text-xl font-medium text-fg sm:text-2xl" dir="ltr">
                 {tracking.reference_number}
               </span>
               <button
                 type="button"
                 onClick={() => void handleCopyRef()}
-                className="inline-flex items-center gap-1.5 rounded border border-border bg-surface-raised px-2.5 py-1 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg"
+                className={secondaryButtonClassName}
                 title={isAr ? 'نسخ رقم المرجع' : 'Copy reference number'}
               >
-                {copiedRef ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+                {copiedRef ? <Check className="h-3.5 w-3.5 text-fg" /> : <Copy className="h-3.5 w-3.5" />}
                 <span>{copiedRef ? (isAr ? 'تم النسخ' : 'Copied!') : (isAr ? 'نسخ' : 'Copy')}</span>
               </button>
             </div>
@@ -133,15 +127,15 @@ export function SubmissionTrackingView({
             <button
               type="button"
               onClick={() => void handleCopyLink()}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg"
+              className={secondaryButtonClassName}
             >
-              {copiedLink ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : <Copy className="h-3.5 w-3.5" />}
+              {copiedLink ? <Check className="h-3.5 w-3.5 text-fg" /> : <Copy className="h-3.5 w-3.5" />}
               {copiedLink ? (isAr ? 'تم نسخ الرابط' : 'Link Copied!') : (isAr ? 'نسخ الرابط' : 'Share Link')}
             </button>
             <button
               type="button"
               onClick={handlePrint}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg"
+              className={secondaryButtonClassName}
             >
               <Printer className="h-3.5 w-3.5" />
               {isAr ? 'طباعة' : 'Print'}
@@ -153,24 +147,24 @@ export function SubmissionTrackingView({
         <div className="border-b border-border bg-surface-raised p-6 sm:p-8">
           <div className="flex items-start gap-3">
             {tracking.status === 'need_information' ? (
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-purple-400" />
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-text-secondary" />
             ) : tracking.status === 'converted' ? (
-              <CheckCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" />
+              <CheckCheck className="mt-0.5 h-5 w-5 shrink-0 text-fg" />
             ) : tracking.status === 'rejected' ? (
-              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-400" />
+              <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
             ) : (
               <Clock className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
             )}
             <div className="min-w-0 flex-1">
               <h2 className="text-sm font-semibold text-fg">
-                {isAr ? 'الحالة الحالية للطلب' : 'Current Status'}: {tracking.client_status_label}
+                {isAr ? 'الحالة الحالية للطلب' : 'Current Status'}: {statusLabel}
               </h2>
               <p className="mt-1 text-xs leading-relaxed text-text-secondary">{statusDesc}</p>
               {tracking.status === 'need_information' && (
-                <p className="mt-2 text-xs font-medium text-purple-400">
+                <p className="mt-2 text-xs font-medium text-text-secondary">
                   {isAr
-                    ? '💡 يرجى مراجعة بريدك الإلكتروني للرد على استفسارات الفريق، أو التواصل معنا عبر معلومات الاتصال أدناه.'
-                    : '💡 Please check your email inbox to reply to our team’s questions, or contact us using the info below.'}
+                    ? 'يرجى مراجعة بريدك الإلكتروني للرد على استفسارات الفريق، أو التواصل معنا عبر معلومات الاتصال أدناه.'
+                    : 'Please check your email inbox to reply to our team’s questions, or contact us using the info below.'}
                 </p>
               )}
             </div>
@@ -180,41 +174,36 @@ export function SubmissionTrackingView({
         {/* ── Multi-Stage Pipeline Stepper ───────────────────────────────── */}
         {!progressInfo.isDeclined && (
           <div className="border-b border-border p-6 sm:p-8">
-            <h3 className="mb-5 font-mono-tech text-[10px] tracking-wider text-text-tertiary">
-              {isAr ? 'مراحل سير الطلب' : 'REQUEST PROGRESSION PIPELINE'}
+            <h3 className="mb-5 type-label text-text-secondary">
+              {isAr ? 'مراحل سير الطلب' : 'Request stages'}
             </h3>
 
-            <div className="grid gap-3 sm:grid-cols-4">
+            <ol className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {CLIENT_STAGE_STEPS.map((step, idx) => {
                 const stepNum = idx + 1
                 const isPassed = progressInfo.currentStage > stepNum
                 const isCurrent = progressInfo.currentStage === stepNum
 
                 return (
-                  <div
+                  <li
                     key={step.key}
-                    className={`relative flex flex-col rounded-md border p-4 transition ${
-                      isCurrent
-                        ? 'border-accent bg-accent/5 ring-1 ring-accent/30'
-                        : isPassed
-                        ? 'border-emerald-500/30 bg-emerald-500/5'
-                        : 'border-border bg-bg/40 opacity-60'
-                    }`}
+                    aria-current={isCurrent ? 'step' : undefined}
+                    className={`border-t-2 pt-3 ${isCurrent ? 'border-accent' : isPassed ? 'border-line-light' : 'border-border'}`}
                   >
                     <div className="mb-2 flex items-center justify-between">
                       <span
-                        className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold font-mono-tech ${
+                        className={`flex h-6 w-6 items-center justify-center font-mono text-xs font-medium ${
                           isCurrent
-                            ? 'bg-accent text-accent-foreground'
+                            ? 'bg-primary text-primary-foreground'
                             : isPassed
-                            ? 'bg-emerald-500/20 text-emerald-400'
+                            ? 'text-fg'
                             : 'bg-surface-raised text-text-tertiary'
                         }`}
                       >
                         {isPassed ? <Check className="h-3.5 w-3.5" /> : `0${stepNum}`}
                       </span>
                       {isCurrent && (
-                        <span className="rounded bg-accent/10 px-1.5 py-0.5 font-mono-tech text-[9px] font-semibold text-accent">
+                        <span className="text-xs font-semibold text-accent">
                           {isAr ? 'الحالي' : 'ACTIVE'}
                         </span>
                       )}
@@ -222,55 +211,45 @@ export function SubmissionTrackingView({
                     <p className={`text-xs font-semibold ${isCurrent ? 'text-fg' : isPassed ? 'text-fg' : 'text-text-tertiary'}`}>
                       {isAr ? step.labelAr : step.label}
                     </p>
-                    <p className="mt-1 text-[10px] text-text-secondary">
+                    <p className="mt-1 text-xs text-text-secondary">
                       {isAr ? step.descAr : step.desc}
                     </p>
-                  </div>
+                  </li>
                 )
               })}
-            </div>
+            </ol>
           </div>
         )}
 
-        {/* ── Key Metadata Grid ───────────────────────────────────────────── */}
-        <div className="grid gap-4 border-b border-border p-6 sm:grid-cols-3 sm:p-8">
-          <div className="rounded-md border border-border bg-bg/50 p-4">
-            <span className="font-mono-tech text-[10px] tracking-wider text-text-tertiary">
-              {isAr ? 'الخدمة المقدمة' : 'REQUESTED SERVICE'}
-            </span>
-            <p className="mt-1 text-sm font-semibold text-fg">{tracking.form_title}</p>
+        <dl className="grid gap-4 border-b border-border p-6 sm:grid-cols-3 sm:p-8">
+          <div>
+            <dt className="type-label text-text-secondary">{isAr ? 'الخدمة المقدمة' : 'Requested service'}</dt>
+            <dd className="mt-2 text-sm font-medium text-fg">{tracking.form_title}</dd>
           </div>
-
-          <div className="rounded-md border border-border bg-bg/50 p-4">
-            <span className="font-mono-tech text-[10px] tracking-wider text-text-tertiary">
-              {isAr ? 'تاريخ التقديم' : 'SUBMITTED ON'}
-            </span>
-            <p className="mt-1 text-sm font-semibold text-fg">{submittedDate}</p>
+          <div>
+            <dt className="type-label text-text-secondary">{isAr ? 'تاريخ التقديم' : 'Submitted on'}</dt>
+            <dd className="mt-2 text-sm font-medium text-fg"><time dateTime={tracking.submitted_at}>{submittedDate}</time></dd>
           </div>
-
-          <div className="rounded-md border border-border bg-bg/50 p-4">
-            <span className="font-mono-tech text-[10px] tracking-wider text-text-tertiary">
-              {isAr ? 'آخر تحديث' : 'LAST ACTIVITY'}
-            </span>
-            <p className="mt-1 text-sm font-semibold text-fg">{updatedDate}</p>
+          <div>
+            <dt className="type-label text-text-secondary">{isAr ? 'آخر تحديث' : 'Last activity'}</dt>
+            <dd className="mt-2 text-sm font-medium text-fg"><time dateTime={tracking.updated_at}>{updatedDate}</time></dd>
           </div>
-        </div>
+        </dl>
 
         {/* ── What Happens Next Section ──────────────────────────────────── */}
-        <div className="border-b border-border p-6 sm:p-8">
+        <div className="p-6 sm:p-8">
           <div className="mb-4 flex items-center gap-2">
-            <Sparkles className="h-4 w-4 text-accent" />
             <h3 className="text-sm font-semibold text-fg">
               {isAr ? 'الخطوات القادمة' : 'What to Expect Next'}
             </h3>
           </div>
 
-          <div className="rounded-md border border-border bg-bg/40 p-4 text-xs leading-relaxed text-text-secondary">
+          <div className="max-w-prose text-sm leading-6 text-text-secondary">
             {tracking.status === 'new' && (
               <p>
                 {isAr
-                  ? 'طلبك مدرج حالياً في قائمة المراجعة وسيقوم قائد الفريق المتخصص بدراسة المتطلبات الفنية والتواصل معك خلال مدة أقصاها يومي عمل.'
-                  : 'Your request is in our qualification queue. A domain lead will review project specifications and reach out with kickoff steps within 1–2 business days.'}
+                  ? `طلبك في قائمة المراجعة. سنراجع المتطلبات ونتواصل معك خلال ${REQUEST_RESPONSE_TIME.ar}.`
+                  : `Your request is in the review queue. We’ll review the requirements and get back to you within ${REQUEST_RESPONSE_TIME.en}.`}
               </p>
             )}
             {tracking.status === 'reviewing' && (
@@ -290,7 +269,7 @@ export function SubmissionTrackingView({
             {tracking.status === 'qualified' && (
               <p>
                 {isAr
-                  ? 'تم تأهيل مشروعك بنجاح! نقوم الآن بتجهيز اتفاقية العمل والموارد المطلوبة لإطلاق المشروع.'
+                  ? 'تم تأهيل مشروعك. نقوم الآن بتجهيز اتفاقية العمل والموارد المطلوبة لإطلاق المشروع.'
                   : 'Your request has met all qualification criteria. We are drafting the project agreement and assigning dedicated studio resources.'}
               </p>
             )}
@@ -304,7 +283,7 @@ export function SubmissionTrackingView({
             {tracking.status === 'converted' && (
               <p>
                 {isAr
-                  ? 'تم تحويل طلبك بنجاح إلى مشروع إنتاجي نشط! فريق العمل بدأ التنفيذ وستتلقى التحديثات الدورية عبر قنوات التواصل المعتمدة.'
+                  ? 'تحوّل طلبك إلى مشروع قيد التنفيذ. فريق العمل بدأ التنفيذ وستتلقى التحديثات الدورية عبر قنوات التواصل المعتمدة.'
                   : 'Your request is now an active production project in our studio. The creative team is actively executing deliverables according to schedule.'}
               </p>
             )}
@@ -325,77 +304,39 @@ export function SubmissionTrackingView({
           </div>
         </div>
 
-        {/* ── Expected Response Time & Contact Information ────────────────── */}
-        <div className="grid gap-6 p-6 sm:grid-cols-2 sm:p-8">
-          <div className="rounded-md border border-accent/20 bg-accent/5 p-4 sm:p-5">
-            <div className="flex items-start gap-3">
-              <Clock className="mt-0.5 h-5 w-5 shrink-0 text-accent" />
-              <div>
-                <h4 className="text-xs font-semibold uppercase tracking-wider text-accent">
-                  {isAr ? 'الوقت المتوقع للرد' : 'Expected Response Time'}
-                </h4>
-                <p className="mt-1 text-sm font-bold text-fg">
-                  {isAr ? AGENCY_CONTACT.expectedResponseAr : AGENCY_CONTACT.expectedResponse}
-                </p>
-                <p className="mt-1 text-xs text-text-secondary">
-                  {isAr ? AGENCY_CONTACT.hoursAr : AGENCY_CONTACT.hours}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-md border border-border bg-surface-raised p-4 sm:p-5">
-            <h4 className="text-xs font-semibold uppercase tracking-wider text-text-tertiary">
-              {isAr ? 'معلومات التواصل المباشر' : 'Direct Contact & Inquiries'}
-            </h4>
-            <div className="mt-2 space-y-1.5 text-xs text-text-secondary">
-              <p className="flex items-center gap-2">
-                <Mail className="h-3.5 w-3.5 text-accent" />
-                <a href={`mailto:${AGENCY_CONTACT.email}`} className="font-medium text-fg hover:underline">
-                  {AGENCY_CONTACT.email}
-                </a>
-              </p>
-              <p className="flex items-center gap-2">
-                <Phone className="h-3.5 w-3.5 text-accent" />
-                <a href={`tel:${AGENCY_CONTACT.phone}`} className="font-medium text-fg hover:underline">
-                  {AGENCY_CONTACT.phone}
-                </a>
-              </p>
-            </div>
-          </div>
-        </div>
+        <SubmissionContact lang={lang} />
 
         {/* ── Footer Navigation ──────────────────────────────────────────── */}
         <div className="flex flex-col gap-3 border-t border-border bg-surface p-6 sm:flex-row sm:items-center sm:justify-between sm:p-8">
           <div className="flex flex-wrap items-center gap-2">
             <Link
               href="/"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border bg-surface-raised px-3.5 py-2 text-xs font-medium text-fg transition hover:border-line-light"
+              className={secondaryButtonClassName}
             >
               <Home className="h-3.5 w-3.5" />
               {isAr ? 'الرئيسية' : 'Home'}
             </Link>
-            <Link
-              href="/forms"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border bg-surface-raised px-3.5 py-2 text-xs font-medium text-fg transition hover:border-line-light"
+            <a
+              href={projectDeskPath(lang)}
+              className={secondaryButtonClassName}
             >
               <FileText className="h-3.5 w-3.5" />
               {isAr ? 'طلب جديد' : 'New Request'}
-            </Link>
-            <Link
-              href="/portfolio"
-              className="inline-flex min-h-10 items-center gap-1.5 rounded-md border border-border bg-surface-raised px-3.5 py-2 text-xs font-medium text-fg transition hover:border-line-light"
+            </a>
+            <a
+              href={SELECTED_WORK_PATH}
+              className={secondaryButtonClassName}
             >
               <Layers3 className="h-3.5 w-3.5" />
               {isAr ? 'سابقة الأعمال' : 'Portfolio'}
-            </Link>
+            </a>
           </div>
 
           {onSearchAnother && (
             <button
               type="button"
               onClick={onSearchAnother}
-              className="inline-flex min-h-10 items-center justify-center gap-1.5 rounded-md border border-border bg-surface px-3.5 py-2 text-xs font-medium text-text-secondary transition hover:border-line-light hover:text-fg"
+              className={secondaryButtonClassName}
             >
               <FileText className="h-3.5 w-3.5" />
               {isAr ? 'البحث عن طلب آخر' : 'Track Another Request'}
