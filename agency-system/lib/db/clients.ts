@@ -183,5 +183,8 @@ export async function updateClient(id: string, updates: ClientUpdate): Promise<R
 export async function deleteClient(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
   const { error } = await supabase.from('clients').delete().eq('id', id)
+  if (error?.code === '23503' && error.message.includes('projects_client_id_fkey')) {
+    return fail(false, 'This client has projects. Delete their projects before deleting the client.')
+  }
   return error ? fail(false, error.message) : ok(true)
 }

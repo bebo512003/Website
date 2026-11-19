@@ -3118,11 +3118,41 @@ async function runPublicFormReliabilitySuite(db, ids, label) {
   await superUser(db)
 }
 
+async function runProjectCascadeDeleteSuite(db, adminId, label) {
+  await asUser(db, adminId)
+  const client = await scalar(db, `insert into public.clients (name) values ('Cascade regression client') returning id`)
+  const project = await scalar(db, `insert into public.projects (name, client_id) values ('Cascade regression project', $1) returning id`, [client.id])
+  const member = await scalar(db, `select id from public.profiles where id <> $1 and role <> 'client' limit 1`, [adminId])
+  if (member) {
+    await db.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [project.id, member.id])
+    await db.query(`delete from public.project_members where project_id = $1 and user_id = $2`, [project.id, member.id])
+    ok(`${label}: explicit member removal is still audited`,
+      (await scalar(db, `select count(*)::int n from public.project_activity where project_id = $1 and event_type = 'member_removed'`, [project.id])).n === 1)
+    await db.query(`insert into public.project_members (project_id, user_id) values ($1, $2)`, [project.id, member.id])
+  }
+  const firstFile = await scalar(db, `insert into public.files (name, project_id) values ('first.txt', $1) returning id`, [project.id])
+  await db.query(`delete from public.files where id = $1`, [firstFile.id])
+  ok(`${label}: explicit file removal is still audited`,
+    (await scalar(db, `select count(*)::int n from public.project_activity where project_id = $1 and event_type = 'file_deleted'`, [project.id])).n === 1)
+  await db.query(`insert into public.files (name, project_id) values ('second.txt', $1)`, [project.id])
+  ok(`${label}: client with a project cannot be deleted`,
+    await expectError(db, () => db.query(`delete from public.clients where id = $1`, [client.id])))
+  const removed = await db.query(`delete from public.projects where id = $1`, [project.id])
+  ok(`${label}: project deletion cascades through members, files, and audit rows`,
+    removed.affectedRows === 1
+    && (await scalar(db, `select count(*)::int n from public.project_activity where project_id = $1`, [project.id])).n === 0
+    && (await scalar(db, `select count(*)::int n from public.files where project_id = $1`, [project.id])).n === 0)
+  ok(`${label}: client can be deleted once its projects are gone`,
+    (await db.query(`delete from public.clients where id = $1`, [client.id])).affectedRows === 1)
+  await superUser(db)
+}
+
 async function main() {
   console.log(`=== Path A: ordered migrations ending with ${migrationFile} (upgrade path) ===`)
   const dbA = await makeDb()
   const idsA = await applyAndSeed(dbA)
   await runSuite(dbA, idsA, 'upgrade')
+  await runProjectCascadeDeleteSuite(dbA, idsA.alice, 'upgrade')
   await runPermissionSuite(dbA, idsA, 'upgrade')
   await runDynamicFormSuite(dbA, idsA, 'upgrade')
   await runTeamDirectorySuite(dbA, idsA, 'upgrade')
@@ -3452,6 +3482,7 @@ async function main() {
   await superUser(dbB)
 
   await runPortfolioSuite(dbB, { anonVisitor: anonVisitorB, alice: aliceB, bob: employeeB }, 'fresh')
+  await runProjectCascadeDeleteSuite(dbB, aliceB, 'fresh')
   await dbB.close()
 
   const failed = results.filter((r) => !r.pass)

@@ -176,16 +176,15 @@ export async function updateProject(id: string, updates: ProjectUpdate): Promise
 
 export async function deleteProject(id: string): Promise<Result<boolean>> {
   if (!supabase) return fail(false)
-  // Clean up any files in project-files bucket for this project before deleting row
+  // Collect paths first, but never remove storage objects before the database
+  // delete succeeds: a constraint failure must not leave live file rows broken.
   const filesQuery = await supabase.from('files').select('storage_path').eq('project_id', id)
-  if (filesQuery.data && filesQuery.data.length > 0) {
-    const paths = filesQuery.data.map((f) => f.storage_path).filter((p): p is string => Boolean(p))
-    if (paths.length > 0) {
-      await supabase.storage.from('project-files').remove(paths)
-    }
-  }
+  if (filesQuery.error) return fail(false, filesQuery.error.message)
+  const paths = (filesQuery.data || []).map((f) => f.storage_path).filter((p): p is string => Boolean(p))
   const { error } = await supabase.from('projects').delete().eq('id', id)
-  return error ? fail(false, error.message) : ok(true)
+  if (error) return fail(false, error.message)
+  if (paths.length > 0) await supabase.storage.from('project-files').remove(paths)
+  return ok(true)
 }
 
 
